@@ -55,8 +55,10 @@ try:
 except Exception:
     nib = None
     
-import os, sys, math, tempfile, shutil, pathlib, uuid, time
+import os, sys, math, tempfile, shutil, pathlib, uuid, time, shutil
 from datetime import datetime
+from typing import Optional
+
 
 import matplotlib
 matplotlib.use("Agg")
@@ -96,7 +98,7 @@ __all__ = [
     "vtkXMLImageDataReader","vtkXMLPolyDataReader","vtkGenericDataObjectReader","vtkDataSetReader",
     "vtkSTLReader","vtkImageData","vtkPolyData","vtkDataSetSurfaceFilter","vtkOutputWindow",
     # Sci/IO
-    "np","cv2","pd","os","sys","math","tempfile","shutil","pathlib",
+    "np","cv2","pd","os","sys","math","tempfile","shutil","pathlib","datetime","Optional",
     # helpers
     "qt_icon",
 ]

@@ -13,6 +13,7 @@ from widgets.VTK_Viewer import VTKViewer
 from widgets.Kernel_size import KernelSizeDialog
 from ribbon import *
 
+
 # ---------------------------
 # Supported extensions
 # ---------------------------
@@ -78,7 +79,7 @@ class MainWindow(QMainWindow):
         print(f"[Temp] Working directory: {self.temp_dir}")
 
         # store metics
-        self.metrics = {}  # {path: {"File":..., "Kind":..., "Area":..., "Volume":..., "SulciDepth_P1":..., "SulciDepth_P2":..., "SulciDepth_P3":..., "LGI":...}}
+        self.metrics: dict[str, list[dict]] = {}  # per-path grouping {path: {"File":..., "Kind":..., "Area":..., "Volume":..., "SulciDepth_P1":..., "SulciDepth_P2":..., "SulciDepth_P3":..., "LGI":...}}
         self.current_output_dir = None
         self.last_annotated_path: str | None = None
         self.annotation_records: list[dict] = []          # flat list of all annotations
@@ -477,21 +478,73 @@ class MainWindow(QMainWindow):
     def quit_app(self):
         print("Quitting application."); self.close()
         
-    def _ensure_metric_row(self, path: str | None, kind: str | None):
-        """Create a metrics row for this file if missing; keep existing values if present."""
-        if not path:
-            return
-        row = self.metrics.get(path)
 
-        if not row:
-            self.metrics[path] = {
+    def _ensure_metric_row(
+        self,
+        path: Optional[str],
+        kind: Optional[str],
+        label: Optional[str] = None,
+        *,
+        pixel_size: Optional[float] = None,
+        pixel_size_units: Optional[str] = None,
+        kernel_size: Optional[float] = None,
+        slice_thickness: Optional[float] = None,
+        new_on_param_change: bool = False,
+    ):
+        """
+        Ensure a metrics row exists for (path, label).
+
+        - Storage: self.metrics: dict[str, list[dict]]  # path -> list of row dicts
+        - If new_on_param_change=True and any of PixelSize/PixelSizeUnits/KernelSize
+          differs from the most recent row for this (path, label), append a NEW row.
+        - Returns the (existing or newly created) row dict.
+        """
+        if not path:
+            return None
+
+        if not hasattr(self, "metrics") or self.metrics is None:
+            self.metrics = {}
+
+        rows = self.metrics.get(path)
+
+        # Backward compatibility: single dict -> list[dict]
+        if isinstance(rows, dict):
+            rows = [rows]
+            self.metrics[path] = rows
+        elif rows is None:
+            rows = []
+            self.metrics[path] = rows
+
+        # Most recent row for this label (if any)
+        last = next((r for r in reversed(rows) if r.get("Label") == label), None)
+
+        def differs(key: str, new_val):
+            if new_val is None:
+                return False
+            if last is None:
+                return True  # creating first row and user provided a value
+            return new_val != last.get(key)
+
+        make_new = (
+            last is None
+            or (new_on_param_change and any([
+                differs("PixelSize",       pixel_size),
+                differs("PixelSizeUnits",  pixel_size_units),
+                differs("KernelSize",      kernel_size),
+                differs("SliceThickness",      slice_thickness),
+            ]))
+        )
+
+        if make_new:
+            row = {
                 "File": os.path.basename(path),
                 "Kind": kind,
-                "Label": None,
+                "Label": label,
                 "Area": None,
-                "PixelSize": None,
-                "PixelSizeUnits": None,
-                "KernelSize": None,
+                "PixelSize":       pixel_size if pixel_size is not None else (last.get("PixelSize") if last else None),
+                "PixelSizeUnits":  pixel_size_units if pixel_size_units is not None else (last.get("PixelSizeUnits") if last else None),
+                "KernelSize":      kernel_size if kernel_size is not None else (last.get("KernelSize") if last else None),
+                "SliceThickness":  slice_thickness if slice_thickness is not None else (last.get("SliceThickness") if last else None),
                 "Volume": None,
                 "Perimeter": None,
                 "Perimeter_convex": None,
@@ -500,25 +553,62 @@ class MainWindow(QMainWindow):
                 "SulciDepth_P3": None,
                 "LGI": None,
             }
-        else:
-            row["File"] = os.path.basename(path)
-            row["Kind"] = kind
+            rows.append(row)
+            return row
 
-    def _record_metric_for(self, path: str, label: str | None = None ,**vals):
-        """Update metrics for a given file path. Supports keys: area, volume, lgi, perimeter, perimeter_convex  ,sulci_depth=[p1,p2,p3]"""
+        # Otherwise: refresh/update the latest row and return it
+        last["File"] = os.path.basename(path)
+        if kind is not None:
+            last["Kind"] = kind
+        if label is not None:
+            last["Label"] = label
+        if pixel_size is not None:
+            last["PixelSize"] = pixel_size
+        if pixel_size_units is not None:
+            last["PixelSizeUnits"] = pixel_size_units
+        if kernel_size is not None:
+            last["KernelSize"] = kernel_size
+        if slice_thickness is not None:
+            last["SliceThickness"] = slice_thickness
+        return last
+
+        
+    def _record_metric_for(self, path: str, label: Optional[str] = None, **vals):
         if not path:
             return
-        self._ensure_metric_row(path, self.current_kind)
-        row = self.metrics[path]
-        if label:
-            row["Label"] = label
+        kind = getattr(self, "current_kind", None)
+
+        # Extract the triple so _ensure_metric_row can decide whether to create a new row
+        psize = vals.pop("pixel_size", None)
+        punit = vals.pop("pixel_size_units", None)
+        ksize = vals.pop("kernel_size", None)
+        thicsl = vals.pop("slice_thickness", None)
+        row = self._ensure_metric_row(
+            path, kind, label,
+            pixel_size=psize,
+            pixel_size_units=punit,
+            kernel_size=ksize,
+            slice_thickness = thicsl,
+            new_on_param_change=True,
+        )
+
         # Optional: accept 'sulci_depth' as a 3-tuple/list
-        if "sulci_depth" in vals and vals["sulci_depth"] is not None:
-            sd = vals.pop("sulci_depth")
+        sd = vals.pop("sulci_depth", None)
+        if sd is not None:
             if isinstance(sd, (list, tuple)) and len(sd) == 3:
                 row["SulciDepth_P1"], row["SulciDepth_P2"], row["SulciDepth_P3"] = sd
-        # Map friendly keys to columns
-        keymap = {"area": "Area", "volume": "Volume", "perimeter": "Perimeter", "perimeter_convex": "Perimeter_convex","lgi": "LGI"}
+            else:
+                raise ValueError("sulci_depth must be an iterable of length 3")
+
+        # Map remaining friendly keys to columns
+        keymap = {
+            "area": "Area",
+            "volume": "Volume",
+            "perimeter": "Perimeter",
+            "perimeter_convex": "Perimeter_convex",
+            "lgi": "LGI",
+            # triple handled above
+        }
         for k, v in vals.items():
             col = keymap.get(k.lower(), k)
             row[col] = v
@@ -567,40 +657,78 @@ class MainWindow(QMainWindow):
         
     # -------------- Export to Excel -------------------------
     def export_metrics_excel(self):
-        """Export collected metrics (File, Kind, Label ,Area, Volume, Perimeter, Perimeter_convex  ,SulciDepth_P1..3, LGI) to an Excel .xlsx file."""
-        if not self.metrics:
+        """Export collected metrics (File, Kind, Label, PixelSize, PixelSizeUnits, KernelSize,
+        Area, Volume, Perimeter, Perimeter_convex, SulciDepth_P1..3, LGI) to an Excel .xlsx file.
+        Works with: self.metrics: dict[str, list[dict]]
+        """
+        if not getattr(self, "metrics", None):
             QMessageBox.information(self, "Export Metrics", "No metrics to export yet.")
             return
-#        if pd is None:
-#            QMessageBox.critical(
-#                self,
-#                "Export Metrics",
-#                "Pandas is required to export to Excel.\nInstall with:\n  pip install pandas openpyxl"
-#            )
-#            return
-        base_cols = ["File", "Kind"]
-        metric_cols = ["Label", "PixelSize", "PixelSizeUnits", "KernelSize"
-        "Area", "Volume", "Perimeter", "Perimeter_convex" ,"SulciDepth_P1", "SulciDepth_P2", "SulciDepth_P3", "LGI"]
-        cols = base_cols + metric_cols
-        rows = [{c: row.get(c) for c in cols} for row in self.metrics.values()]
-        df = pd.DataFrame(rows, columns=cols)
 
-        # Keep only rows that have at least one real metric
-        has_any_metric = df[metric_cols].notna().any(axis=1)
+        # Define columns in the order you want them in Excel
+        base_cols = ["File", "Kind"]
+        metric_cols = [
+            "Label",
+            "PixelSize", "PixelSizeUnits", "KernelSize",
+            "Area", "Volume", "Perimeter", "Perimeter_convex",
+            "SulciDepth_P1", "SulciDepth_P2", "SulciDepth_P3",
+            "LGI",
+        ]
+        cols = base_cols + metric_cols
+
+        # Flatten: path -> [rows]  ==>  list of row dicts
+        flat_rows = []
+        for _path, rows in self.metrics.items():
+            if rows is None:
+                continue
+            if isinstance(rows, dict):
+                rows = [rows]  # backward-compat safeguard
+            for row in rows:
+                # Keep only known columns; missing keys become NaN in DataFrame
+                flat_rows.append({c: row.get(c) for c in cols})
+
+        if not flat_rows:
+            QMessageBox.information(self, "Export Metrics", "No metrics to export yet.")
+            return
+
+        # Build DataFrame (requires pandas)
+        try:
+            import pandas as pd
+        except Exception:
+            QMessageBox.critical(
+                self,
+                "Export Metrics",
+                "Pandas is required to export to Excel.\nInstall with:\n  pip install pandas openpyxl"
+            )
+            return
+
+        df = pd.DataFrame(flat_rows, columns=cols)
+
+        # Keep only rows that have at least one *real* metric filled in
+        # (exclude Label and PixelSizeUnits; keep PixelSize/KernelSize and numeric metrics)
+        real_metric_cols = [
+            "PixelSize", "KernelSize",
+            "Area", "Volume", "Perimeter", "Perimeter_convex",
+            "SulciDepth_P1", "SulciDepth_P2", "SulciDepth_P3",
+            "LGI",
+        ]
+        has_any_metric = df[real_metric_cols].notna().any(axis=1)
         df = df.loc[has_any_metric].copy()
-    
-        
+
         if df.empty:
             QMessageBox.information(self, "Export Metrics", "No non-empty metrics to export yet.")
             return
-        
-            # Drop metric columns that are all None/NaN across remaining rows
-        drop_all_null = [c for c in metric_cols if df[c].isna().all()]
+
+        # Drop metric columns that are entirely empty across remaining rows
+        drop_all_null = [c for c in real_metric_cols + ["Label", "PixelSizeUnits"] if c in df.columns and df[c].isna().all()]
         if drop_all_null:
             df.drop(columns=drop_all_null, inplace=True)
-            
-        default_name = os.path.join(self.last_dir, "metrics.xlsx")
-        path, _ = QFileDialog.getSaveFileName(self, "Export Metrics to Excel…", default_name, "Excel Workbook (*.xlsx)")
+
+        # Choose file path
+        default_name = os.path.join(getattr(self, "last_dir", os.getcwd()), "metrics.xlsx")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Metrics to Excel…", default_name, "Excel Workbook (*.xlsx)"
+        )
         if not path:
             return
         if not path.lower().endswith(".xlsx"):
@@ -624,10 +752,12 @@ class MainWindow(QMainWindow):
             else:
                 return
 
+        # Write Excel
         try:
-            df.to_excel(path, index=False)  # pandas will use openpyxl/xlsxwriter if available
+            df.to_excel(path, index=False)  # uses openpyxl/xlsxwriter if installed
             print(f"Exported metrics to: {path}")
-            self.last_dir = folder or self.last_dir
+            if folder:
+                self.last_dir = folder
         except Exception as ex:
             print(f"ERROR exporting metrics: {ex}")
             QMessageBox.critical(self, "Export Failed", f"{type(ex).__name__}: {ex}")
@@ -682,7 +812,10 @@ class MainWindow(QMainWindow):
             self._set_current("image", self.current_path)
             self._record_metric_for(
                 self.current_path,
-                label_text,
+                label = label_text,
+                pixel_size_units = self.units_length,
+                pixel_size = self.pixel_size,
+                kernel_size = self.kernel_size,
                 area=area,
                 perimeter=perimeter,
                 perimeter_convex = perimeter_convex,
@@ -777,7 +910,10 @@ class MainWindow(QMainWindow):
                 self._active_view = "image"
                 # Ensure File/Process actions stay enabled
                 self._set_current("image", self.current_path)
-                self._record_metric_for(self.current_path,label_text ,perimeter=perimeter)
+                self._record_metric_for(self.current_path,label=label_text,
+                pixel_size_units = self.units_length,
+                pixel_size = self.pixel_size,
+                perimeter=perimeter)
 
             except Exception as ex:
                 print(f"[Perimeter] ERROR: {ex}")
@@ -825,7 +961,11 @@ class MainWindow(QMainWindow):
                 self._active_view = "image"
                 # Ensure File/Process actions stay enabled
                 self._set_current("image", self.current_path)
-                self._record_metric_for(self.current_path, label_text ,perimeter=perimeter, perimeter_convex=perimeter_convex, lgi=lGI)
+                self._record_metric_for(self.current_path, label=label_text,
+                pixel_size_units = self.units_length,
+                pixel_size = self.pixel_size,
+                kernel_size = self.kernel_size,
+                perimeter=perimeter, perimeter_convex=perimeter_convex, lgi=lGI)
 
             except Exception as ex:
                 print(f"[lGI] ERROR: {ex}")
@@ -858,7 +998,7 @@ class MainWindow(QMainWindow):
                         return
 
                     # record metrics (consistent with your global export; units in mm unless noted)
-                    self._record_metric_for(self.current_path,lgi = lGI,)
+                    self._record_metric_for(self.current_path, kernel_size= self.kernel_size ,lgi = lGI,)
 
                     self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                     
@@ -904,7 +1044,9 @@ class MainWindow(QMainWindow):
                         return
 
                     # record metrics (consistent with your global export; units in mm unless noted)
-                    self._record_metric_for(self.current_path,lgi = lGI,)
+                    self._record_metric_for(self.current_path,
+                            slice_thickness =self.slice_thickness,
+                            kernel_size =self.kernel_size, lgi = lGI,)
 
                     self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                     
@@ -966,7 +1108,10 @@ class MainWindow(QMainWindow):
             self._active_view = "image"
             # Ensure File/Process actions stay enabled
             self._set_current("image", self.current_path)
-            self._record_metric_for(self.current_path, label_text,sulci_depth = (depth[0],depth[1], depth[3]))
+            self._record_metric_for(self.current_path, label=label_text,
+                pixel_size_units = self.units_length,
+                pixel_size = self.pixel_size,
+                sulci_depth = (depth[0],depth[1], depth[3]))
 
         except Exception as ex:
             print(f"[Sulci depth] ERROR: {ex}")
@@ -1011,7 +1156,10 @@ class MainWindow(QMainWindow):
                 self._active_view = "image"
                 # Ensure File/Process actions stay enabled
                 self._set_current("image", self.current_path)
-                self._record_metric_for(self.current_path, label_text ,area=area)
+                self._record_metric_for(self.current_path, label=label_text ,
+                pixel_size_units = self.units_length,
+                pixel_size = self.pixel_size,
+                area=area)
 
             except Exception as ex:
                 print(f"[Area] ERROR : {ex}")
@@ -1165,10 +1313,12 @@ class MainWindow(QMainWindow):
         self.pixel_size = scale
 
         # Track in metrics (so Excel shows context)
-        self._ensure_metric_row(self.current_path, self.current_kind)
-        row = self.metrics[self.current_path]
-        row["PixelSize"] = scale
-        row["PixelSizeUnits"] = f"{unit}/pixel"
+        label_text = self.get_label_for_cropped_path(self.last_annotated_path)
+        self._record_metric_for (self.current_path, label= label_text  ,pixel_size= scale, pixel_size_units=f"{unit}/pixel" )
+#        row = self._ensure_metric_row(self.current_path, self.current_kind)
+#        row = self.metrics[self.current_path]
+#        row["PixelSize"] = scale
+#        row["PixelSizeUnits"] = f"{unit}/pixel"
 
         print(f"[Units] {unit}  |  [Scale] {scale} {unit}/pixel  —  {os.path.basename(self.current_path)}")
 
@@ -1204,11 +1354,8 @@ class MainWindow(QMainWindow):
 
 
             # Record in metrics
-            self._ensure_metric_row(self.current_path, self.current_kind)
-            row = self.metrics[self.current_path]
-            row["PixelSize"] = mm_per_px
-            row["PixelSizeUnits"] = f"{unit}/pixel"
-
+            label_text = self.get_label_for_cropped_path(self.last_annotated_path)
+            self._record_metric_for (self.current_path, label = label_text, pixel_size= mm_per_px, pixel_size_units=f"{unit}/pixel" )
 
             print(f"[Scale] {pixel_length:.2f} px = {px_per_unit:.6f} px/{unit}  "
                   f"→ pixel size {mm_per_px:.6f} {unit}/pixel for {os.path.basename(self.current_path)}")
@@ -1227,9 +1374,8 @@ class MainWindow(QMainWindow):
             print(f"[Kernel] Set morphology kernel size to {k}")
             # Record in metrics
             if self.current_path:
-                self._ensure_metric_row(self.current_path, self.current_kind)
-                row = self.metrics[self.current_path]
-                row["KernelSize"] = self.kernel_size
+                label_text = self.get_label_for_cropped_path(self.last_annotated_path)
+                self._record_metric_for(self.current_path, label = label_text, kernel_size= self.kernel_size)
     
     def set_cnt_threshold_dialog(self):
         dlg = ContourThresholdDialog(self, initial=getattr(self, "cnt_threshold", 50.0))
@@ -1429,9 +1575,9 @@ class MainWindow(QMainWindow):
         
     def reset_view(self):
         """Clear on-screen annotations and reload the current item from disk."""
-        import os
-        from PySide6.QtWidgets import QMessageBox
-        from PySide6.QtGui import QPixmap
+#        import os
+#        from PySide6.QtWidgets import QMessageBox
+#        from PySide6.QtGui import QPixmap
 
         # 1) cancel active modes
         if hasattr(self.image_label, "cancel_square_selection"):
@@ -1446,6 +1592,7 @@ class MainWindow(QMainWindow):
         # 3) reload from disk depending on kind
         kind = self.current_kind
         path = self.current_path
+        self.last_annotated_path = None
 
         if not path or not os.path.exists(path):
             # nothing to reload; just reset camera/labels if possible
