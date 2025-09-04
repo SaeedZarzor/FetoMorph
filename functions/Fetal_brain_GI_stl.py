@@ -1,54 +1,8 @@
 # Fetal_brain_GI_stl.py — STL-based LGI computation with robust off-screen screenshots (macOS-safe)
-import os
-import numpy as np
-import pandas as pd
-import cv2
+from deps import *
 import pyvista as pv
 
-from functions.measurements_image import compute_kernel_convex  # must return a cv2 kernel (k x k)
-
-# ----------------- helpers -----------------
-def contours_exclude(contours, excluded_space, image_shape):
-    """
-    Filter contours by excluding any that overlap with 'excluded_space' (uint8 mask).
-    """
-    filtered = []
-    for cnt in contours:
-        mask = np.zeros(image_shape, dtype=np.uint8)
-        cv2.drawContours(mask, [cnt], -1, 255, -1)
-        if np.count_nonzero(cv2.bitwise_and(mask, excluded_space)) == 0:
-            filtered.append(cnt)
-    return filtered
-
-
-def clac_scale(image_rgb, cube_length_mm):
-    """
-    Compute mm-per-pixel from a red reference cube drawn in the render.
-    cube_length_mm: the real cube side length (x_length) in mm.
-    """
-    red_rect = np.where((image_rgb[:, :, 0] > 150) & (image_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
-    _, thresh_red = cv2.threshold(red_rect, 150, 255, 0)
-    contours, _ = cv2.findContours(thresh_red, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        print("[STL lGI] No red reference contour found; default scale 1.0 mm/px")
-        return 1.0
-    # Use the largest red blob as reference
-    x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
-    return (cube_length_mm / float(w)) if w > 0 else 1.0
-
-
-def get_red_rect_offset(image_rgb):
-    """
-    Detect red rectangle and return its center (x,y) in pixels — used to zero-align contours.
-    """
-    red_mask = (image_rgb[:, :, 0] > 150) & (image_rgb[:, :, 1] < 50)
-    coords = np.argwhere(red_mask)
-    if coords.size == 0:
-        return np.array([0, 0])
-    y_min, x_min = coords.min(axis=0)
-    y_max, x_max = coords.max(axis=0)
-    return np.array([(x_min + x_max) // 2, (y_min + y_max) // 2])
-
+from functions.Helpers import compute_kernel_convex, contours_exclude, clac_scale, get_red_rect_offset
 
 # ----------------- main API -----------------
 def compute_stl_lGI(

@@ -488,6 +488,7 @@ class MainWindow(QMainWindow):
         pixel_size: Optional[float] = None,
         pixel_size_units: Optional[str] = None,
         kernel_size: Optional[float] = None,
+        unite:  Optional[str] = None,
         slice_thickness: Optional[float] = None,
         new_on_param_change: bool = False,
     ):
@@ -532,6 +533,8 @@ class MainWindow(QMainWindow):
                 differs("PixelSizeUnits",  pixel_size_units),
                 differs("KernelSize",      kernel_size),
                 differs("SliceThickness",      slice_thickness),
+                differs("LengthUnit",      unite),
+                
             ]))
         )
 
@@ -544,13 +547,15 @@ class MainWindow(QMainWindow):
                 "PixelSize":       pixel_size if pixel_size is not None else (last.get("PixelSize") if last else None),
                 "PixelSizeUnits":  pixel_size_units if pixel_size_units is not None else (last.get("PixelSizeUnits") if last else None),
                 "KernelSize":      kernel_size if kernel_size is not None else (last.get("KernelSize") if last else None),
+                "LengthUnit":      unite if unite is not None else (last.get("LengthUnit") if last else None),
                 "SliceThickness":  slice_thickness if slice_thickness is not None else (last.get("SliceThickness") if last else None),
                 "Volume": None,
                 "Perimeter": None,
                 "Perimeter_convex": None,
-                "SulciDepth_P1": None,
-                "SulciDepth_P2": None,
-                "SulciDepth_P3": None,
+                "SulciCount": None,
+                "MinDepth": None,
+                "MaxDpeth": None,
+                "MeanDepth": None,
                 "LGI": None,
             }
             rows.append(row)
@@ -568,6 +573,8 @@ class MainWindow(QMainWindow):
             last["PixelSizeUnits"] = pixel_size_units
         if kernel_size is not None:
             last["KernelSize"] = kernel_size
+        if unite is not None:
+            last["LengthUnit"] = unite
         if slice_thickness is not None:
             last["SliceThickness"] = slice_thickness
         return last
@@ -583,11 +590,13 @@ class MainWindow(QMainWindow):
         punit = vals.pop("pixel_size_units", None)
         ksize = vals.pop("kernel_size", None)
         thicsl = vals.pop("slice_thickness", None)
+        uni = vals.pop("unite", None)
         row = self._ensure_metric_row(
             path, kind, label,
             pixel_size=psize,
             pixel_size_units=punit,
             kernel_size=ksize,
+            unite = uni,
             slice_thickness = thicsl,
             new_on_param_change=True,
         )
@@ -595,10 +604,18 @@ class MainWindow(QMainWindow):
         # Optional: accept 'sulci_depth' as a 3-tuple/list
         sd = vals.pop("sulci_depth", None)
         if sd is not None:
-            if isinstance(sd, (list, tuple)) and len(sd) == 3:
-                row["SulciDepth_P1"], row["SulciDepth_P2"], row["SulciDepth_P3"] = sd
+            if isinstance(sd, (list, tuple)):
+                n = len(sd)
+                if n == 0:
+                    row["SulciCount"] = row["MinDepth"] = row["MaxDpeth"] = row["MeanDepth"]= None
+                else:
+                    row["SulciCount"] = n
+                    row["MinDepth"] = min(sd)
+                    row["MaxDpeth"] = max(sd)
+                    row["MeanDepth"] = sum(sd)/n
+                    
             else:
-                raise ValueError("sulci_depth must be an iterable of length 3")
+                raise ValueError("sulci_depth must be an iterable")
 
         # Map remaining friendly keys to columns
         keymap = {
@@ -669,11 +686,12 @@ class MainWindow(QMainWindow):
         base_cols = ["File", "Kind"]
         metric_cols = [
             "Label",
-            "PixelSize", "PixelSizeUnits", "KernelSize",
+            "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciDepth_P1", "SulciDepth_P2", "SulciDepth_P3",
+            "SulciCount", "MinDepth", "MaxDpeth","MeanDepth",
             "LGI",
         ]
+        
         cols = base_cols + metric_cols
 
         # Flatten: path -> [rows]  ==>  list of row dicts
@@ -707,9 +725,9 @@ class MainWindow(QMainWindow):
         # Keep only rows that have at least one *real* metric filled in
         # (exclude Label and PixelSizeUnits; keep PixelSize/KernelSize and numeric metrics)
         real_metric_cols = [
-            "PixelSize", "KernelSize",
+            "PixelSize", "KernelSize", "LengthUnit",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciDepth_P1", "SulciDepth_P2", "SulciDepth_P3",
+            "SulciCount", "MinDepth", "MaxDpeth","MeanDepth",
             "LGI",
         ]
         has_any_metric = df[real_metric_cols].notna().any(axis=1)
@@ -764,67 +782,111 @@ class MainWindow(QMainWindow):
 
     # ---------- Process menu (stubs) ----------
     def on_measure_allmarks(self):
-        """Process → Measures → All hallmarks for 2D images: compute and show annotated result WITHOUT saving."""
-        if self.current_kind != "image":
-            print("[All hallmarks] Implemented for 2D images only."); return
+        """Process → Measures → All hallmarks: compute and show annotated result WITHOUT saving."""
         if not self.current_path or not os.path.isfile(self.current_path):
             print("[All hallmarks] No image file is loaded."); return
-        try:
-            if not self.units_length or self.current_path not in self.image_scales:
-                self.set_image_scale()  # pops the single dialog
-            u = self.ensure_units()                # <-- get unit (e.g., 'mm')
-            px_size = self.image_scales.get(self.current_path, self.pixel_size)
+        if self.current_kind == "image":
+            try:
+                if not self.units_length or self.current_path not in self.image_scales:
+                    self.set_image_scale()  # pops the single dialog
+                u = self.ensure_units()                # <-- get unit (e.g., 'mm')
+                px_size = self.image_scales.get(self.current_path, self.pixel_size)
 
-            print(f"[All hallmarks] Measuring: {self.current_path}")
-            print(f"[All hallmarks] Measuring with pixel size = {px_size} {u}/pixel")
+                print(f"[All hallmarks] Measuring: {self.current_path}")
+                print(f"[All hallmarks] Measuring with pixel size = {px_size} {u}/pixel")
 
-            image_path = self.current_path
-            if self.last_annotated_path is not None:
-                image_path = self.last_annotated_path
+                image_path = self.current_path
+                if self.last_annotated_path is not None:
+                    image_path = self.last_annotated_path
+                    
+                area, perimeter, perimeter_convex, lGI, depth, annotated_bgr = measure_image_allmarks(
+                    image_path,
+                    pixel_size=px_size,
+                    kernel_size= self.kernel_size,
+                    cnt_threshold=self.cnt_threshold,
+                    unit = u,
+                )
                 
-            area, perimeter, perimeter_convex, lGI, depth, annotated_bgr = measure_image_allmarks(
-                image_path,
-                pixel_size=px_size,
-                kernel_size= self.kernel_size,
-                cnt_threshold=self.cnt_threshold,
-                unit = u,
-            )
+                print(f"Annotated area = {area:.2f} {u}^2.")
+                print(f"Annotated Perimeter = {perimeter:.2f} {u}.")
+                print(f"Convex Perimeter = {perimeter_convex:.2f} {u}.")
+                print(f"LGI (Convex Perimeter/ Perimeter) = {lGI:.2f} .")
+                print(f"Sulci Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} {u}.")
+                
+                # Convert BGR ndarray → QPixmap and show (no disk write)
+                label_text = self.get_label_for_cropped_path(image_path)
+                if label_text:
+                    annotated_bgr = put_label_on_bgr(annotated_bgr, label_text, pos="topleft")
+
+
+                pm = self._np_bgr_to_qpixmap(annotated_bgr)
+                self.image_label.setImage(pm)
+                self.image_label.remove_last_annotation()
+                self._show_widget(self.image_label)
+                # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
+                self._active_view = "image"
+                # Ensure File/Process actions stay enabled
+                self._set_current("image", self.current_path)
+                self._record_metric_for(
+                    self.current_path,
+                    label = label_text,
+                    pixel_size_units = f"{self.units_length}/pixel",
+                    unite = self.units_length,
+                    pixel_size = self.pixel_size,
+                    kernel_size = self.kernel_size,
+                    area=area,
+                    perimeter=perimeter,
+                    perimeter_convex = perimeter_convex,
+                    lgi=lGI,
+                    sulci_depth = depth)
+
+            except Exception as ex:
+                print(f"[All hallmarks] ERROR: {ex}")
+                QMessageBox.critical(self, "All hallmarks Failed", f"{type(ex).__name__}: {ex}")
+        elif self.current_kind == "nifti":
+            t0 = time.time()
+            try:
+                nif_path = self.current_path
+                print(f"[NIfTI] Computing area/perimeter from: {nif_path}")
+
+                uid = uuid.uuid4().hex[:8]
+                out_dir = os.path.join(self.temp_dir, f"nifti_allmarks_{uid}")
+                os.makedirs(out_dir, exist_ok=True)
+                
+                self.current_output_dir = out_dir
+                area, volume, gi, depth, saved_pngs, valid_slices = compute_nifti_allmarks(file_path=nif_path,
+                out_dir=out_dir, min_contour_area=self.cnt_threshold, kernel_size = self.kernel_size)
             
-            print(f"Annotated area = {area:.2f} {u}^2.")
-            print(f"Annotated Perimeter = {perimeter:.2f} {u}.")
-            print(f"Convex Perimeter = {perimeter_convex:.2f} {u}.")
-            print(f"LGI (Convex Perimeter/ Perimeter) = {lGI:.2f} .")
-            print(f"Sulci Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} {u}.")
-            
-            # Convert BGR ndarray → QPixmap and show (no disk write)
-            label_text = self.get_label_for_cropped_path(image_path)
-            if label_text:
-                annotated_bgr = put_label_on_bgr(annotated_bgr, label_text, pos="topleft")
+                if area is None:
+                    return
 
+                # record metrics (consistent with your global export; units in mm unless noted)
+                self._record_metric_for(
+                    self.current_path,
+                    kernel_size = self.kernel_size,
+                    unite = "cm",
+                    volume=volume,
+                    area=area,
+                    lgi=gi,
+                    sulci_depth = depth)
+                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+                
+                mid = len(saved_pngs) // 2
+                self.on_slice_slider_changed(mid)
+                
+                print(f"[NIfTI hallmarks]:")
+                print("The Brain Volume Result = {volume:.2f} cm^3.")
+                print(f"The Brain Outer Surface Area Result = {area:.2f} cm^2.")
+                print(f"The Brain GI (Convex surface area/ surfacearea) = {gi:.2f} .")
+                print(f"The Maximum Sulci Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} cm.")
+                dt = time.time() - t0
+                print(f"[NIfTI Area] Done in {dt:.2f}s. Results live in TEMP.\n"
+                      f"Use File → Save Data As… to copy outputs you want to keep.")
 
-            pm = self._np_bgr_to_qpixmap(annotated_bgr)
-            self.image_label.setImage(pm)
-            self.image_label.remove_last_annotation()
-            self._show_widget(self.image_label)
-            # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
-            self._active_view = "image"
-            # Ensure File/Process actions stay enabled
-            self._set_current("image", self.current_path)
-            self._record_metric_for(
-                self.current_path,
-                label = label_text,
-                pixel_size_units = self.units_length,
-                pixel_size = self.pixel_size,
-                kernel_size = self.kernel_size,
-                area=area,
-                perimeter=perimeter,
-                perimeter_convex = perimeter_convex,
-                lgi=lGI,
-                sulci_depth = (depth[0],depth[1], depth[3]))
-
-        except Exception as ex:
-            print(f"[All hallmarks] ERROR: {ex}")
-            QMessageBox.critical(self, "All hallmarks Failed", f"{type(ex).__name__}: {ex}")
+            except Exception as ex:
+                print(f"[NIfTI hallmarks] ERROR: {ex}")
+                QMessageBox.critical(self, "NIfTI Area Failed", f"{type(ex).__name__}: {ex}")
+            return
             
     def on_measure_volumes(self):
         if not self.current_path or not os.path.isfile(self.current_path):
@@ -846,12 +908,11 @@ class MainWindow(QMainWindow):
                 self.current_output_dir = out_dir
                 volume,saved_pngs, valid_slices = compute_nifti_volume(file_path=nif_path, out_dir=out_dir,)
             
-                if volume == 0:
-                    QMessageBox.information(self, "NIfTI Volume", "All slices were filtered out (too small).")
+                if volume is None:
                     return
 
                 # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path,volume = volume,)
+                self._record_metric_for(self.current_path, unite="cm",volume = volume,)
 
                 self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                 
@@ -868,7 +929,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "NIfTI Volume Failed", f"{type(ex).__name__}: {ex}")
             return
         
-        print("[Volume] Unsupported current kind. Open an image or NIfTI first.")
+        else:
+            print("[Volume] Unsupported current kind. Open an image or NIfTI first.")
 
     
     def on_measure_perimeter(self):
@@ -911,7 +973,8 @@ class MainWindow(QMainWindow):
                 # Ensure File/Process actions stay enabled
                 self._set_current("image", self.current_path)
                 self._record_metric_for(self.current_path,label=label_text,
-                pixel_size_units = self.units_length,
+                pixel_size_units = f"{self.units_length}/pixel",
+                unite= self.units_length,
                 pixel_size = self.pixel_size,
                 perimeter=perimeter)
 
@@ -962,7 +1025,8 @@ class MainWindow(QMainWindow):
                 # Ensure File/Process actions stay enabled
                 self._set_current("image", self.current_path)
                 self._record_metric_for(self.current_path, label=label_text,
-                pixel_size_units = self.units_length,
+                pixel_size_units = f"{self.units_length}/pixel",
+                unite = self.units_length,
                 pixel_size = self.pixel_size,
                 kernel_size = self.kernel_size,
                 perimeter=perimeter, perimeter_convex=perimeter_convex, lgi=lGI)
@@ -993,8 +1057,7 @@ class MainWindow(QMainWindow):
                     self.current_output_dir = out_dir
                     lGI,saved_pngs, valid_slices = compute_nifti_lGI(file_path=nif_path, out_dir=out_dir,min_contour_area=self.cnt_threshold, kernel_size= self.kernel_size,)
                 
-                    if lGI == 0:
-                        QMessageBox.information(self, "NIfTI LGI", "All slices were filtered out (too small).")
+                    if lGI is None:
                         return
 
                     # record metrics (consistent with your global export; units in mm unless noted)
@@ -1005,13 +1068,13 @@ class MainWindow(QMainWindow):
                     mid = len(saved_pngs) // 2
                     self.on_slice_slider_changed(mid)
                     
-                    print(f"[NIfTI lGI] The Brain lGI Result = {lGI:.2f}. ")
+                    print(f"[NIfTI lGI] The Brain GI (Convex surface area/ surfacearea) = {lGI:.2f}. ")
                     dt = time.time() - t0
                     print(f"[NIfTI lGI] Done in {dt:.2f}s. Results live in TEMP.\n"
                           f"Use File → Save Data As… to copy outputs you want to keep.")
 
                 except Exception as ex:
-                    print(f"ERROR (NIfTI lGI): {ex}")
+                    print(f"[NIfTI lGI] ERROR: {ex}")
                     QMessageBox.critical(self, "NIfTI lGI Failed", f"{type(ex).__name__}: {ex}")
                 return
         
@@ -1039,8 +1102,7 @@ class MainWindow(QMainWindow):
                     )
                                         
                 
-                    if lGI == 0:
-                        QMessageBox.information(self, "STL LGI", "All slices were filtered out (too small).")
+                    if lGI is None:
                         return
 
                     # record metrics (consistent with your global export; units in mm unless noted)
@@ -1053,69 +1115,111 @@ class MainWindow(QMainWindow):
                     mid = len(saved_pngs) // 2
                     self.on_slice_slider_changed(mid)
                     
-                    print(f"[STL lGI] The Brain lGI Result = {lGI:.2f}. ")
+                    print(f"[STL lGI] The Brain GI (Convex surface area/ surfacearea) = {lGI:.2f}. ")
                     dt = time.time() - t0
                     print(f"[STL lGI] Done in {dt:.2f}s. Results live in TEMP.\n"
                           f"Use File → Save Data As… to copy outputs you want to keep.")
 
                 except Exception as ex:
-                    print(f"ERROR (STL lGI): {ex}")
+                    print(f"[STL lGI] ERROR: {ex}")
                     QMessageBox.critical(self, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
                 return
             
-            
-        print("[lGI] Unsupported current kind. Open an image or NIfTI first.")
+        else:
+            print("[lGI] Unsupported current kind. Open an image or NIfTI first.")
 
             
         
     
     def on_measure_sulci_depth(self):
         """Process → Measures → All hallmarks for 2D images: compute and show annotated result WITHOUT saving."""
-        if self.current_kind != "image":
-            print("[Sulci depth] Implemented for 2D images only."); return
         if not self.current_path or not os.path.isfile(self.current_path):
-            print("[Sulci depth] No image file is loaded."); return
-        try:
-            if not self.units_length or self.current_path not in self.image_scales:
-                self.set_image_scale()  # pops the single dialog
-            u = self.ensure_units()                # <-- get unit (e.g., 'mm')
-            px_size = self.image_scales.get(self.current_path, self.pixel_size)
+            print("[Sulci depth] No file is loaded."); return
             
-            print(f"[Sulci depth] Measuring: {self.current_path}")
-            print(f"[Sulci depth] Measuring with pixel size = {px_size} {u}/pixel")
+        if self.current_kind == "image":
 
-            image_path = self.current_path
-            if self.last_annotated_path is not None:
-                image_path = self.last_annotated_path
-            depth, annotated_bgr = measure_image_sulci_depth(
-                image_path,
-                pixel_size = px_size,
-                cnt_threshold=self.cnt_threshold,
-            )
-            print(f"Sulci Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f}. {u}")
+            try:
+                if not self.units_length or self.current_path not in self.image_scales:
+                    self.set_image_scale()  # pops the single dialog
+                u = self.ensure_units()                # <-- get unit (e.g., 'mm')
+                px_size = self.image_scales.get(self.current_path, self.pixel_size)
+                
+                print(f"[Sulci depth] Measuring: {self.current_path}")
+                print(f"[Sulci depth] Measuring with pixel size = {px_size} {u}/pixel")
+
+                image_path = self.current_path
+                if self.last_annotated_path is not None:
+                    image_path = self.last_annotated_path
+                depth, annotated_bgr = measure_image_sulci_depth(
+                    image_path,
+                    pixel_size = px_size,
+                    cnt_threshold=self.cnt_threshold,
+                )
+                print(f"Sulci Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f}. {u}")
+                
+                label_text = self.get_label_for_cropped_path(image_path)
+                if label_text:
+                    annotated_bgr = put_label_on_bgr(annotated_bgr, label_text, pos="topleft")
+
+
+                # Convert BGR ndarray → QPixmap and show (no disk write)
+                pm = self._np_bgr_to_qpixmap(annotated_bgr)
+                self.image_label.setImage(pm)
+                self.image_label.remove_last_annotation()
+                self._show_widget(self.image_label)
+                # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
+                self._active_view = "image"
+                # Ensure File/Process actions stay enabled
+                self._set_current("image", self.current_path)
+                self._record_metric_for(self.current_path, label=label_text,
+                    pixel_size_units = f"{self.units_length}/pixel",
+                    unite = self.units_length,
+                    pixel_size = self.pixel_size,
+                    sulci_depth = depth)
+
+            except Exception as ex:
+                print(f"[Sulci depth] ERROR: {ex}")
+                QMessageBox.critical(self, "Sulci depth Failed", f"{type(ex).__name__}: {ex}")
+        
+        elif self.current_kind == "nifti":
+            t0 = time.time()
+            try:
+                nif_path = self.current_path
+                print(f"[NIfTI] Computing Volume from: {nif_path}")
+
+
+                uid = uuid.uuid4().hex[:8]
+                out_dir = os.path.join(self.temp_dir, f"nifti_volume_{uid}")
+                os.makedirs(out_dir, exist_ok=True)
+                
+                self.current_output_dir = out_dir
+                depth,saved_pngs, valid_slices = compute_nifti_sulci_depth(file_path=nif_path, out_dir=out_dir, min_contour_area=self.cnt_threshold)
             
-            label_text = self.get_label_for_cropped_path(image_path)
-            if label_text:
-                annotated_bgr = put_label_on_bgr(annotated_bgr, label_text, pos="topleft")
+                if depth is None:
+                    return
 
+                # record metrics (consistent with your global export; units in mm unless noted)
+                self._record_metric_for(self.current_path, unite ="mm",sulci_depth = depth,)
 
-            # Convert BGR ndarray → QPixmap and show (no disk write)
-            pm = self._np_bgr_to_qpixmap(annotated_bgr)
-            self.image_label.setImage(pm)
-            self.image_label.remove_last_annotation()
-            self._show_widget(self.image_label)
-            # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
-            self._active_view = "image"
-            # Ensure File/Process actions stay enabled
-            self._set_current("image", self.current_path)
-            self._record_metric_for(self.current_path, label=label_text,
-                pixel_size_units = self.units_length,
-                pixel_size = self.pixel_size,
-                sulci_depth = (depth[0],depth[1], depth[3]))
+                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+                
+                mid = len(saved_pngs) // 2
+                self.on_slice_slider_changed(mid)
+                
+                print(f"[NIfTI Sulci depth] The max Brain Sulci depth across slices = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f}. mm")
+                dt = time.time() - t0
+                print(f"[NIfTI Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
+                      f"Use File → Save Data As… to copy outputs you want to keep.")
 
-        except Exception as ex:
-            print(f"[Sulci depth] ERROR: {ex}")
-            QMessageBox.critical(self, "Sulci depth Failed", f"{type(ex).__name__}: {ex}")
+            except Exception as ex:
+                print(f"[NIfTI Sulci depth] ERROR: {ex}")
+                QMessageBox.critical(self, "NIfTI Sulci depth Failed", f"{type(ex).__name__}: {ex}")
+            return
+        else:
+            print("[Sulci depth] Unsupported current kind. Open an image or NIfTI first.")
+
+            
+            
     
     def on_measure_area(self):
         """Process → Measures → Area: compute and show annotated result WITHOUT saving."""
@@ -1157,13 +1261,14 @@ class MainWindow(QMainWindow):
                 # Ensure File/Process actions stay enabled
                 self._set_current("image", self.current_path)
                 self._record_metric_for(self.current_path, label=label_text ,
-                pixel_size_units = self.units_length,
+                pixel_size_units = f"{self.units_length}/pixel",
                 pixel_size = self.pixel_size,
+                unite = self.units_length,
                 area=area)
 
             except Exception as ex:
                 print(f"[Area] ERROR : {ex}")
-                QMessageBox.critical(self, "Area Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self, "[Area] Failed", f"{type(ex).__name__}: {ex}")
         elif self.current_kind == "nifti":
             t0 = time.time()
             try:
@@ -1183,25 +1288,25 @@ class MainWindow(QMainWindow):
                     return
 
                 # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path,area = area,)
+                self._record_metric_for(self.current_path, unite="cm",area = area,)
 
                 self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                 
                 mid = len(saved_pngs) // 2
                 self.on_slice_slider_changed(mid)
                 
-                print(f"[NIfTI Area] The Brain Area Result = {area:.2f} cm^2. ")
+                print(f"[NIfTI Area] The Brain Outer Surface Area Result = {area:.2f} cm^2. ")
                 dt = time.time() - t0
                 print(f"[NIfTI Area] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
-                print(f"ERROR (NIfTI Area): {ex}")
-                QMessageBox.critical(self, "NIfTI Area Failed", f"{type(ex).__name__}: {ex}")
+                print(f"[NIfTI Area] ERROR: {ex}")
+                QMessageBox.critical(self, "[NIfTI Area] Failed", f"{type(ex).__name__}: {ex}")
             return
 
-        # default fallback
-        print("[Area] Unsupported current kind. Open an image or NIfTI first.")
+        else:
+            print("[Area] Unsupported current kind. Open an image or NIfTI first.")
 
     def on_optimization(self): pass
             

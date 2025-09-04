@@ -55,9 +55,11 @@ try:
 except Exception:
     nib = None
     
+    
 import os, sys, math, tempfile, shutil, pathlib, uuid, time, shutil
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
+from pathlib import Path
 
 
 import matplotlib
@@ -98,7 +100,7 @@ __all__ = [
     "vtkXMLImageDataReader","vtkXMLPolyDataReader","vtkGenericDataObjectReader","vtkDataSetReader",
     "vtkSTLReader","vtkImageData","vtkPolyData","vtkDataSetSurfaceFilter","vtkOutputWindow",
     # Sci/IO
-    "np","cv2","pd","os","sys","math","tempfile","shutil","pathlib","datetime","Optional",
+    "np","cv2","pd","os","sys","math","tempfile","shutil","pathlib","datetime","Optional","Tuple","Path",
     # helpers
     "qt_icon",
 ]

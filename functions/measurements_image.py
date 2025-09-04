@@ -2,14 +2,8 @@
 import cv2
 import numpy as np
 from typing import Tuple, Union
+from functions.Helpers import text_thickness, compute_kernel_convex
 
-
-def compute_kernel_convex(kernel_size):
-
-    kernel_convex = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-    
-    return kernel_convex
-    
 
 def measure_image_allmarks(
     file_path: str,
@@ -21,7 +15,6 @@ def measure_image_allmarks(
 
 
     font_scale = 0.01/pixel_size
-    thickness = 2
     margin = 6
 
     image = cv2.imread(file_path)
@@ -37,10 +30,10 @@ def measure_image_allmarks(
    
     annotated = image.copy()
     W, H = annotated.shape[:2]
-
+    thickness = text_thickness(H, style="thin")
 
     if filtered_contours:
-        cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), 3)
+        cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
         area_sum = sum(cv2.contourArea(cnt) for cnt in filtered_contours)
         perimeter_sum = sum(cv2.arcLength(cnt, True) for cnt in filtered_contours)
     else:
@@ -100,7 +93,7 @@ def measure_image_allmarks(
     filtered_conv_contours = [cnt_conv for cnt_conv in convex_Contours if cv2.contourArea(cnt_conv) > cnt_threshold]
     
     if filtered_conv_contours:
-        annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, (0, 255, 0), 3)
+        annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, (0, 255, 0), thickness)
         perimeter_convex_sum= sum( cv2.arcLength(conxec_cnt, True) for conxec_cnt in filtered_conv_contours)
     
     else:
@@ -120,7 +113,7 @@ def measure_image_allmarks(
                 start = tuple(cnt[s][0])
                 end = tuple(cnt[e][0])
                 far = tuple(cnt[f][0])
-                annotated = cv2.line(annotated, start, end, [255, 0, 0], 2)
+                annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
                 if d > 256:
                     cv2.putText(
                         annotated,
@@ -129,10 +122,10 @@ def measure_image_allmarks(
                         cv2.FONT_HERSHEY_SIMPLEX,
                         font_scale,
                         (100, 0, 0),
-                        2,
+                        thickness,
                     )
                     annotated = cv2.circle(annotated, far, 4, [0, 0, 255], -1)
-                    depth.append(d * pixel_size / 255 )
+                    depth.append(d * pixel_size / 256 )
 
             depth.sort(reverse=True)
     return area, perimeter, perimeter_convex ,perimeter_Rate, depth, annotated  # BGR ndarray
@@ -150,7 +143,6 @@ def measure_image_perimeter (file_path: str,
     No files are written here.
     """
     font_scale = 0.01/pixel_size
-    thickness = 2
     margin = 6
 
     image = cv2.imread(file_path)
@@ -167,10 +159,10 @@ def measure_image_perimeter (file_path: str,
 
     annotated = image.copy()
     W, H = annotated.shape[:2]
-
+    thickness = text_thickness(H, style="regular")
     
     if filtered:
-        cv2.drawContours(annotated, filtered, -1, (0, 0, 255), 3)
+        cv2.drawContours(annotated, filtered, -1, (0, 0, 255), thickness)
 
     perimeter_sum = sum(cv2.arcLength(cnt, True) for cnt in filtered)
     perimeter = perimeter_sum * pixel_size
@@ -195,7 +187,7 @@ def measure_image_perimeter (file_path: str,
         cv2.FONT_HERSHEY_SIMPLEX,
         font_scale,
         (255, 0, 200),
-            thickness,
+        thickness,
         cv2.LINE_AA,
     )
     return perimeter, annotated  # BGR ndarray
@@ -214,7 +206,6 @@ def measure_image_area(
     No files are written here.
     """
     font_scale = 0.01/pixel_size
-    thickness = 2
     margin = 6
 
     image = cv2.imread(file_path)
@@ -231,9 +222,10 @@ def measure_image_area(
 
     annotated = image.copy()
     W, H = annotated.shape[:2]
+    thickness = text_thickness(H, style="regular")
     
     if filtered:
-        cv2.drawContours(annotated, filtered, -1, (0, 0, 255), 3)
+        cv2.drawContours(annotated, filtered, -1, (0, 0, 255), thickness)
 
     px_area_sum = float(sum(cv2.contourArea(c) for c in filtered))
     area_units2 = px_area_sum * (pixel_size ** 2)
@@ -270,7 +262,6 @@ def measure_image_lGI(    file_path: str,
     unit: str = "mm",
 ):
     font_scale = 0.01/pixel_size
-    thickness=2
     margin =6
 
     image = cv2.imread(file_path)
@@ -286,9 +277,10 @@ def measure_image_lGI(    file_path: str,
    
     annotated = image.copy()
     W, H = annotated.shape[:2]
-
+    thickness = text_thickness(H, style="regular")
+    
     if filtered_contours:
-        cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), 3)
+        cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
         perimeter = sum(cv2.arcLength(cnt, True) for cnt in filtered_contours)
     else:
         perimeter = 0
@@ -299,7 +291,7 @@ def measure_image_lGI(    file_path: str,
     filtered_conv_contours = [cnt_conv for cnt_conv in convex_Contours if cv2.contourArea(cnt_conv) > cnt_threshold]
     
     if filtered_conv_contours:
-        annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, (0, 255, 0), 3)
+        annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, (0, 255, 0), thickness)
         perimeter_convex= sum( cv2.arcLength(conxec_cnt, True) for conxec_cnt in filtered_conv_contours)
     
     else:
@@ -357,10 +349,10 @@ def measure_image_sulci_depth(    file_path: str,
    
     annotated = image.copy()
     W, H = annotated.shape[:2]
-
-
+    thickness = text_thickness(H, style="regular")
+    
     if filtered_contours:
-        cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), 3)
+        cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
 
             
     depth = []
@@ -374,7 +366,7 @@ def measure_image_sulci_depth(    file_path: str,
                 start = tuple(cnt[s][0])
                 end = tuple(cnt[e][0])
                 far = tuple(cnt[f][0])
-                annotated = cv2.line(annotated, start, end, [255, 0, 0], 2)
+                annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
                 if d > 256:
                     cv2.putText(
                         annotated,
@@ -383,10 +375,10 @@ def measure_image_sulci_depth(    file_path: str,
                         cv2.FONT_HERSHEY_SIMPLEX,
                         font_scale,
                         (100, 0, 0),
-                        2,
+                        thickness,
                     )
                     annotated = cv2.circle(annotated, far, 4, [0, 0, 255], -1)
-                    depth.append(d * pixel_size / 255 )
+                    depth.append(d * pixel_size / 256 )
 
             depth.sort(reverse=True)
     return depth, annotated  # BGR ndarray
