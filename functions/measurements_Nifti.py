@@ -2,19 +2,63 @@ from deps import *
 import nibabel as nib
 from scipy.ndimage import binary_opening, binary_closing, label
 from functions.Helpers import compute_kernel_convex, defect_mm_per_px_and_fixed
+from nibabel.affines import apply_affine
+
+
+
+def compute_nifti_dims(brain_mask: np.ndarray, affine: np.ndarray):
+    """
+    Compute voxel-space bounding box, physical bbox (mm), extents (mm), and volume (ml)
+    for a 3D brain mask. Assumes the affine is in mm (standard for NIfTI).
+
+    NOTE: The LR/PA/IS labeling assumes your image is in RAS+ orientation. If not,
+    the numbers are still correct in world coords, but axis names may not map to anatomy.
+    """
+    mask = np.asarray(brain_mask).astype(bool)
+    if mask.ndim != 3:
+        raise ValueError(f"[NIfTI dimensions] mask must be 3D, got shape {mask.shape}")
+    if affine.shape != (4, 4):
+        raise ValueError(f"[NIfTI dimensions] affine must be 4x4, got shape {affine.shape}")
+    if not np.any(mask):
+        raise ValueError("[NIfTI dimensions] mask is empty (no True voxels).")
+
+    # --- Bounding box in voxel indices (inclusive) ---
+    i, j, k = np.where(mask)
+    imin, jmin, kmin = int(i.min()), int(j.min()), int(k.min())
+    imax, jmax, kmax = int(i.max()), int(j.max()), int(k.max())
+
+    # --- Convert bbox to physical mm using voxel *edges* ---
+    # Build the 8 voxel-edge corners: (min-0.5 ... max+0.5) in each axis
+    corners_ijk = np.array(
+        [[x, y, z]
+         for x in (imin - 0.5, imax + 0.5)
+         for y in (jmin - 0.5, jmax + 0.5)
+         for z in (kmin - 0.5, kmax + 0.5)]
+    )
+    corners_xyz = apply_affine(affine, corners_ijk)
+    mins_mm = corners_xyz.min(axis=0)
+    maxs_mm = corners_xyz.max(axis=0)
+    extents_mm = maxs_mm - mins_mm  # [X, Y, Z] in world (mm)
+
+    print(f"[NIfTI dimensions] LR(X)={extents_mm[0]:.2f}  PA(Y)={extents_mm[1]:.2f}  IS(Z)={extents_mm[2]:.2f}")
+
+    extents_list  = extents_mm.astype(float).tolist()
+    extents_list_cm = [x/10 for x in extents_list]
+    return extents_list_cm
 
 
 
 def compute_nifti_allmarks(file_path: str, out_dir: str, min_contour_area: float=30, kernel_size: int=5):
     nifti_img = nib.load(file_path)
+    nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
     affine = nifti_img.affine        # ✅ Needed for spatial info
     header = nifti_img.header        # ✅ Optional but keeps meta info
     # Get voxel size (in mm)
-    voxel_size = nifti_img.header.get_zooms()  # (x, y, z) in mm
+    header = nifti_img.header
 
     # Extract pixel size
-    pixel_size_x, pixel_size_y, pixel_size_z = voxel_size[:3]
+    pixel_size_x, pixel_size_y, pixel_size_z = header.get_zooms()[:3] # (x, y, z) in mm
 
     print(f"[NIfTI All hallmarks] voxel size: {pixel_size_x:.4f} x {pixel_size_y:.4f} x {pixel_size_z:.4f} mm")
 
@@ -38,7 +82,8 @@ def compute_nifti_allmarks(file_path: str, out_dir: str, min_contour_area: float
         # Step 2: Create a Mask Including Only These Regions
         brain_mask = np.isin(image_data, list(valid_labels))
 
-
+    
+    dims = compute_nifti_dims(brain_mask,affine)
     brain_slices = np.where(np.any(brain_mask, axis=(0, 2)))[0]
     if brain_slices.size == 0:
         QMessageBox.information(self, "[NIfTI All hallmarks]", "No slices contain the selected mask.")
@@ -111,14 +156,16 @@ def compute_nifti_allmarks(file_path: str, out_dir: str, min_contour_area: float
                                 far = tuple(cnt[f][0])
                                 annotated = cv2.line(annotated, start, end, [255, 0, 0], 2)
                                 if d>256:
-                                    annotated = cv2.circle(annotated, far, 2, [0, 0, 255], -1)
                                     if pixel_size_x!=pixel_size_z:
                                         mm_per_px, mm_per_fixed = defect_mm_per_px_and_fixed(start, end, far, pixel_size_x, pixel_size_z)
                                     else:
                                         mm_per_fixed = pixel_size_x/256
 
                                     depth_mm = d *mm_per_fixed
-                                    depth.append(depth_mm)
+                                    
+                                    if depth_mm < (0.25* dims[2]*10):
+                                        annotated = cv2.circle(annotated, far, 2, [255, 255, 0], -1)
+                                        depth.append(depth_mm)
                 
             mean_depth = (sum(depth)/len(depth)) if depth else None
             total_depth.extend(depth)
@@ -164,7 +211,7 @@ def compute_nifti_allmarks(file_path: str, out_dir: str, min_contour_area: float
         nib.save(brain_nii, brain_extracted)
         print("[NIfTI All hallmarks] Brain-extracted NIfTI file saved as 'brain_extracted.nii.gz'")
         
-        return Area, brain_volume, GI_total, total_depth ,saved_pngs, valid_slices
+        return dims, Area, brain_volume, GI_total, total_depth ,saved_pngs, valid_slices
 
     else:
         QMessageBox.information(self, "[NIfTI All hallmarks]", "All slices were filtered out (too small).")
@@ -176,6 +223,7 @@ def compute_nifti_volume(file_path: str, out_dir: str,):
 
 
     nifti_img = nib.load(file_path)
+    nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
     affine = nifti_img.affine        # ✅ Needed for spatial info
     header = nifti_img.header        # ✅ Optional but keeps meta info
@@ -207,6 +255,12 @@ def compute_nifti_volume(file_path: str, out_dir: str,):
         # Step 2: Create a Mask Including Only These Regions
         brain_mask = np.isin(image_data, list(valid_labels))
 
+    dims = compute_nifti_dims(brain_mask,affine)
+
+#    # --- Brain volume (ml) ---
+#    voxel_vol_mm3 = float(abs(np.linalg.det(affine[:3, :3])))
+#    brain_vol_ml = brain_mask.sum() * voxel_vol_mm3 / 1000.0
+#    print(f"[Brain volume] ~{brain_vol_ml:.2f} cm^3")
 
     brain_slices = np.where(np.any(brain_mask, axis=(0, 2)))[0]
     if brain_slices.size == 0:
@@ -272,7 +326,7 @@ def compute_nifti_volume(file_path: str, out_dir: str,):
         nib.save(brain_nii, brain_extracted)
         print("[NIfTI Volume] Brain-extracted NIfTI file saved as 'brain_extracted.nii.gz'")
         
-        return brain_volume, saved_pngs, valid_slices
+        return dims, brain_volume, saved_pngs, valid_slices
 
     else:
         QMessageBox.information(self, "[NIfTI Volume]", "All slices were filtered out (too small).")
@@ -285,6 +339,7 @@ def compute_nifti_arae(file_path: str, out_dir: str, min_contour_area: float=30,
 
 
     nifti_img = nib.load(file_path)
+    nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
     affine = nifti_img.affine        # ✅ Needed for spatial info
     header = nifti_img.header        # ✅ Optional but keeps meta info
@@ -316,6 +371,7 @@ def compute_nifti_arae(file_path: str, out_dir: str, min_contour_area: float=30,
         # Step 2: Create a Mask Including Only These Regions
         brain_mask = np.isin(image_data, list(valid_labels))
 
+    dims = compute_nifti_dims(brain_mask,affine)
 
     brain_slices = np.where(np.any(brain_mask, axis=(0, 2)))[0]
     if brain_slices.size == 0:
@@ -389,7 +445,7 @@ def compute_nifti_arae(file_path: str, out_dir: str, min_contour_area: float=30,
         nib.save(brain_nii, brain_extracted)
         print("[NIfTI Area] Brain-extracted NIfTI file saved as 'brain_extracted.nii.gz'")
         
-        return Area, saved_pngs, valid_slices
+        return dims,Area, saved_pngs, valid_slices
 
     else:
         QMessageBox.information(self, "[NIfTI Area]", "All slices were filtered out (too small).")
@@ -399,6 +455,7 @@ def compute_nifti_arae(file_path: str, out_dir: str, min_contour_area: float=30,
 
 def compute_nifti_lGI(file_path: str, out_dir: str, min_contour_area: float=30, kernel_size: int=5):
     nifti_img = nib.load(file_path)
+    nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
     affine = nifti_img.affine        # ✅ Needed for spatial info
     header = nifti_img.header        # ✅ Optional but keeps meta info
@@ -548,6 +605,7 @@ def compute_nifti_lGI(file_path: str, out_dir: str, min_contour_area: float=30, 
         
 def compute_nifti_sulci_depth(file_path: str, out_dir: str, min_contour_area: float=30,):
     nifti_img = nib.load(file_path)
+    nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
     affine = nifti_img.affine        # ✅ Needed for spatial info
     header = nifti_img.header        # ✅ Optional but keeps meta info
@@ -579,6 +637,7 @@ def compute_nifti_sulci_depth(file_path: str, out_dir: str, min_contour_area: fl
         # Step 2: Create a Mask Including Only These Regions
         brain_mask = np.isin(image_data, list(valid_labels))
 
+    dims = compute_nifti_dims(brain_mask,affine)
 
     brain_slices = np.where(np.any(brain_mask, axis=(0, 2)))[0]
     if brain_slices.size == 0:
@@ -635,15 +694,17 @@ def compute_nifti_sulci_depth(file_path: str, out_dir: str, min_contour_area: fl
                                 far = tuple(cnt[f][0])
                                 annotated = cv2.line(annotated, start, end, [255, 0, 0], 2)
                                 if d>256:
-                                    annotated = cv2.circle(annotated, far, 2, [0, 255, 0], -1)
                                     if pixel_size_x!=pixel_size_z:
                                         mm_per_px, mm_per_fixed = defect_mm_per_px_and_fixed(start, end, far, pixel_size_x, pixel_size_z)
                                     else:
                                         mm_per_fixed = pixel_size_x/256
 
                                     depth_mm = d *mm_per_fixed
-                                    depth.append(depth_mm)
-
+                                    
+                                    if depth_mm < (0.25* dims[2]*10):
+                                        annotated = cv2.circle(annotated, far, 2, [255, 255, 0], -1)
+                                        depth.append(depth_mm)
+                                        
             total_depth.extend(depth)
             mean_depth = (sum(depth)/len(depth)) if depth else None
             
@@ -676,7 +737,7 @@ def compute_nifti_sulci_depth(file_path: str, out_dir: str, min_contour_area: fl
         nib.save(brain_nii, brain_extracted)
         print("[NIfTI Slice] Brain-extracted NIfTI file saved as 'brain_extracted.nii.gz'")
         
-        return  total_depth, saved_pngs, valid_slices
+        return  dims, total_depth, saved_pngs, valid_slices
 
     else:
         QMessageBox.information(self, "[NIfTI Sulci depth]", "All slices were filtered out (too small).")

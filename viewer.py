@@ -549,6 +549,9 @@ class MainWindow(QMainWindow):
                 "KernelSize":      kernel_size if kernel_size is not None else (last.get("KernelSize") if last else None),
                 "LengthUnit":      unite if unite is not None else (last.get("LengthUnit") if last else None),
                 "SliceThickness":  slice_thickness if slice_thickness is not None else (last.get("SliceThickness") if last else None),
+                "Length(PA)": None,
+                "Width(LR)": None,
+                "Hight(IS)": None,
                 "Volume": None,
                 "Perimeter": None,
                 "Perimeter_convex": None,
@@ -617,6 +620,19 @@ class MainWindow(QMainWindow):
             else:
                 raise ValueError("sulci_depth must be an iterable")
 
+        ld = vals.pop("dimensions", None)
+        if ld is not None:
+            if isinstance(ld, (list, tuple)):
+                nl = len(ld)
+                if nl == 3:
+                    row["Length(PA)"] = ld[0]
+                    row["Width(LR)"] = ld[1]
+                    row["Hight(IS)"] = ld[2]
+                else:
+                    raise ValueError("one or more dimensions are missing")
+                    
+            else:
+                raise ValueError("dimensions must be an iterable")
         # Map remaining friendly keys to columns
         keymap = {
             "area": "Area",
@@ -687,6 +703,7 @@ class MainWindow(QMainWindow):
         metric_cols = [
             "Label",
             "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit",
+            "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "MinDepth", "MaxDpeth","MeanDepth",
             "LGI",
@@ -726,6 +743,7 @@ class MainWindow(QMainWindow):
         # (exclude Label and PixelSizeUnits; keep PixelSize/KernelSize and numeric metrics)
         real_metric_cols = [
             "PixelSize", "KernelSize", "LengthUnit",
+            "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "MinDepth", "MaxDpeth","MeanDepth",
             "LGI",
@@ -854,7 +872,7 @@ class MainWindow(QMainWindow):
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
-                area, volume, gi, depth, saved_pngs, valid_slices = compute_nifti_allmarks(file_path=nif_path,
+                dims, area, volume, gi, depth, saved_pngs, valid_slices = compute_nifti_allmarks(file_path=nif_path,
                 out_dir=out_dir, min_contour_area=self.cnt_threshold, kernel_size = self.kernel_size)
             
                 if area is None:
@@ -864,6 +882,7 @@ class MainWindow(QMainWindow):
                 self._record_metric_for(
                     self.current_path,
                     kernel_size = self.kernel_size,
+                    dimensions = dims,
                     unite = "cm",
                     volume=volume,
                     area=area,
@@ -906,7 +925,7 @@ class MainWindow(QMainWindow):
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
-                volume,saved_pngs, valid_slices = compute_nifti_volume(file_path=nif_path, out_dir=out_dir,)
+                dims, volume,saved_pngs, valid_slices = compute_nifti_volume(file_path=nif_path, out_dir=out_dir,)
             
                 if volume is None:
                     return
@@ -1193,13 +1212,13 @@ class MainWindow(QMainWindow):
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
-                depth,saved_pngs, valid_slices = compute_nifti_sulci_depth(file_path=nif_path, out_dir=out_dir, min_contour_area=self.cnt_threshold)
+                dims, depth,saved_pngs, valid_slices = compute_nifti_sulci_depth(file_path=nif_path, out_dir=out_dir, min_contour_area=self.cnt_threshold)
             
                 if depth is None:
                     return
 
                 # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path, unite ="mm",sulci_depth = depth,)
+                self._record_metric_for(self.current_path, unite ="mm", dimensions = dims, sulci_depth = depth,)
 
                 self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                 
