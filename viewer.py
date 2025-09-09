@@ -11,6 +11,7 @@ from widgets.Scalebar_set_scale import ScalebarSetScaleDialog
 from widgets.Unit_scale import UnitScaleDialog
 from widgets.VTK_Viewer import VTKViewer
 from widgets.Kernel_size import KernelSizeDialog
+from functions.Helpers import get_nifti_present_labels
 from ribbon import *
 
 
@@ -86,6 +87,9 @@ class MainWindow(QMainWindow):
         self.annotations_by_source: dict[str, list[dict]] = {}  # per-image grouping
         self._roi_counter_by_source: dict[str, int] = {}  # for auto names if user leaves blank
         self.annotation_labels_by_path: dict[str, str] = {}  # save the label for each RIO path
+        self.nifti_selected_regions_default = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}
+        self.labels_available : set[int] ={}
+        self.nifti_selected_regions: set[int] ={}
 
         
         # Params for measurements
@@ -167,11 +171,13 @@ class MainWindow(QMainWindow):
         Setting_menu.addAction(self.act_set_scale)
         self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.set_kernel_dialog); Setting_menu.addAction(self.act_kernel_size)
         self.act_cnt_threshold = QAction("Set Contour Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
-        self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square)
+        self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Setting_menu.addAction(self.act_annotate_square)
+        self.act_choose_regions = QAction("Choose Regions of Interest…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dialog);Setting_menu.addAction(self.act_choose_regions)
 
 
         # Disable initially
-        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False)  # will enable for STL/polydata
+        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False)
+  # will enable for STL/polydata
         for a in (self.act_meas_allmarks, self.act_meas_volumes, self.act_meas_area, self.act_meas_perimeter, self.act_meas_lgi, self.act_meas_sulci, self.act_optimization):
             a.setEnabled(False)
 
@@ -227,6 +233,7 @@ class MainWindow(QMainWindow):
         self.act_meas_perimeter.setIcon(QIcon(str(ASSETS / "icons/Perimeter.png")))
         self.act_meas_lgi.setIcon(QIcon(str(ASSETS / "icons/LGI.png")))
         self.act_meas_sulci.setIcon(QIcon(str(ASSETS / "icons/depth.png")))
+        self.act_choose_regions.setIcon(QIcon(str(ASSETS / "icons/labels.png")))
         
         
         self.ribbon.add_action("Home", self.act_nav_import)
@@ -256,6 +263,7 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Settings", self.act_kernel_size)
         self.ribbon.add_action("Settings", self.act_cnt_threshold)
         self.ribbon.add_action("Settings", self.act_annotate_square)
+        self.ribbon.add_action("Settings", self.act_choose_regions)
 
 
 
@@ -659,6 +667,7 @@ class MainWindow(QMainWindow):
         self.vtk_view.show_image2d(img); self._show_widget(self.vtk_view); self._sync_slice_controls()
         print(f"NIfTI loaded:\n"
               f"Extent={img.GetExtent()} \n Spacing={img.GetSpacing()} \n  Range={img.GetScalarRange()}")
+        self.labels_available = get_nifti_present_labels(path)
         self._set_current("nifti", path)
 
     def load_stl(self, path: str):
@@ -872,8 +881,10 @@ class MainWindow(QMainWindow):
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
+                
+                labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
                 dims, area, volume, gi, depth, saved_pngs, valid_slices = compute_nifti_allmarks(file_path=nif_path,
-                out_dir=out_dir, min_contour_area=self.cnt_threshold, kernel_size = self.kernel_size)
+                out_dir=out_dir,valid_labels = labels, min_contour_area=self.cnt_threshold, kernel_size = self.kernel_size)
             
                 if area is None:
                     return
@@ -925,13 +936,15 @@ class MainWindow(QMainWindow):
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
-                dims, volume,saved_pngs, valid_slices = compute_nifti_volume(file_path=nif_path, out_dir=out_dir,)
+                labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
+
+                dims, volume,saved_pngs, valid_slices = compute_nifti_volume(file_path=nif_path, out_dir=out_dir, valid_labels = labels)
             
                 if volume is None:
                     return
 
                 # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path, unite="cm",volume = volume,)
+                self._record_metric_for(self.current_path, unite="cm", dimensions = dims, volume = volume,)
 
                 self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                 
@@ -1074,7 +1087,9 @@ class MainWindow(QMainWindow):
                     os.makedirs(out_dir, exist_ok=True)
                     
                     self.current_output_dir = out_dir
-                    lGI,saved_pngs, valid_slices = compute_nifti_lGI(file_path=nif_path, out_dir=out_dir,min_contour_area=self.cnt_threshold, kernel_size= self.kernel_size,)
+                    labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
+
+                    lGI,saved_pngs, valid_slices = compute_nifti_lGI(file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold, kernel_size= self.kernel_size,)
                 
                     if lGI is None:
                         return
@@ -1212,7 +1227,9 @@ class MainWindow(QMainWindow):
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
-                dims, depth,saved_pngs, valid_slices = compute_nifti_sulci_depth(file_path=nif_path, out_dir=out_dir, min_contour_area=self.cnt_threshold)
+                labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
+
+                dims, depth,saved_pngs, valid_slices = compute_nifti_sulci_depth(file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold)
             
                 if depth is None:
                     return
@@ -1300,14 +1317,16 @@ class MainWindow(QMainWindow):
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
-                area,saved_pngs, valid_slices = compute_nifti_arae(file_path=nif_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,)
+                labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
+
+                dims, area,saved_pngs, valid_slices = compute_nifti_arae(file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold,)
             
                 if area == 0:
                     QMessageBox.information(self, "NIfTI Area", "All slices were filtered out (too small).")
                     return
 
                 # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path, unite="cm",area = area,)
+                self._record_metric_for(self.current_path, unite="cm", dimensions = dims, area = area,)
 
                 self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                 
@@ -1641,6 +1660,9 @@ class MainWindow(QMainWindow):
             self.act_meas_volumes.setEnabled(True)
             self.act_meas_allmarks.setEnabled(True)
             
+        if kind == "nifti":
+            self.act_choose_regions.setEnabled(True)
+            
             
         elif kind == "image":
             self.act_meas_area.setEnabled(True)
@@ -1740,7 +1762,11 @@ class MainWindow(QMainWindow):
                           getattr(self, "slice_value_label", None)):
                     if w: w.setVisible(False)
 
-#            elif kind == "nifti":
+            elif kind == "nifti":
+                rdr = vtkNIFTIImageReader(); rdr.SetFileName(path); rdr.Update(); img = rdr.GetOutput()
+                self.vtk_view.show_image2d(img); self._show_widget(self.vtk_view); self._sync_slice_controls()
+                self._set_current("nifti", path)
+
 #                # reinitialize from file (reloads header/data and resets slider/orientation)
 #                if hasattr(self, "_init_nifti"):
 #                    self._init_nifti(path)
@@ -1748,14 +1774,14 @@ class MainWindow(QMainWindow):
 #                    # fallback if you don’t have _init_nifti; keep current axis
 #                    axis_name = {0: "sagittal", 1: "coronal", 2: "axial"}.get(getattr(self, "nifti_axis", 1), "coronal")
 #                    self._nifti_set_orientation(axis_name)
-#
-#            elif kind in ("stl", "vtk", "vtk_poly", "vtk_surface"):
-#                # You usually don't need to re-read the mesh to "reset view".
-#                # Just reset the camera. If you do want to re-read, call your existing loader here.
-#                if hasattr(self, "_vtk_view_isometric"):
-#                    self._vtk_view_isometric()
-#                elif hasattr(self, "_vtk_set_view"):
-#                    self._vtk_set_view("coronal", flip=False, ortho=True)
+
+            elif kind in ("stl", "vtk", "vtk_poly", "vtk_surface"):
+                # You usually don't need to re-read the mesh to "reset view".
+                # Just reset the camera. If you do want to re-read, call your existing loader here.
+                if hasattr(self, "_vtk_view_isometric"):
+                    self._vtk_view_isometric()
+                elif hasattr(self, "_vtk_set_view"):
+                    self._vtk_set_view("coronal", flip=False, ortho=True)
 
             # If any PNG navigation mode is on, turn it off
             if hasattr(self, "disable_png_navigation"):
@@ -1841,6 +1867,114 @@ class MainWindow(QMainWindow):
         else:
             return None
 
+    def choose_regions_dialog(self):
+        """
+        Let the user pick integer labels (e.g., {2,3,4,5,...}) for NIfTI processing.
+        Prefills from current NIfTI volume if present, otherwise from defaults.
+        Stores result in self.nifti_selected_regions.
+        """
+
+            
+        # Build candidate labels:
+        labels_available = sorted(set(int(x) for x in self.labels_available))
+        if not labels_available:
+            QMessageBox.warning(self, "Regions", "No discrete labels detected in this NIfTI.")
+            return None
+
+       
+        current = set(labels_available)
+
+        # --- Dialog UI ---
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Choose Regions of Interest")
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("Tick labels to include (double-click toggles).\n "
+                             "You can also type a comma-separated list below."))
+
+        lst = QListWidget()
+        lst.setSelectionMode(QListWidget.NoSelection)
+        for lab in sorted(labels_available):
+            it = QListWidgetItem(str(lab), lst)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if lab in current else Qt.Unchecked)
+        lay.addWidget(lst)
+
+        # Quick entry row
+        quick_row = QHBoxLayout()
+        quick_edit = QLineEdit()
+        quick_edit.setPlaceholderText("e.g. 2,3,4,5,6,11,12,13,14,15,17")
+        btn_apply = QPushButton("Apply typed list")
+        quick_row.addWidget(quick_edit, 1)
+        quick_row.addWidget(btn_apply)
+        lay.addLayout(quick_row)
+
+        # Bulk buttons row
+        bulk = QHBoxLayout()
+        btn_all = QPushButton("Select All")
+        btn_none = QPushButton("Clear All")
+        btn_inv = QPushButton("Invert")
+        btn_def = QPushButton("Defaults")
+        bulk.addWidget(btn_all); bulk.addWidget(btn_none); bulk.addWidget(btn_inv); bulk.addWidget(btn_def); bulk.addStretch(1)
+        lay.addLayout(bulk)
+
+        # OK/Cancel
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        lay.addWidget(bb)
+
+        # --- helpers ---
+        def parse_labels(text: str) -> set[int]:
+            toks = re.findall(r"\d+", text or "")
+            return {int(t) for t in toks}
+            
+        def set_checks_from_set(s: set[int]):
+            have = {int(lst.item(i).text()) for i in range(lst.count())}
+            for i in range(lst.count()):
+                lab = int(lst.item(i).text())
+                lst.item(i).setCheckState(Qt.Checked if lab in s else Qt.Unchecked)
+                
+        def set_checks_from_set(s: set[int]):
+            have = {int(lst.item(i).text()) for i in range(lst.count())}
+            for i in range(lst.count()):
+                lab = int(lst.item(i).text())
+                lst.item(i).setCheckState(Qt.Checked if lab in s else Qt.Unchecked)
+            # add any extra labels not present as new rows (optional)
+            extras = sorted(s - have)
+            for lab in extras:
+                it = QListWidgetItem(str(lab), lst)
+                it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+                it.setCheckState(Qt.Checked)
+
+        # connections
+        btn_apply.clicked.connect(lambda: set_checks_from_set(parse_labels(quick_edit.text())))
+        btn_all.clicked.connect(lambda: [lst.item(i).setCheckState(Qt.Checked) for i in range(lst.count())])
+        btn_none.clicked.connect(lambda: [lst.item(i).setCheckState(Qt.Unchecked) for i in range(lst.count())])
+        def invert():
+            for i in range(lst.count()):
+                it = lst.item(i)
+                it.setCheckState(Qt.Unchecked if it.checkState() == Qt.Checked else Qt.Checked)
+        btn_inv.clicked.connect(invert)
+        
+        def apply_defaults():
+            defaults = set(getattr(self, "nifti_selected_regions_default", set()))
+            available = {int(lst.item(i).text()) for i in range(lst.count())}
+            set_checks_from_set(defaults & available)  # keep only labels present in this file
+        btn_def.clicked.connect(apply_defaults)
+
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+
+        # --- run ---
+        if dlg.exec() == QDialog.Accepted:
+            selected = {int(lst.item(i).text()) for i in range(lst.count()) if lst.item(i).checkState() == Qt.Checked}
+            if not selected:
+                QMessageBox.warning(self, "Regions", "Please select at least one label.")
+                return
+            self.nifti_selected_regions = selected
+            try:
+                self._append_progress(f"[Regions] Selected labels: {sorted(selected)}")
+                self.statusBar().showMessage(f"Regions set: {sorted(selected)}", 3000)
+            except Exception:
+                print("[Regions] Selected:", sorted(selected))
 
 # ---------------------------
 # Entry point

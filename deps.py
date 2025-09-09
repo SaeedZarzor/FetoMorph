@@ -8,8 +8,8 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QFileDialog,QRubberBand,
     QVBoxLayout, QHBoxLayout, QToolBar, QSlider, QComboBox,
     QMessageBox, QSizePolicy, QGroupBox, QPlainTextEdit, QSplitter, QInputDialog, QDialog, QFormLayout, QSizePolicy,
-    QDoubleSpinBox, QDialogButtonBox, QSpinBox, QStyle, QTabWidget, QGroupBox, QHBoxLayout, QVBoxLayout, QToolButton,
-    QWidgetItem
+    QDoubleSpinBox, QDialogButtonBox, QSpinBox, QStyle, QTabWidget, QGroupBox, QToolButton,
+    QWidgetItem, QListWidget,QListWidgetItem, QLineEdit, QPushButton
 )
 
 # -------------- VTK + Qt bridge --------------
@@ -56,7 +56,7 @@ except Exception:
     nib = None
     
     
-import os, sys, math, tempfile, shutil, pathlib, uuid, time, shutil
+import os, sys, math, tempfile, shutil, pathlib, uuid, time, shutil, re
 from datetime import datetime
 from typing import Optional, Tuple
 from pathlib import Path
@@ -89,9 +89,9 @@ __all__ = [
     # Qt modules & classes
     "QtCore","QtGui","QtWidgets","Qt","QSize","QRect","QPoint","QObject","Signal","QUrl",
     "QAction","QKeySequence","QIcon","QPainter","QPixmap","QTextCursor","QImage",
-    "QApplication","QMainWindow","QWidget","QLabel","QFileDialog","QVBoxLayout","QHBoxLayout",
-    "QToolBar","QSlider","QComboBox","QMessageBox","QSizePolicy","QGroupBox","QPlainTextEdit",
-    "QSplitter","QInputDialog","QDialog","QFormLayout","QDoubleSpinBox","QSpinBox",
+    "QApplication","QMainWindow","QWidget","QLabel","QFileDialog","QVBoxLayout","QHBoxLayout","QPushButton",
+    "QToolBar","QSlider","QComboBox","QMessageBox","QSizePolicy","QGroupBox","QPlainTextEdit","QLineEdit",
+    "QSplitter","QInputDialog","QDialog","QFormLayout","QDoubleSpinBox","QSpinBox", "QListWidget", "QListWidgetItem",
     "QDialogButtonBox","QStyle","QDesktopServices","QTabWidget","QToolButton","QRubberBand","QColor","QPen","QFont",
     # VTK
     "QVTKRenderWindowInteractor","vtkRenderer","vtkPolyDataMapper","vtkActor",
@@ -100,7 +100,7 @@ __all__ = [
     "vtkXMLImageDataReader","vtkXMLPolyDataReader","vtkGenericDataObjectReader","vtkDataSetReader",
     "vtkSTLReader","vtkImageData","vtkPolyData","vtkDataSetSurfaceFilter","vtkOutputWindow",
     # Sci/IO
-    "np","cv2","pd","os","sys","math","tempfile","shutil","pathlib","datetime","Optional","Tuple","Path",
+    "np","cv2","pd","os","sys","math","tempfile","shutil","pathlib","datetime","Optional","Tuple","Path","re",
     # helpers
     "qt_icon",
 ]
