@@ -677,8 +677,6 @@ class MainWindow(QMainWindow):
         self._set_current("nifti", path)
         self.labels_available = get_nifti_present_labels(path)
         self.label_overlay_enabled = True
-        self._nifti_set_orientation("coronal")  # or your default; this draws first slice
-#        self.choose_regions_dialog()            # open the live chooser
 
     def load_stl(self, path: str):
         r = vtkSTLReader(); r.SetFileName(path); r.Update(); poly = r.GetOutput()
@@ -1590,8 +1588,9 @@ class MainWindow(QMainWindow):
             self.show_nifti_slice(v)
             self._active_view = "image"
         else:
-            self._show_widget(self.vtk_view)
             self._active_view = "vtk"
+            self._show_widget(self.vtk_view)
+            self.vtk_view.set_slice(v)
             self._update_slice_readout()
 
                 
@@ -1602,6 +1601,9 @@ class MainWindow(QMainWindow):
             self.slice_slider.blockSignals(True); self.slice_slider.setMinimum(lo); self.slice_slider.setMaximum(hi)
             self.slice_slider.setValue(max(lo, min(hi, self.slice_slider.value()))); self.slice_slider.blockSignals(False)
             self._update_slice_readout()
+        if self.slice_nav_mode =="seg":
+            self._nifti_set_orientation(text);
+            
 
             
             
@@ -1632,9 +1634,9 @@ class MainWindow(QMainWindow):
         a = np.asarray(vol)
         if a.ndim == 4:
             a = a[..., 0]
-
-        axis_map = {"sagittal": 0, "coronal": 1, "axial": 2}
-        self.nifti_axis = axis_map.get(view.lower(), 1)
+#        Axial (Z)", "Coronal (Y)", "Sagittal (X)
+        axis_map = {"Sagittal (X)": 0, "Coronal (Y)": 1, "Axial (Z)": 2}
+        self.nifti_axis = axis_map.get(view, 1)
 
         self.nifti_depth = int(a.shape[self.nifti_axis])
         mid = max(0, self.nifti_depth // 2)
