@@ -98,7 +98,7 @@ def get_nifti_present_labels(path: str, cap: int = 5000)-> list[int]:
         uniq = np.unique(arr_i)
         uniq = uniq[(uniq >= 0) & (uniq <= cap)]
         uniq_list = set(uniq.tolist())
-        print(f"Region labels: \n {uniq_list}")
+        print(f"Region labels: \n {uniq_list} \n")
         return uniq_list
     except Exception as ex:
         print(f"[Regions] Could not detect labels: {ex}")

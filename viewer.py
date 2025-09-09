@@ -87,9 +87,16 @@ class MainWindow(QMainWindow):
         self.annotations_by_source: dict[str, list[dict]] = {}  # per-image grouping
         self._roi_counter_by_source: dict[str, int] = {}  # for auto names if user leaves blank
         self.annotation_labels_by_path: dict[str, str] = {}  # save the label for each RIO path
+        # NIfTI viewing state (axis: 0=sagittal, 1=coronal, 2=axial)
+        self.nifti_axis: int = 1         # default = coronal
+        self.nifti_depth: int = 0        # number of slices along current axis
         self.nifti_selected_regions_default = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}
         self.labels_available : set[int] ={}
-        self.nifti_selected_regions: set[int] ={}
+        self.nifti_label_lut: dict[int, QColor] = {}   # label -> color
+        self.nifti_selected_regions: set[int] = set()
+        self.label_overlay_enabled: bool = True
+        self.label_overlay_alpha: float = 0.5
+
 
         
         # Params for measurements
@@ -667,8 +674,11 @@ class MainWindow(QMainWindow):
         self.vtk_view.show_image2d(img); self._show_widget(self.vtk_view); self._sync_slice_controls()
         print(f"NIfTI loaded:\n"
               f"Extent={img.GetExtent()} \n Spacing={img.GetSpacing()} \n  Range={img.GetScalarRange()}")
-        self.labels_available = get_nifti_present_labels(path)
         self._set_current("nifti", path)
+        self.labels_available = get_nifti_present_labels(path)
+        self.label_overlay_enabled = True
+        self._nifti_set_orientation("coronal")  # or your default; this draws first slice
+#        self.choose_regions_dialog()            # open the live chooser
 
     def load_stl(self, path: str):
         r = vtkSTLReader(); r.SetFileName(path); r.Update(); poly = r.GetOutput()
@@ -1576,8 +1586,12 @@ class MainWindow(QMainWindow):
             # Show the PNG on the image pane
             self._show_png_on_image_label(path)
             self._update_slice_readout()
+        elif self.slice_nav_mode == "seg":
+            self.show_nifti_slice(v)
+            self._active_view = "image"
         else:
-            self.vtk_view.set_slice(v)
+            self._show_widget(self.vtk_view)
+            self._active_view = "vtk"
             self._update_slice_readout()
 
                 
@@ -1588,7 +1602,7 @@ class MainWindow(QMainWindow):
             self.slice_slider.blockSignals(True); self.slice_slider.setMinimum(lo); self.slice_slider.setMaximum(hi)
             self.slice_slider.setValue(max(lo, min(hi, self.slice_slider.value()))); self.slice_slider.blockSignals(False)
             self._update_slice_readout()
-            
+
             
             
     def _show_png_on_image_label(self, png_path: str):
@@ -1600,6 +1614,39 @@ class MainWindow(QMainWindow):
         self.image_label.setImage(pm)
         self._show_widget(self.image_label)   # show the image pane, keep kind='nifti'
         self._active_view = "image"
+
+
+    def _nifti_set_orientation(self, view: str):
+        """
+        Set slice axis from a name and reconfigure the slider + view.
+        view in {'sagittal','coronal','axial'}
+        """
+        import nibabel as nib
+
+        img = nib.load(self.current_path)
+            # Use dataobj (lazy) but rounding requires actual values; this will page from disk
+        vol = img.get_fdata(dtype=float)
+        if vol is None:
+            print("[NIfTI] No data loaded."); return
+
+        a = np.asarray(vol)
+        if a.ndim == 4:
+            a = a[..., 0]
+
+        axis_map = {"sagittal": 0, "coronal": 1, "axial": 2}
+        self.nifti_axis = axis_map.get(view.lower(), 1)
+
+        self.nifti_depth = int(a.shape[self.nifti_axis])
+        mid = max(0, self.nifti_depth // 2)
+
+        if hasattr(self, "slice_slider"):
+            self.slice_slider.blockSignals(True)
+            self.slice_slider.setMinimum(0)
+            self.slice_slider.setMaximum(max(0, self.nifti_depth - 1))
+            self.slice_slider.setValue(mid)
+            self.slice_slider.blockSignals(False)
+
+        self.show_nifti_slice(mid)
 
     # ----- DnD -----
     def dragEnterEvent(self, e):
@@ -1867,14 +1914,36 @@ class MainWindow(QMainWindow):
         else:
             return None
 
+#--------------- select and show labels -------------------------------
+
+    def _color_for_label(self, lab: int) -> QColor:
+        # deterministic vivid color
+        from colorsys import hsv_to_rgb
+        hue = (lab * 0.61803398875) % 1.0
+        r, g, b = hsv_to_rgb(hue, 0.75, 0.95)
+        return QColor(int(r*255), int(g*255), int(b*255))
+
+    def _color_square_icon(self, col: QColor, size: int = 12) -> QIcon:
+        pm = QPixmap(size, size); pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        try:
+            p.fillRect(0, 0, size, size, col)
+            p.setPen(QPen(Qt.black, 1)); p.drawRect(0, 0, size-1, size-1)
+        finally:
+            p.end()
+        return QIcon(pm)
+        
     def choose_regions_dialog(self):
         """
         Let the user pick integer labels (e.g., {2,3,4,5,...}) for NIfTI processing.
         Prefills from current NIfTI volume if present, otherwise from defaults.
         Stores result in self.nifti_selected_regions.
         """
+        self.slice_nav_mode = "seg"
+        idx = int(self.slice_slider.value()) if hasattr(self, "slice_slider") else 0
+        self._nifti_set_orientation("coronal")
+        self.on_slice_slider_changed(idx)
 
-            
         # Build candidate labels:
         labels_available = sorted(set(int(x) for x in self.labels_available))
         if not labels_available:
@@ -1882,7 +1951,12 @@ class MainWindow(QMainWindow):
             return None
 
        
-        current = set(labels_available)
+        current = set(getattr(self, "nifti_selected_regions", self.nifti_selected_regions_default))
+        
+        if not hasattr(self, "nifti_label_lut"):
+            self.nifti_label_lut = {}
+        for lab in labels_available:
+            self.nifti_label_lut.setdefault(lab, self._color_for_label(lab))
 
         # --- Dialog UI ---
         dlg = QDialog(self)
@@ -1894,11 +1968,16 @@ class MainWindow(QMainWindow):
         lst = QListWidget()
         lst.setSelectionMode(QListWidget.NoSelection)
         for lab in sorted(labels_available):
-            it = QListWidgetItem(str(lab), lst)
+            it = QListWidgetItem(str(lab))
             it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
             it.setCheckState(Qt.Checked if lab in current else Qt.Unchecked)
+            it.setIcon(self._color_square_icon(self.nifti_label_lut[lab]))
+            lst.addItem(it)
         lay.addWidget(lst)
 
+
+
+        
         # Quick entry row
         quick_row = QHBoxLayout()
         quick_edit = QLineEdit()
@@ -1925,12 +2004,6 @@ class MainWindow(QMainWindow):
         def parse_labels(text: str) -> set[int]:
             toks = re.findall(r"\d+", text or "")
             return {int(t) for t in toks}
-            
-        def set_checks_from_set(s: set[int]):
-            have = {int(lst.item(i).text()) for i in range(lst.count())}
-            for i in range(lst.count()):
-                lab = int(lst.item(i).text())
-                lst.item(i).setCheckState(Qt.Checked if lab in s else Qt.Unchecked)
                 
         def set_checks_from_set(s: set[int]):
             have = {int(lst.item(i).text()) for i in range(lst.count())}
@@ -1944,6 +2017,17 @@ class MainWindow(QMainWindow):
                 it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
                 it.setCheckState(Qt.Checked)
 
+    # live preview on item change
+        def on_item_changed(item: QListWidgetItem):
+            lab = int(item.text())
+            if item.checkState() == Qt.Checked:
+                self.nifti_selected_regions.add(lab)
+            else:
+                self.nifti_selected_regions.discard(lab)
+            if getattr(self, "current_kind", None) == "nifti":
+                idx = int(self.slice_slider.value()) if hasattr(self, "slice_slider") else 0
+                self.show_nifti_slice(idx)
+                
         # connections
         btn_apply.clicked.connect(lambda: set_checks_from_set(parse_labels(quick_edit.text())))
         btn_all.clicked.connect(lambda: [lst.item(i).setCheckState(Qt.Checked) for i in range(lst.count())])
@@ -1962,6 +2046,8 @@ class MainWindow(QMainWindow):
 
         bb.accepted.connect(dlg.accept)
         bb.rejected.connect(dlg.reject)
+        lst.itemChanged.connect(on_item_changed)
+
 
         # --- run ---
         if dlg.exec() == QDialog.Accepted:
@@ -1976,6 +2062,104 @@ class MainWindow(QMainWindow):
             except Exception:
                 print("[Regions] Selected:", sorted(selected))
 
+
+    def _compose_label_overlay(
+        self,
+        img2d: np.ndarray,          # can be (H,W) grayscale OR (H,W,3) RGB
+        label2d: np.ndarray,        # (H,W) integer labels
+        selected: set[int],
+        alpha: float = 0.5
+    ) -> QImage:
+        # --- make a grayscale base in [0,255] ---
+        if img2d.ndim == 3 and img2d.shape[-1] == 3:
+            # convert RGB to luma for percentile windowing
+            f = (0.299 * img2d[..., 0] + 0.587 * img2d[..., 1] + 0.114 * img2d[..., 2]).astype(np.float32, copy=False)
+        else:
+            f = img2d.astype(np.float32, copy=False)
+
+        lo, hi = np.percentile(f, (1, 99))
+        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+            lo, hi = float(np.nanmin(f)), float(np.nanmax(f))
+            if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+                lo, hi = 0.0, 1.0
+
+        gray = (np.clip((f - lo) / (hi - lo), 0.0, 1.0) * 255.0).astype(np.uint8)
+
+        # base RGB made from grayscale
+        rgb = np.dstack([gray, gray, gray]).astype(np.float32, copy=False)
+
+        # --- overlay only selected labels ---
+        if selected:
+            for lab in selected:
+                mask = (label2d == lab)
+                if not np.any(mask):
+                    continue
+                c = self.nifti_label_lut.get(lab, self._color_for_label(lab))
+                overlay_color = np.array([float(c.red()), float(c.green()), float(c.blue())], dtype=np.float32)
+                # blend on the masked pixels; rgb[mask] is (N,3)
+                rgb[mask] = (1.0 - alpha) * rgb[mask] + alpha * overlay_color[None, :]
+
+        # --- to QImage ---
+        rgb_u8 = np.ascontiguousarray(np.clip(rgb, 0, 255).astype(np.uint8))
+        h, w, _ = rgb_u8.shape
+        qimg = QImage(rgb_u8.data, w, h, rgb_u8.strides[0], QImage.Format_RGB888)
+        return qimg.copy()  # detach from NumPy buffer
+
+            
+    def show_nifti_slice(self, idx, axis=None):
+        img = nib.load(self.current_path)
+        vol = img.get_fdata(dtype=float)
+        if vol is None:
+            return
+
+        a = np.asarray(vol)
+        if a.ndim == 4:
+            a = a[..., 0]  # take first volume
+
+        ax = self.nifti_axis if axis is None else int(axis)
+        depth = a.shape[ax]
+        i = max(0, min(int(idx), depth - 1))
+
+        # Slice
+        sl = a[i, :, :] if ax == 0 else (a[:, i, :] if ax == 1 else a[:, :, i])
+
+        # Normalize to [0,255]
+        f = sl.astype(np.float32, copy=False)
+        lo, hi = np.percentile(f, (1, 99))
+        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+            lo, hi = float(np.nanmin(f)), float(np.nanmax(f))
+            if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+                lo, hi = 0.0, 1.0
+        gray = (np.clip((f - lo) / (hi - lo), 0.0, 1.0) * 255.0).astype(np.uint8)
+        gray = np.ascontiguousarray(gray)
+
+        qimg = None
+        if self.label_overlay_enabled and self.nifti_selected_regions:
+            # Prepare label overlay
+            L = getattr(self, "nifti_label_data", None) or a
+            if L.ndim == 4:
+                L = L[..., 0]
+            label2d = np.rint(
+                L[i, :, :] if ax == 0 else (L[:, i, :] if ax == 1 else L[:, :, i])
+            ).astype(np.int32)
+
+            # Expand grayscale to RGB for overlay
+            rgb = np.dstack([gray, gray, gray])
+            rgb = np.ascontiguousarray(rgb)
+            qimg = self._compose_label_overlay(rgb, label2d, self.nifti_selected_regions)
+            self._last_frame_rgb = rgb  # keep alive
+        else:
+            # Just grayscale, no overlay
+            h, w = gray.shape
+            qimg = QImage(gray.data, w, h, gray.strides[0], QImage.Format_Grayscale8)
+            self._last_frame_gray = gray  # keep alive
+
+        self.image_label.setImage(QPixmap.fromImage(qimg))
+        self._show_widget(self.image_label)
+        if hasattr(self, "_update_slice_label"):
+            self._update_slice_label(i, depth, mode="nifti")
+
+        
 # ---------------------------
 # Entry point
 # ---------------------------
