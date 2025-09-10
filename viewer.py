@@ -296,7 +296,7 @@ class MainWindow(QMainWindow):
         
         self.view_mode = QComboBox()
         self.view_mode.addItems(["2D", "3D"])
-        self.view_mode.setCurrentText("2D")
+        self.view_mode.setCurrentText("3D")
         self.view_mode.currentTextChanged.connect(self._on_view_changed)
         self.nav_tb.addWidget(self.view_mode)
         self.view_mode.setVisible(False)
@@ -675,11 +675,12 @@ class MainWindow(QMainWindow):
 
     def load_nifti(self, path: str):
         self._set_current("nifti", path)
-        print(f"")
+        rdr = vtkNIFTIImageReader(); rdr.SetFileName(path); rdr.Update(); img = rdr.GetOutput()
+        print(f"NIfTI loaded:\n"
+              f"Extent={img.GetExtent()} \n Spacing={img.GetSpacing()} \n  Range={img.GetScalarRange()}")
         self.labels_available = get_nifti_present_labels(path)
         if self.view_mode.currentText() == "3D":
             self.slice_nav_mode = None
-            rdr = vtkNIFTIImageReader(); rdr.SetFileName(path); rdr.Update(); img = rdr.GetOutput()
             self.vtk_view.show_image2d(img);  self._show_widget(self.vtk_view); self._sync_slice_controls()
         elif self.view_mode.currentText() == "2D":
             self.slice_nav_mode = "nifti"
@@ -1581,8 +1582,8 @@ class MainWindow(QMainWindow):
         for w in (self.slice_slider, self.orient_combo, self.slice_caption, self.slice_value_label): w.setVisible(vis)
         if not vis: self.slice_value_label.setText("—")
     def _update_slice_readout(self):
-        if not self.vtk_view.has_slice(): self.slice_value_label.setText("—"); return
-        lo, hi = self.vtk_view.slice_range(); idx = self.slice_slider.value(); pos_mm = self.vtk_view.slice_index_to_mm(idx)
+        if not self.slice_caption.isVisible(): self.slice_value_label.setText("—"); return
+        lo = self.slice_slider.minimum(); hi = self.slice_slider.maximum(); idx = self.slice_slider.value(); pos_mm = self.vtk_view.slice_index_to_mm(idx)
         self.slice_value_label.setText(f"{idx}/{hi}  ({pos_mm:.2f} mm)")
         
     def on_slice_slider_changed(self, v: int):
@@ -1596,6 +1597,7 @@ class MainWindow(QMainWindow):
         elif self.slice_nav_mode == "nifti":
             self.show_nifti_slice(v)
             self._active_view = "image"
+            self._update_slice_readout()
         else:
             self._active_view = "vtk"
             self._show_widget(self.vtk_view)
@@ -1608,10 +1610,12 @@ class MainWindow(QMainWindow):
         if self.vtk_view.has_slice():
             lo, hi = self.vtk_view.slice_range()
             self.slice_slider.blockSignals(True); self.slice_slider.setMinimum(lo); self.slice_slider.setMaximum(hi)
-            self.slice_slider.setValue(max(lo, min(hi, self.slice_slider.value()))); self.slice_slider.blockSignals(False)
+            self.slice_slider.setValue(max(lo, min(hi, self.slice_slider.value())))
+            self.slice_slider.blockSignals(False)
             self._update_slice_readout()
         if self.slice_nav_mode == "nifti":
             self._nifti_set_orientation(text);
+            self._update_slice_readout()
                     
     def _on_view_changed(self, text: str):
         if text == "3D":
