@@ -282,7 +282,7 @@ class MainWindow(QMainWindow):
         # --- Navigation toolbar (goes BELOW the ribbon) ---
         self.nav_tb = QToolBar("Navigation", self)
         self.nav_tb.setIconSize(QSize(20, 20))
-        self.nav_tb.setMovable(True)
+        self.nav_tb.setMovable(False)
         self.addToolBar(Qt.TopToolBarArea, self.nav_tb)
 
         self.nav_tb.addSeparator()
@@ -293,11 +293,14 @@ class MainWindow(QMainWindow):
         self.nav_tb.addWidget(self.orient_combo)
         self.orient_combo.setVisible(False)
         
-#        slef.act_view_sagittal=QAction("Sagittal", self); self.act_view_sagittal.triggered.connect(lambda: self._on_view_button("sagittal")); self.nav_tb.addAction(self.act_view_sagittal)
-#        self.act_view_coronal=QAction("Coronal", self); self.act_view_coronal.triggered.connect(lambda: self._on_view_button("coronal")); self.nav_tb.addAction(self.act_view_coronal)
-#        self.act_view_axial=QAction("Axial", self); self.act_view_axial.triggered.connect(lambda: self._on_view_button("axial")); self.nav_tb.addAction(self.act_view_axial)
-
+        self.view_mode = QComboBox()
+        self.view_mode.addItems(["2D", "3D"])
+        self.view_mode.setCurrentText("2D")
+        self.view_mode.currentTextChanged.connect(self._on_view_changed)
+        self.nav_tb.addWidget(self.view_mode)
+        self.view_mode.setVisible(False)
         
+        self.nav_tb.addSeparator()
 
         self.slice_caption = QLabel("Section:")
         self.nav_tb.addWidget(self.slice_caption)
@@ -670,12 +673,17 @@ class MainWindow(QMainWindow):
         print(f"Loaded image: {path}  size={pm.width()}x{pm.height()}"); self._set_current("image", path)
 
     def load_nifti(self, path: str):
-        rdr = vtkNIFTIImageReader(); rdr.SetFileName(path); rdr.Update(); img = rdr.GetOutput()
-        self.vtk_view.show_image2d(img); self._show_widget(self.vtk_view); self._sync_slice_controls()
-        print(f"NIfTI loaded:\n"
-              f"Extent={img.GetExtent()} \n Spacing={img.GetSpacing()} \n  Range={img.GetScalarRange()}")
         self._set_current("nifti", path)
         self.labels_available = get_nifti_present_labels(path)
+        if self.view_mode.currentText() == "3D":
+            self.slice_nav_mode = None
+            rdr = vtkNIFTIImageReader(); rdr.SetFileName(path); rdr.Update(); img = rdr.GetOutput()
+            self.vtk_view.show_image2d(img);  self._show_widget(self.vtk_view); self._sync_slice_controls()
+        elif self.view_mode.currentText() == "2D":
+            self.slice_nav_mode = "nifti"
+            self._nifti_set_orientation(self.orient_combo.currentText());
+
+
 
     def load_stl(self, path: str):
         r = vtkSTLReader(); r.SetFileName(path); r.Update(); poly = r.GetOutput()
@@ -1583,7 +1591,7 @@ class MainWindow(QMainWindow):
             # Show the PNG on the image pane
             self._show_png_on_image_label(path)
             self._update_slice_readout()
-        elif self.slice_nav_mode == "seg":
+        elif self.slice_nav_mode == "nifti":
             self.show_nifti_slice(v)
             self._active_view = "image"
         else:
@@ -1600,10 +1608,18 @@ class MainWindow(QMainWindow):
             self.slice_slider.blockSignals(True); self.slice_slider.setMinimum(lo); self.slice_slider.setMaximum(hi)
             self.slice_slider.setValue(max(lo, min(hi, self.slice_slider.value()))); self.slice_slider.blockSignals(False)
             self._update_slice_readout()
-        if self.slice_nav_mode =="seg":
+        if self.slice_nav_mode == "nifti":
             self._nifti_set_orientation(text);
-            
-
+                    
+    def _on_view_changed(self, text: str):
+        if text == "3D":
+            self.slice_nav_mode = None
+            rdr = vtkNIFTIImageReader(); rdr.SetFileName(self.current_path); rdr.Update(); img = rdr.GetOutput()
+            self.vtk_view.show_image2d(img);  self._show_widget(self.vtk_view); self._sync_slice_controls()
+            self._on_orientation_changed(self.orient_combo.currentText())
+        elif text == "2D":
+            self.slice_nav_mode = "nifti"
+            self._nifti_set_orientation(self.orient_combo.currentText());
             
             
     def _show_png_on_image_label(self, png_path: str):
@@ -1635,7 +1651,7 @@ class MainWindow(QMainWindow):
             a = a[..., 0]
 #        Axial (Z)", "Coronal (Y)", "Sagittal (X)
         axis_map = {"Sagittal (X)": 0, "Coronal (Y)": 1, "Axial (Z)": 2}
-        self.nifti_axis = axis_map.get(view, 1)
+        self.nifti_axis = axis_map.get(view, 2)
 
         self.nifti_depth = int(a.shape[self.nifti_axis])
         mid = max(0, self.nifti_depth // 2)
@@ -1685,10 +1701,14 @@ class MainWindow(QMainWindow):
         self.reset_png_navigation()
         if path and kind:
             self._ensure_metric_row(path, kind)
-        if kind in ("stl", "vtk_poly", "vtk_surface", "nifti"):
+        if kind == "nifti": #"stl", "vtk_poly", "vtk_surface",
             self.slice_slider.setEnabled(True)
+            self.orient_combo.setEnabled(True)
+            self.view_mode.setEnabled(True)
         else:
             self.slice_slider.setEnabled(False)
+            self.orient_combo.setEnabled(False)
+            self.view_mode.setEnabled(False)
 
 
     def _update_process_actions(self):
@@ -1940,9 +1960,11 @@ class MainWindow(QMainWindow):
         Prefills from current NIfTI volume if present, otherwise from defaults.
         Stores result in self.nifti_selected_regions.
         """
-        self.slice_nav_mode = "seg"
+        self.slice_nav_mode = "nifti"
         idx = int(self.slice_slider.value()) if hasattr(self, "slice_slider") else 0
-        self._nifti_set_orientation("coronal")
+        self.view_mode.setCurrentText("2D")
+        self.view_mode.setEnabled(False)
+        self._nifti_set_orientation(self.orient_combo)
         self.on_slice_slider_changed(idx)
 
         # Build candidate labels:
@@ -2058,10 +2080,10 @@ class MainWindow(QMainWindow):
                 return
             self.nifti_selected_regions = selected
             try:
-                self._append_progress(f"[Regions] Selected labels: {sorted(selected)}")
+                self._append_progress(f"[Regions] Selected labels: {sorted(selected)} \n")
                 self.statusBar().showMessage(f"Regions set: {sorted(selected)}", 3000)
             except Exception:
-                print("[Regions] Selected:", sorted(selected))
+                print("[Regions] Selected:", sorted(selected), "\n")
 
 
     def _compose_label_overlay(
