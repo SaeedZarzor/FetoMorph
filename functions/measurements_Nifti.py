@@ -40,7 +40,7 @@ def compute_nifti_dims(brain_mask: np.ndarray, affine: np.ndarray):
     maxs_mm = corners_xyz.max(axis=0)
     extents_mm = maxs_mm - mins_mm  # [X, Y, Z] in world (mm)
 
-    print(f"[NIfTI dimensions] LR(X)={extents_mm[0]:.2f}  PA(Y)={extents_mm[1]:.2f}  IS(Z)={extents_mm[2]:.2f}")
+    print(f"[NIfTI dimensions] LR(X)={extents_mm[0]:.2f}  PA(Y)={extents_mm[1]:.2f}  IS(Z)={extents_mm[2]:.2f} mm")
 
     extents_list  = extents_mm.astype(float).tolist()
     extents_list_cm = [x/10 for x in extents_list]
@@ -48,7 +48,7 @@ def compute_nifti_dims(brain_mask: np.ndarray, affine: np.ndarray):
 
 
 
-def compute_nifti_allmarks(file_path: str, out_dir: str, min_contour_area: float=30, kernel_size: int=5):
+def compute_nifti_allmarks(file_path: str, out_dir: str, valid_labels: set[int],min_contour_area: float=30, kernel_size: int=5, ):
     nifti_img = nib.load(file_path)
     nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
@@ -65,14 +65,14 @@ def compute_nifti_allmarks(file_path: str, out_dir: str, min_contour_area: float
 
     pixel_area_mm2 = pixel_size_x* pixel_size_z
 
-    unique_labels = np.unique(image_data)
-    print("[NIfTI All hallmarks] Unique labels in the image:", unique_labels)
+#    unique_labels = np.unique(image_data)
+#    print("[NIfTI All hallmarks] Unique labels in the image:", unique_labels)
 
     # Step 1: Define the Selected Regions
-    selected_regions = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}  # The regions you want to include
+#    selected_regions = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}  # The regions you want to include
 
     # Check if selected regions exist in the image
-    valid_labels = selected_regions.intersection(set(unique_labels))
+#    valid_labels = selected_regions.intersection(set(unique_labels))
     if not valid_labels:
         print(" [NIfTI All hallmarks] Warning: None of the selected regions are present in this NIfTI file!")
         threshold = np.percentile(image_data, 50)
@@ -190,13 +190,13 @@ def compute_nifti_allmarks(file_path: str, out_dir: str, min_contour_area: float
         for i,v in enumerate(total_depth):
             total_depth[i] = v/10
     
-        mean_total = (sum(total_depth)/ len(total_depth))  if total_depth else None
+        mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
         
         sheet1.append(["Volume cm^3",round(brain_volume,2), "Surface Area cm^2",round(Area,2)])
         sheet1.append(["GI",round(GI_total,2)])
-        sheet1.append(["Total_Number_of_Sluci_cz",len(total_depth), "Mean_value_across_slices_cm",round(mean_total, 2)])
-        sheet1.append(["Max_sulci_across_slices_cm",round((max(total_depth) if total_depth else None),2),
-        "Min_sulci_across_slices_cm",round((min(total_depth) if total_depth else None),2)])
+        sheet1.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices_cm",(round(mean_total, 2) if mean_total is not None else None)])
+        sheet1.append(["Max_sulci_across_slices_cm",(round(max(total_depth),2) if total_depth else None),
+        "Min_sulci_across_slices_cm",(round(min(total_depth),2) if total_depth else None)])
 
         df = pd.DataFrame(sheet1, columns=["Slice", "Inner_area_mm^2" ,"Inner_Perimeter_mm", "Outer_Perimeter_mm", "Sulci_count", "min_depth_mm", "max_dpeth_mm", "mean_depth_mm"])
         xlsx_path = os.path.join(out_dir, "Brain_Allmarks.xlsx")
@@ -219,7 +219,7 @@ def compute_nifti_allmarks(file_path: str, out_dir: str, min_contour_area: float
 
 
 
-def compute_nifti_volume(file_path: str, out_dir: str,):
+def compute_nifti_volume(file_path: str, out_dir: str, valid_labels: set[int]):
 
 
     nifti_img = nib.load(file_path)
@@ -238,14 +238,14 @@ def compute_nifti_volume(file_path: str, out_dir: str,):
 
     pixel_area_mm2 = pixel_size_x* pixel_size_z
 
-    unique_labels = np.unique(image_data)
-    print("[NIfTI Volume] Unique labels in the image:", unique_labels)
-
-    # Step 1: Define the Selected Regions
-    selected_regions = {3, 4, 5, 6, 14, 15, 16, 17}  # The regions you want to include
-
-    # Check if selected regions exist in the image
-    valid_labels = selected_regions.intersection(set(unique_labels))
+#    unique_labels = np.unique(image_data)
+#    print("[NIfTI Volume] Unique labels in the image:", unique_labels)
+#
+#    # Step 1: Define the Selected Regions
+#    selected_regions = {3, 4, 5, 6, 14, 15, 16, 17}  # The regions you want to include
+#
+#    # Check if selected regions exist in the image
+#    valid_labels = selected_regions.intersection(set(unique_labels))
     if not valid_labels:
         print(" [NIfTI Volume] Warning: None of the selected regions are present in this NIfTI file!")
         threshold = np.percentile(image_data, 50)
@@ -335,7 +335,7 @@ def compute_nifti_volume(file_path: str, out_dir: str,):
 
 
 
-def compute_nifti_arae(file_path: str, out_dir: str, min_contour_area: float=30,):
+def compute_nifti_arae(file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30,):
 
 
     nifti_img = nib.load(file_path)
@@ -354,14 +354,14 @@ def compute_nifti_arae(file_path: str, out_dir: str, min_contour_area: float=30,
 
     pixel_area_mm2 = pixel_size_x* pixel_size_z
 
-    unique_labels = np.unique(image_data)
-    print("[NIfTI Area] Unique labels in the image:", unique_labels)
-
-    # Step 1: Define the Selected Regions
-    selected_regions = {3, 4, 5, 6, 14, 15, 16, 17}  # The regions you want to include
-
-    # Check if selected regions exist in the image
-    valid_labels = selected_regions.intersection(set(unique_labels))
+#    unique_labels = np.unique(image_data)
+#    print("[NIfTI Area] Unique labels in the image:", unique_labels)
+#
+#    # Step 1: Define the Selected Regions
+#    selected_regions = {3, 4, 5, 6, 14, 15, 16, 17}  # The regions you want to include
+#
+#    # Check if selected regions exist in the image
+#    valid_labels = selected_regions.intersection(set(unique_labels))
     if not valid_labels:
         print(" [NIfTI Area] Warning: None of the selected regions are present in this NIfTI file!")
         threshold = np.percentile(image_data, 50)
@@ -453,7 +453,7 @@ def compute_nifti_arae(file_path: str, out_dir: str, min_contour_area: float=30,
     
     
 
-def compute_nifti_lGI(file_path: str, out_dir: str, min_contour_area: float=30, kernel_size: int=5):
+def compute_nifti_lGI(file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30, kernel_size: int=5):
     nifti_img = nib.load(file_path)
     nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
@@ -470,14 +470,14 @@ def compute_nifti_lGI(file_path: str, out_dir: str, min_contour_area: float=30, 
 
     pixel_area_mm2 = pixel_size_x* pixel_size_z
 
-    unique_labels = np.unique(image_data)
-    print("[NIfTI lGI] Unique labels in the image:", unique_labels)
-
-    # Step 1: Define the Selected Regions
-    selected_regions = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}  # The regions you want to include
-
-    # Check if selected regions exist in the image
-    valid_labels = selected_regions.intersection(set(unique_labels))
+#    unique_labels = np.unique(image_data)
+#    print("[NIfTI lGI] Unique labels in the image:", unique_labels)
+#
+#    # Step 1: Define the Selected Regions
+#    selected_regions = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}  # The regions you want to include
+#
+#    # Check if selected regions exist in the image
+#    valid_labels = selected_regions.intersection(set(unique_labels))
     if not valid_labels:
         print(" [NIfTI lGI] Warning: None of the selected regions are present in this NIfTI file!")
         threshold = np.percentile(image_data, 50)
@@ -603,7 +603,7 @@ def compute_nifti_lGI(file_path: str, out_dir: str, min_contour_area: float=30, 
 
 
         
-def compute_nifti_sulci_depth(file_path: str, out_dir: str, min_contour_area: float=30,):
+def compute_nifti_sulci_depth(file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30,):
     nifti_img = nib.load(file_path)
     nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
@@ -620,14 +620,14 @@ def compute_nifti_sulci_depth(file_path: str, out_dir: str, min_contour_area: fl
 
     pixel_area_mm2 = pixel_size_x* pixel_size_z
 
-    unique_labels = np.unique(image_data)
-    print("[NIfTI Sulci depth] Unique labels in the image:", unique_labels)
-
-    # Step 1: Define the Selected Regions
-    selected_regions = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}  # The regions you want to include
-
-    # Check if selected regions exist in the image
-    valid_labels = selected_regions.intersection(set(unique_labels))
+#    unique_labels = np.unique(image_data)
+#    print("[NIfTI Sulci depth] Unique labels in the image:", unique_labels)
+#
+#    # Step 1: Define the Selected Regions
+#    selected_regions = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}  # The regions you want to include
+#
+#    # Check if selected regions exist in the image
+#    valid_labels = selected_regions.intersection(set(unique_labels))
     if not valid_labels:
         print(" [NIfTI Sulci depth] Warning: None of the selected regions are present in this NIfTI file!")
         threshold = np.percentile(image_data, 50)
@@ -719,10 +719,15 @@ def compute_nifti_sulci_depth(file_path: str, out_dir: str, min_contour_area: fl
             cv2.imwrite(slice_path, annotated)
             saved_pngs.append(slice_path)
         
-        mean_total = (sum(total_depth)/ len(total_depth))  if total_depth else None
-        sheet1.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices",round(mean_total, 2)])
-        sheet1.append(["Max_sulci_across_slices",round((max(total_depth) if total_depth else None),2),
-        "Min_sulci_across_slices",round((min(total_depth) if total_depth else None),2)])
+        total_depth = [x/10 for x in total_depth]
+        for i,v in enumerate(total_depth):
+            total_depth[i] = v/10
+    
+        mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
+        
+        sheet1.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices_cm",(round(mean_total, 2) if mean_total is not None else None)])
+        sheet1.append(["Max_sulci_across_slices_cm",(round(max(total_depth),2) if total_depth else None),
+        "Min_sulci_across_slices_cm",(round(min(total_depth),2) if total_depth else None)])
 
         df = pd.DataFrame(sheet1, columns=["Slice","Sulci_count", "min_depth_mm", "max_dpeth_mm", "mean_depth_mm"])
         xlsx_path = os.path.join(out_dir, "Brain_Sulci.xlsx")

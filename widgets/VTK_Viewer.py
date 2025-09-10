@@ -52,7 +52,7 @@ class VTKViewer(QWidget):
         self.vtkWidget.GetRenderWindow().Render()
     def set_orientation(self, key: str):
         if not self.has_slice(): return
-        self._axis = 2 if key.startswith("Axial") else 1 if key.startswith("Coronal") else 0
+        self._axis = 2 if key=="Axial (Z)" else 1 if key=="Coronal (Y)" else 0
         ex = self._img.GetExtent(); self._slice_min, self._slice_max = self._axis_minmax(ex, self._axis)
         self._slice = max(self._slice_min, min(self._slice_max, self._slice))
         if self._slice_mapper:

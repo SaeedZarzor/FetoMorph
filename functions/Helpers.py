@@ -84,3 +84,23 @@ def get_red_rect_offset(image_rgb):
     y_min, x_min = coords.min(axis=0)
     y_max, x_max = coords.max(axis=0)
     return np.array([(x_min + x_max) // 2, (y_min + y_max) // 2])
+
+def get_nifti_present_labels(path: str, cap: int = 5000)-> list[int]:
+   
+    try:
+        if path is not None or data is None:
+            import nibabel as nib
+            img = nib.load(path or self.current_path)
+            # Use dataobj (lazy) but rounding requires actual values; this will page from disk
+            data = img.get_fdata(dtype=float)
+            
+        arr_i = np.rint(data).astype(np.int32)
+        uniq = np.unique(arr_i)
+        uniq = uniq[(uniq >= 0) & (uniq <= cap)]
+        uniq_list = set(uniq.tolist())
+        print(f"Region labels: \n {uniq_list} \n")
+        return uniq_list
+    except Exception as ex:
+        print(f"[Regions] Could not detect labels: {ex}")
+        # Fall back to defaults
+        return None

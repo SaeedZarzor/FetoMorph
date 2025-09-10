@@ -5,12 +5,14 @@ from functions.measurements_image import *
 from functions.pial_to_stl import *
 from functions.measurements_Nifti import *
 from functions.Fetal_brain_GI_stl import compute_stl_lGI
+from functions.Helpers import get_nifti_present_labels
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.Contour_threshold import ContourThresholdDialog
 from widgets.Scalebar_set_scale import ScalebarSetScaleDialog
 from widgets.Unit_scale import UnitScaleDialog
 from widgets.VTK_Viewer import VTKViewer
 from widgets.Kernel_size import KernelSizeDialog
+from widgets.RegionDock import *
 from ribbon import *
 
 
@@ -86,6 +88,16 @@ class MainWindow(QMainWindow):
         self.annotations_by_source: dict[str, list[dict]] = {}  # per-image grouping
         self._roi_counter_by_source: dict[str, int] = {}  # for auto names if user leaves blank
         self.annotation_labels_by_path: dict[str, str] = {}  # save the label for each RIO path
+        # NIfTI viewing state (axis: 0=sagittal, 1=coronal, 2=axial)
+        self.nifti_axis: int = 1         # default = coronal
+        self.nifti_depth: int = 0        # number of slices along current axis
+        self.nifti_selected_regions_default = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}
+        self.labels_available : set[int] ={}
+        self.nifti_label_lut: dict[int, QColor] = {}   # label -> color
+        self.nifti_selected_regions: set[int] = set()
+        self.label_overlay_enabled: bool = True
+        self.label_overlay_alpha: float = 0.5
+
 
         
         # Params for measurements
@@ -167,11 +179,13 @@ class MainWindow(QMainWindow):
         Setting_menu.addAction(self.act_set_scale)
         self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.set_kernel_dialog); Setting_menu.addAction(self.act_kernel_size)
         self.act_cnt_threshold = QAction("Set Contour Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
-        self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square)
+        self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Setting_menu.addAction(self.act_annotate_square)
+        self.act_choose_regions = QAction("Choose Regions of Interest…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
 
 
         # Disable initially
-        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False)  # will enable for STL/polydata
+        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False)
+  # will enable for STL/polydata
         for a in (self.act_meas_allmarks, self.act_meas_volumes, self.act_meas_area, self.act_meas_perimeter, self.act_meas_lgi, self.act_meas_sulci, self.act_optimization):
             a.setEnabled(False)
 
@@ -227,6 +241,7 @@ class MainWindow(QMainWindow):
         self.act_meas_perimeter.setIcon(QIcon(str(ASSETS / "icons/Perimeter.png")))
         self.act_meas_lgi.setIcon(QIcon(str(ASSETS / "icons/LGI.png")))
         self.act_meas_sulci.setIcon(QIcon(str(ASSETS / "icons/depth.png")))
+        self.act_choose_regions.setIcon(QIcon(str(ASSETS / "icons/labels.png")))
         
         
         self.ribbon.add_action("Home", self.act_nav_import)
@@ -256,6 +271,7 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Settings", self.act_kernel_size)
         self.ribbon.add_action("Settings", self.act_cnt_threshold)
         self.ribbon.add_action("Settings", self.act_annotate_square)
+        self.ribbon.add_action("Settings", self.act_choose_regions)
 
 
 
@@ -267,7 +283,7 @@ class MainWindow(QMainWindow):
         # --- Navigation toolbar (goes BELOW the ribbon) ---
         self.nav_tb = QToolBar("Navigation", self)
         self.nav_tb.setIconSize(QSize(20, 20))
-        self.nav_tb.setMovable(True)
+        self.nav_tb.setMovable(False)
         self.addToolBar(Qt.TopToolBarArea, self.nav_tb)
 
         self.nav_tb.addSeparator()
@@ -278,11 +294,14 @@ class MainWindow(QMainWindow):
         self.nav_tb.addWidget(self.orient_combo)
         self.orient_combo.setVisible(False)
         
-#        slef.act_view_sagittal=QAction("Sagittal", self); self.act_view_sagittal.triggered.connect(lambda: self._on_view_button("sagittal")); self.nav_tb.addAction(self.act_view_sagittal)
-#        self.act_view_coronal=QAction("Coronal", self); self.act_view_coronal.triggered.connect(lambda: self._on_view_button("coronal")); self.nav_tb.addAction(self.act_view_coronal)
-#        self.act_view_axial=QAction("Axial", self); self.act_view_axial.triggered.connect(lambda: self._on_view_button("axial")); self.nav_tb.addAction(self.act_view_axial)
-
+        self.view_mode = QComboBox()
+        self.view_mode.addItems(["2D", "3D"])
+        self.view_mode.setCurrentText("3D")
+        self.view_mode.currentTextChanged.connect(self._on_view_changed)
+        self.nav_tb.addWidget(self.view_mode)
+        self.view_mode.setVisible(False)
         
+        self.nav_tb.addSeparator()
 
         self.slice_caption = QLabel("Section:")
         self.nav_tb.addWidget(self.slice_caption)
@@ -472,7 +491,7 @@ class MainWindow(QMainWindow):
 
 
     def close_current(self):
-        self.image_label.clearImage(); self._show_widget(self.image_label); self._set_slice_controls(False)
+        self.image_label.clearImage(); self._show_widget(self.image_label); self._set_slice_controls(False);self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False)
         self._set_current(None, None); print("Closed current file and reset view.")
 
     def quit_app(self):
@@ -655,11 +674,19 @@ class MainWindow(QMainWindow):
         print(f"Loaded image: {path}  size={pm.width()}x{pm.height()}"); self._set_current("image", path)
 
     def load_nifti(self, path: str):
+        self._set_current("nifti", path)
         rdr = vtkNIFTIImageReader(); rdr.SetFileName(path); rdr.Update(); img = rdr.GetOutput()
-        self.vtk_view.show_image2d(img); self._show_widget(self.vtk_view); self._sync_slice_controls()
         print(f"NIfTI loaded:\n"
               f"Extent={img.GetExtent()} \n Spacing={img.GetSpacing()} \n  Range={img.GetScalarRange()}")
-        self._set_current("nifti", path)
+        self.labels_available = get_nifti_present_labels(path)
+        if self.view_mode.currentText() == "3D":
+            self.slice_nav_mode = None
+            self.vtk_view.show_image2d(img);  self._show_widget(self.vtk_view); self._sync_slice_controls()
+        elif self.view_mode.currentText() == "2D":
+            self.slice_nav_mode = "nifti"
+            self._nifti_set_orientation(self.orient_combo.currentText());
+
+
 
     def load_stl(self, path: str):
         r = vtkSTLReader(); r.SetFileName(path); r.Update(); poly = r.GetOutput()
@@ -872,8 +899,10 @@ class MainWindow(QMainWindow):
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
+                
+                labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
                 dims, area, volume, gi, depth, saved_pngs, valid_slices = compute_nifti_allmarks(file_path=nif_path,
-                out_dir=out_dir, min_contour_area=self.cnt_threshold, kernel_size = self.kernel_size)
+                out_dir=out_dir,valid_labels = labels, min_contour_area=self.cnt_threshold, kernel_size = self.kernel_size)
             
                 if area is None:
                     return
@@ -925,13 +954,15 @@ class MainWindow(QMainWindow):
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
-                dims, volume,saved_pngs, valid_slices = compute_nifti_volume(file_path=nif_path, out_dir=out_dir,)
+                labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
+
+                dims, volume,saved_pngs, valid_slices = compute_nifti_volume(file_path=nif_path, out_dir=out_dir, valid_labels = labels)
             
                 if volume is None:
                     return
 
                 # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path, unite="cm",volume = volume,)
+                self._record_metric_for(self.current_path, unite="cm", dimensions = dims, volume = volume,)
 
                 self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                 
@@ -1074,7 +1105,9 @@ class MainWindow(QMainWindow):
                     os.makedirs(out_dir, exist_ok=True)
                     
                     self.current_output_dir = out_dir
-                    lGI,saved_pngs, valid_slices = compute_nifti_lGI(file_path=nif_path, out_dir=out_dir,min_contour_area=self.cnt_threshold, kernel_size= self.kernel_size,)
+                    labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
+
+                    lGI,saved_pngs, valid_slices = compute_nifti_lGI(file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold, kernel_size= self.kernel_size,)
                 
                     if lGI is None:
                         return
@@ -1212,7 +1245,9 @@ class MainWindow(QMainWindow):
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
-                dims, depth,saved_pngs, valid_slices = compute_nifti_sulci_depth(file_path=nif_path, out_dir=out_dir, min_contour_area=self.cnt_threshold)
+                labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
+
+                dims, depth,saved_pngs, valid_slices = compute_nifti_sulci_depth(file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold)
             
                 if depth is None:
                     return
@@ -1300,14 +1335,16 @@ class MainWindow(QMainWindow):
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
-                area,saved_pngs, valid_slices = compute_nifti_arae(file_path=nif_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,)
+                labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
+
+                dims, area,saved_pngs, valid_slices = compute_nifti_arae(file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold,)
             
                 if area == 0:
                     QMessageBox.information(self, "NIfTI Area", "All slices were filtered out (too small).")
                     return
 
                 # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path, unite="cm",area = area,)
+                self._record_metric_for(self.current_path, unite="cm", dimensions = dims, area = area,)
 
                 self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                 
@@ -1545,8 +1582,8 @@ class MainWindow(QMainWindow):
         for w in (self.slice_slider, self.orient_combo, self.slice_caption, self.slice_value_label): w.setVisible(vis)
         if not vis: self.slice_value_label.setText("—")
     def _update_slice_readout(self):
-        if not self.vtk_view.has_slice(): self.slice_value_label.setText("—"); return
-        lo, hi = self.vtk_view.slice_range(); idx = self.slice_slider.value(); pos_mm = self.vtk_view.slice_index_to_mm(idx)
+        if not self.slice_caption.isVisible(): self.slice_value_label.setText("—"); return
+        lo = self.slice_slider.minimum(); hi = self.slice_slider.maximum(); idx = self.slice_slider.value(); pos_mm = self.vtk_view.slice_index_to_mm(idx)
         self.slice_value_label.setText(f"{idx}/{hi}  ({pos_mm:.2f} mm)")
         
     def on_slice_slider_changed(self, v: int):
@@ -1557,7 +1594,13 @@ class MainWindow(QMainWindow):
             # Show the PNG on the image pane
             self._show_png_on_image_label(path)
             self._update_slice_readout()
+        elif self.slice_nav_mode == "nifti":
+            self.show_nifti_slice(v)
+            self._active_view = "image"
+            self._update_slice_readout()
         else:
+            self._active_view = "vtk"
+            self._show_widget(self.vtk_view)
             self.vtk_view.set_slice(v)
             self._update_slice_readout()
 
@@ -1567,9 +1610,22 @@ class MainWindow(QMainWindow):
         if self.vtk_view.has_slice():
             lo, hi = self.vtk_view.slice_range()
             self.slice_slider.blockSignals(True); self.slice_slider.setMinimum(lo); self.slice_slider.setMaximum(hi)
-            self.slice_slider.setValue(max(lo, min(hi, self.slice_slider.value()))); self.slice_slider.blockSignals(False)
+            self.slice_slider.setValue(max(lo, min(hi, self.slice_slider.value())))
+            self.slice_slider.blockSignals(False)
             self._update_slice_readout()
-            
+        if self.slice_nav_mode == "nifti":
+            self._nifti_set_orientation(text);
+            self._update_slice_readout()
+                    
+    def _on_view_changed(self, text: str):
+        if text == "3D":
+            self.slice_nav_mode = None
+            rdr = vtkNIFTIImageReader(); rdr.SetFileName(self.current_path); rdr.Update(); img = rdr.GetOutput()
+            self.vtk_view.show_image2d(img);  self._show_widget(self.vtk_view); self._sync_slice_controls()
+            self._on_orientation_changed(self.orient_combo.currentText())
+        elif text == "2D":
+            self.slice_nav_mode = "nifti"
+            self._nifti_set_orientation(self.orient_combo.currentText());
             
             
     def _show_png_on_image_label(self, png_path: str):
@@ -1581,6 +1637,39 @@ class MainWindow(QMainWindow):
         self.image_label.setImage(pm)
         self._show_widget(self.image_label)   # show the image pane, keep kind='nifti'
         self._active_view = "image"
+
+
+    def _nifti_set_orientation(self, view: str):
+        """
+        Set slice axis from a name and reconfigure the slider + view.
+        view in {'sagittal','coronal','axial'}
+        """
+        import nibabel as nib
+
+        img = nib.load(self.current_path)
+            # Use dataobj (lazy) but rounding requires actual values; this will page from disk
+        vol = img.get_fdata(dtype=float)
+        if vol is None:
+            print("[NIfTI] No data loaded."); return
+
+        a = np.asarray(vol)
+        if a.ndim == 4:
+            a = a[..., 0]
+#        Axial (Z)", "Coronal (Y)", "Sagittal (X)
+        axis_map = {"Sagittal (X)": 0, "Coronal (Y)": 1, "Axial (Z)": 2}
+        self.nifti_axis = axis_map.get(view, 2)
+
+        self.nifti_depth = int(a.shape[self.nifti_axis])
+        mid = max(0, self.nifti_depth // 2)
+
+        if hasattr(self, "slice_slider"):
+            self.slice_slider.blockSignals(True)
+            self.slice_slider.setMinimum(0)
+            self.slice_slider.setMaximum(max(0, self.nifti_depth - 1))
+            self.slice_slider.setValue(mid)
+            self.slice_slider.blockSignals(False)
+
+        self.show_nifti_slice(mid)
 
     # ----- DnD -----
     def dragEnterEvent(self, e):
@@ -1618,10 +1707,14 @@ class MainWindow(QMainWindow):
         self.reset_png_navigation()
         if path and kind:
             self._ensure_metric_row(path, kind)
-        if kind in ("stl", "vtk_poly", "vtk_surface", "nifti"):
+        if kind == "nifti": #"stl", "vtk_poly", "vtk_surface",
             self.slice_slider.setEnabled(True)
+            self.orient_combo.setEnabled(True)
+            self.view_mode.setEnabled(True)
         else:
             self.slice_slider.setEnabled(False)
+            self.orient_combo.setEnabled(False)
+            self.view_mode.setEnabled(False)
 
 
     def _update_process_actions(self):
@@ -1641,6 +1734,9 @@ class MainWindow(QMainWindow):
             self.act_meas_volumes.setEnabled(True)
             self.act_meas_allmarks.setEnabled(True)
             
+        if kind == "nifti":
+            self.act_choose_regions.setEnabled(True)
+            self.label_overlay_enabled = True
             
         elif kind == "image":
             self.act_meas_area.setEnabled(True)
@@ -1740,7 +1836,12 @@ class MainWindow(QMainWindow):
                           getattr(self, "slice_value_label", None)):
                     if w: w.setVisible(False)
 
-#            elif kind == "nifti":
+            elif kind == "nifti":
+                self._set_current("nifti", path)
+                self._on_view_changed(self.view_mode.currentText())
+#                rdr = vtkNIFTIImageReader(); rdr.SetFileName(path); rdr.Update(); img = rdr.GetOutput()
+#                self.vtk_view.show_image2d(img); self._show_widget(self.vtk_view); self._sync_slice_controls()
+
 #                # reinitialize from file (reloads header/data and resets slider/orientation)
 #                if hasattr(self, "_init_nifti"):
 #                    self._init_nifti(path)
@@ -1748,14 +1849,14 @@ class MainWindow(QMainWindow):
 #                    # fallback if you don’t have _init_nifti; keep current axis
 #                    axis_name = {0: "sagittal", 1: "coronal", 2: "axial"}.get(getattr(self, "nifti_axis", 1), "coronal")
 #                    self._nifti_set_orientation(axis_name)
-#
-#            elif kind in ("stl", "vtk", "vtk_poly", "vtk_surface"):
-#                # You usually don't need to re-read the mesh to "reset view".
-#                # Just reset the camera. If you do want to re-read, call your existing loader here.
-#                if hasattr(self, "_vtk_view_isometric"):
-#                    self._vtk_view_isometric()
-#                elif hasattr(self, "_vtk_set_view"):
-#                    self._vtk_set_view("coronal", flip=False, ortho=True)
+
+            elif kind in ("stl", "vtk", "vtk_poly", "vtk_surface"):
+                # You usually don't need to re-read the mesh to "reset view".
+                # Just reset the camera. If you do want to re-read, call your existing loader here.
+                if hasattr(self, "_vtk_view_isometric"):
+                    self._vtk_view_isometric()
+                elif hasattr(self, "_vtk_set_view"):
+                    self._vtk_set_view("coronal", flip=False, ortho=True)
 
             # If any PNG navigation mode is on, turn it off
             if hasattr(self, "disable_png_navigation"):
@@ -1841,6 +1942,182 @@ class MainWindow(QMainWindow):
         else:
             return None
 
+#--------------- select and show labels -------------------------------
+
+    def _color_for_label(self, lab: int) -> QColor:
+        # deterministic vivid color
+        from colorsys import hsv_to_rgb
+        hue = (lab * 0.61803398875) % 1.0
+        r, g, b = hsv_to_rgb(hue, 0.75, 0.95)
+        return QColor(int(r*255), int(g*255), int(b*255))
+
+    def _color_square_icon(self, col: QColor, size: int = 12) -> QIcon:
+        pm = QPixmap(size, size); pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        try:
+            p.fillRect(0, 0, size, size, col)
+            p.setPen(QPen(Qt.black, 1)); p.drawRect(0, 0, size-1, size-1)
+        finally:
+            p.end()
+        return QIcon(pm)
+        
+    def choose_regions_dock(self):
+        """
+        Dock-UI version of choose_regions_dialog().
+        Creates/shows a dock on the right with the same controls.
+        Stores result in self.nifti_selected_regions (on Apply or live while toggling).
+        """
+        # Setup context same as before
+        self.slice_nav_mode = "nifti"
+        idx = int(self.slice_slider.value()) if hasattr(self, "slice_slider") else 0
+        self.view_mode.setCurrentText("2D")
+        self.view_mode.setEnabled(False)
+        self._nifti_set_orientation(self.orient_combo)
+        self.on_slice_slider_changed(idx)
+
+        # Determine labels
+        labels_available = sorted(set(int(x) for x in self.labels_available))
+        if not labels_available:
+            QMessageBox.warning(self, "Regions", "No discrete labels detected in this NIfTI.")
+            return
+
+        # Prepare colors LUT
+        if not hasattr(self, "nifti_label_lut"):
+            self.nifti_label_lut = {}
+        for lab in labels_available:
+            self.nifti_label_lut.setdefault(lab, self._color_for_label(lab))
+
+        # Current & defaults
+        current = set(getattr(self, "nifti_selected_regions", self.nifti_selected_regions_default))
+        defaults = set(getattr(self, "nifti_selected_regions_default", set()))
+
+        # Create dock if needed
+        if not hasattr(self, "_regions_dock") or self._regions_dock is None:
+            self._regions_dock = RegionsDock(self)
+            self.addDockWidget(Qt.RightDockWidgetArea, self._regions_dock)
+            # When user presses Apply
+            def on_apply(selected: set[int]):
+                if not selected:
+                    QMessageBox.warning(self, "Regions", "Please select at least one label.")
+                    return
+                self.nifti_selected_regions = set(selected)
+                try:
+                    self._append_progress(f"[Regions] Selected labels: {sorted(selected)} \n")
+                    self.statusBar().showMessage(f"Regions set: {sorted(selected)}", 3000)
+                except Exception:
+                    print("[Regions] Selected:", sorted(selected))
+                # Optional: refresh display
+                if hasattr(self, "show_nifti_slice"):
+                    idx2 = int(self.slice_slider.value()) if hasattr(self, "slice_slider") else 0
+                    self.show_nifti_slice(idx2)
+            self._regions_dock.applied.connect(on_apply)
+
+            # If dock is closed, re-enable view mode
+            def on_closed():
+                self.view_mode.setEnabled(True)
+            self._regions_dock.closed.connect(on_closed)
+
+        # Populate/refresh dock content every time we open it
+        self._regions_dock.populate(labels_available, current, self.nifti_label_lut)
+        self._regions_dock.set_defaults(defaults)
+        self._regions_dock.show()
+        self._regions_dock.raise_()
+
+    def _compose_label_overlay(
+        self,
+        img2d: np.ndarray,          # can be (H,W) grayscale OR (H,W,3) RGB
+        label2d: np.ndarray,        # (H,W) integer labels
+        selected: set[int],
+        alpha: float = 0.5
+    ) -> QImage:
+        # --- make a grayscale base in [0,255] ---
+        if img2d.ndim == 3 and img2d.shape[-1] == 3:
+            # convert RGB to luma for percentile windowing
+            f = (0.299 * img2d[..., 0] + 0.587 * img2d[..., 1] + 0.114 * img2d[..., 2]).astype(np.float32, copy=False)
+        else:
+            f = img2d.astype(np.float32, copy=False)
+
+        lo, hi = np.percentile(f, (1, 99))
+        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+            lo, hi = float(np.nanmin(f)), float(np.nanmax(f))
+            if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+                lo, hi = 0.0, 1.0
+
+        gray = (np.clip((f - lo) / (hi - lo), 0.0, 1.0) * 255.0).astype(np.uint8)
+
+        # base RGB made from grayscale
+        rgb = np.dstack([gray, gray, gray]).astype(np.float32, copy=False)
+
+        # --- overlay only selected labels ---
+        if selected:
+            for lab in selected:
+                mask = (label2d == lab)
+                if not np.any(mask):
+                    continue
+                c = self.nifti_label_lut.get(lab, self._color_for_label(lab))
+                overlay_color = np.array([float(c.red()), float(c.green()), float(c.blue())], dtype=np.float32)
+                # blend on the masked pixels; rgb[mask] is (N,3)
+                rgb[mask] = (1.0 - alpha) * rgb[mask] + alpha * overlay_color[None, :]
+
+        # --- to QImage ---
+        rgb_u8 = np.ascontiguousarray(np.clip(rgb, 0, 255).astype(np.uint8))
+        h, w, _ = rgb_u8.shape
+        qimg = QImage(rgb_u8.data, w, h, rgb_u8.strides[0], QImage.Format_RGB888)
+        return qimg.copy()  # detach from NumPy buffer
+
+            
+    def show_nifti_slice(self, idx, axis=None):
+        img = nib.load(self.current_path)
+        vol = img.get_fdata(dtype=float)
+        if vol is None:
+            return
+
+        a = np.asarray(vol)
+        if a.ndim == 4:
+            a = a[..., 0]  # take first volume
+
+        ax = self.nifti_axis if axis is None else int(axis)
+        depth = a.shape[ax]
+        i = max(0, min(int(idx), depth - 1))
+
+        # Slice
+        sl = a[i, :, :] if ax == 0 else (a[:, i, :] if ax == 1 else a[:, :, i])
+
+        # Normalize to [0,255]
+        f = sl.astype(np.float32, copy=False)
+        lo, hi = np.percentile(f, (1, 99))
+        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+            lo, hi = float(np.nanmin(f)), float(np.nanmax(f))
+            if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+                lo, hi = 0.0, 1.0
+        gray = (np.clip((f - lo) / (hi - lo), 0.0, 1.0) * 255.0).astype(np.uint8)
+        gray = np.ascontiguousarray(gray)
+
+        qimg = None
+        if self.label_overlay_enabled and self.nifti_selected_regions:
+            # Prepare label overlay
+            L = getattr(self, "nifti_label_data", None) or a
+            if L.ndim == 4:
+                L = L[..., 0]
+            label2d = np.rint(
+                L[i, :, :] if ax == 0 else (L[:, i, :] if ax == 1 else L[:, :, i])
+            ).astype(np.int32)
+
+            # Expand grayscale to RGB for overlay
+            rgb = np.dstack([gray, gray, gray])
+            rgb = np.ascontiguousarray(rgb)
+            qimg = self._compose_label_overlay(rgb, label2d, self.nifti_selected_regions)
+            self._last_frame_rgb = rgb  # keep alive
+        else:
+            # Just grayscale, no overlay
+            h, w = gray.shape
+            qimg = QImage(gray.data, w, h, gray.strides[0], QImage.Format_Grayscale8)
+            self._last_frame_gray = gray  # keep alive
+
+        self.image_label.setImage(QPixmap.fromImage(qimg))
+        self._show_widget(self.image_label)
+        if hasattr(self, "_update_slice_label"):
+            self._update_slice_label(i, depth, mode="nifti")
 
 # ---------------------------
 # Entry point
