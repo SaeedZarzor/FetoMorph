@@ -5,13 +5,14 @@ from functions.measurements_image import *
 from functions.pial_to_stl import *
 from functions.measurements_Nifti import *
 from functions.Fetal_brain_GI_stl import compute_stl_lGI
+from functions.Helpers import get_nifti_present_labels
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.Contour_threshold import ContourThresholdDialog
 from widgets.Scalebar_set_scale import ScalebarSetScaleDialog
 from widgets.Unit_scale import UnitScaleDialog
 from widgets.VTK_Viewer import VTKViewer
 from widgets.Kernel_size import KernelSizeDialog
-from functions.Helpers import get_nifti_present_labels
+from widgets.RegionDock import *
 from ribbon import *
 
 
@@ -179,7 +180,7 @@ class MainWindow(QMainWindow):
         self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.set_kernel_dialog); Setting_menu.addAction(self.act_kernel_size)
         self.act_cnt_threshold = QAction("Set Contour Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Setting_menu.addAction(self.act_annotate_square)
-        self.act_choose_regions = QAction("Choose Regions of Interest…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dialog);Setting_menu.addAction(self.act_choose_regions)
+        self.act_choose_regions = QAction("Choose Regions of Interest…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
 
 
         # Disable initially
@@ -490,7 +491,7 @@ class MainWindow(QMainWindow):
 
 
     def close_current(self):
-        self.image_label.clearImage(); self._show_widget(self.image_label); self._set_slice_controls(False)
+        self.image_label.clearImage(); self._show_widget(self.image_label); self._set_slice_controls(False);self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False)
         self._set_current(None, None); print("Closed current file and reset view.")
 
     def quit_app(self):
@@ -674,6 +675,7 @@ class MainWindow(QMainWindow):
 
     def load_nifti(self, path: str):
         self._set_current("nifti", path)
+        print(f"")
         self.labels_available = get_nifti_present_labels(path)
         if self.view_mode.currentText() == "3D":
             self.slice_nav_mode = None
@@ -1831,9 +1833,10 @@ class MainWindow(QMainWindow):
                     if w: w.setVisible(False)
 
             elif kind == "nifti":
-                rdr = vtkNIFTIImageReader(); rdr.SetFileName(path); rdr.Update(); img = rdr.GetOutput()
-                self.vtk_view.show_image2d(img); self._show_widget(self.vtk_view); self._sync_slice_controls()
                 self._set_current("nifti", path)
+                self._on_view_changed(self.view_mode.currentText())
+#                rdr = vtkNIFTIImageReader(); rdr.SetFileName(path); rdr.Update(); img = rdr.GetOutput()
+#                self.vtk_view.show_image2d(img); self._show_widget(self.vtk_view); self._sync_slice_controls()
 
 #                # reinitialize from file (reloads header/data and resets slider/orientation)
 #                if hasattr(self, "_init_nifti"):
@@ -1954,12 +1957,13 @@ class MainWindow(QMainWindow):
             p.end()
         return QIcon(pm)
         
-    def choose_regions_dialog(self):
+    def choose_regions_dock(self):
         """
-        Let the user pick integer labels (e.g., {2,3,4,5,...}) for NIfTI processing.
-        Prefills from current NIfTI volume if present, otherwise from defaults.
-        Stores result in self.nifti_selected_regions.
+        Dock-UI version of choose_regions_dialog().
+        Creates/shows a dock on the right with the same controls.
+        Stores result in self.nifti_selected_regions (on Apply or live while toggling).
         """
+        # Setup context same as before
         self.slice_nav_mode = "nifti"
         idx = int(self.slice_slider.value()) if hasattr(self, "slice_slider") else 0
         self.view_mode.setCurrentText("2D")
@@ -1967,124 +1971,53 @@ class MainWindow(QMainWindow):
         self._nifti_set_orientation(self.orient_combo)
         self.on_slice_slider_changed(idx)
 
-        # Build candidate labels:
+        # Determine labels
         labels_available = sorted(set(int(x) for x in self.labels_available))
         if not labels_available:
             QMessageBox.warning(self, "Regions", "No discrete labels detected in this NIfTI.")
-            return None
+            return
 
-       
-        current = set(getattr(self, "nifti_selected_regions", self.nifti_selected_regions_default))
-        
+        # Prepare colors LUT
         if not hasattr(self, "nifti_label_lut"):
             self.nifti_label_lut = {}
         for lab in labels_available:
             self.nifti_label_lut.setdefault(lab, self._color_for_label(lab))
 
-        # --- Dialog UI ---
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Choose Regions of Interest")
-        lay = QVBoxLayout(dlg)
-        lay.addWidget(QLabel("Tick labels to include (double-click toggles).\n "
-                             "You can also type a comma-separated list below."))
+        # Current & defaults
+        current = set(getattr(self, "nifti_selected_regions", self.nifti_selected_regions_default))
+        defaults = set(getattr(self, "nifti_selected_regions_default", set()))
 
-        lst = QListWidget()
-        lst.setSelectionMode(QListWidget.NoSelection)
-        for lab in sorted(labels_available):
-            it = QListWidgetItem(str(lab))
-            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-            it.setCheckState(Qt.Checked if lab in current else Qt.Unchecked)
-            it.setIcon(self._color_square_icon(self.nifti_label_lut[lab]))
-            lst.addItem(it)
-        lay.addWidget(lst)
+        # Create dock if needed
+        if not hasattr(self, "_regions_dock") or self._regions_dock is None:
+            self._regions_dock = RegionsDock(self)
+            self.addDockWidget(Qt.RightDockWidgetArea, self._regions_dock)
+            # When user presses Apply
+            def on_apply(selected: set[int]):
+                if not selected:
+                    QMessageBox.warning(self, "Regions", "Please select at least one label.")
+                    return
+                self.nifti_selected_regions = set(selected)
+                try:
+                    self._append_progress(f"[Regions] Selected labels: {sorted(selected)} \n")
+                    self.statusBar().showMessage(f"Regions set: {sorted(selected)}", 3000)
+                except Exception:
+                    print("[Regions] Selected:", sorted(selected))
+                # Optional: refresh display
+                if hasattr(self, "show_nifti_slice"):
+                    idx2 = int(self.slice_slider.value()) if hasattr(self, "slice_slider") else 0
+                    self.show_nifti_slice(idx2)
+            self._regions_dock.applied.connect(on_apply)
 
+            # If dock is closed, re-enable view mode
+            def on_closed():
+                self.view_mode.setEnabled(True)
+            self._regions_dock.closed.connect(on_closed)
 
-
-        
-        # Quick entry row
-        quick_row = QHBoxLayout()
-        quick_edit = QLineEdit()
-        quick_edit.setPlaceholderText("e.g. 2,3,4,5,6,11,12,13,14,15,17")
-        btn_apply = QPushButton("Apply typed list")
-        quick_row.addWidget(quick_edit, 1)
-        quick_row.addWidget(btn_apply)
-        lay.addLayout(quick_row)
-
-        # Bulk buttons row
-        bulk = QHBoxLayout()
-        btn_all = QPushButton("Select All")
-        btn_none = QPushButton("Clear All")
-        btn_inv = QPushButton("Invert")
-        btn_def = QPushButton("Defaults")
-        bulk.addWidget(btn_all); bulk.addWidget(btn_none); bulk.addWidget(btn_inv); bulk.addWidget(btn_def); bulk.addStretch(1)
-        lay.addLayout(bulk)
-
-        # OK/Cancel
-        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        lay.addWidget(bb)
-
-        # --- helpers ---
-        def parse_labels(text: str) -> set[int]:
-            toks = re.findall(r"\d+", text or "")
-            return {int(t) for t in toks}
-                
-        def set_checks_from_set(s: set[int]):
-            have = {int(lst.item(i).text()) for i in range(lst.count())}
-            for i in range(lst.count()):
-                lab = int(lst.item(i).text())
-                lst.item(i).setCheckState(Qt.Checked if lab in s else Qt.Unchecked)
-            # add any extra labels not present as new rows (optional)
-            extras = sorted(s - have)
-            for lab in extras:
-                it = QListWidgetItem(str(lab), lst)
-                it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-                it.setCheckState(Qt.Checked)
-
-    # live preview on item change
-        def on_item_changed(item: QListWidgetItem):
-            lab = int(item.text())
-            if item.checkState() == Qt.Checked:
-                self.nifti_selected_regions.add(lab)
-            else:
-                self.nifti_selected_regions.discard(lab)
-            if getattr(self, "current_kind", None) == "nifti":
-                idx = int(self.slice_slider.value()) if hasattr(self, "slice_slider") else 0
-                self.show_nifti_slice(idx)
-                
-        # connections
-        btn_apply.clicked.connect(lambda: set_checks_from_set(parse_labels(quick_edit.text())))
-        btn_all.clicked.connect(lambda: [lst.item(i).setCheckState(Qt.Checked) for i in range(lst.count())])
-        btn_none.clicked.connect(lambda: [lst.item(i).setCheckState(Qt.Unchecked) for i in range(lst.count())])
-        def invert():
-            for i in range(lst.count()):
-                it = lst.item(i)
-                it.setCheckState(Qt.Unchecked if it.checkState() == Qt.Checked else Qt.Checked)
-        btn_inv.clicked.connect(invert)
-        
-        def apply_defaults():
-            defaults = set(getattr(self, "nifti_selected_regions_default", set()))
-            available = {int(lst.item(i).text()) for i in range(lst.count())}
-            set_checks_from_set(defaults & available)  # keep only labels present in this file
-        btn_def.clicked.connect(apply_defaults)
-
-        bb.accepted.connect(dlg.accept)
-        bb.rejected.connect(dlg.reject)
-        lst.itemChanged.connect(on_item_changed)
-
-
-        # --- run ---
-        if dlg.exec() == QDialog.Accepted:
-            selected = {int(lst.item(i).text()) for i in range(lst.count()) if lst.item(i).checkState() == Qt.Checked}
-            if not selected:
-                QMessageBox.warning(self, "Regions", "Please select at least one label.")
-                return
-            self.nifti_selected_regions = selected
-            try:
-                self._append_progress(f"[Regions] Selected labels: {sorted(selected)} \n")
-                self.statusBar().showMessage(f"Regions set: {sorted(selected)}", 3000)
-            except Exception:
-                print("[Regions] Selected:", sorted(selected), "\n")
-
+        # Populate/refresh dock content every time we open it
+        self._regions_dock.populate(labels_available, current, self.nifti_label_lut)
+        self._regions_dock.set_defaults(defaults)
+        self._regions_dock.show()
+        self._regions_dock.raise_()
 
     def _compose_label_overlay(
         self,
@@ -2182,7 +2115,6 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_update_slice_label"):
             self._update_slice_label(i, depth, mode="nifti")
 
-        
 # ---------------------------
 # Entry point
 # ---------------------------
