@@ -676,7 +676,6 @@ class MainWindow(QMainWindow):
               f"Extent={img.GetExtent()} \n Spacing={img.GetSpacing()} \n  Range={img.GetScalarRange()}")
         self._set_current("nifti", path)
         self.labels_available = get_nifti_present_labels(path)
-        self.label_overlay_enabled = True
 
     def load_stl(self, path: str):
         r = vtkSTLReader(); r.SetFileName(path); r.Update(); poly = r.GetOutput()
@@ -1711,7 +1710,7 @@ class MainWindow(QMainWindow):
             
         if kind == "nifti":
             self.act_choose_regions.setEnabled(True)
-            
+            self.label_overlay_enabled = True
             
         elif kind == "image":
             self.act_meas_area.setEnabled(True)
