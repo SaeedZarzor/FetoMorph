@@ -2,7 +2,7 @@
 
 # ---------------- Qt ----------------
 from PySide6 import QtCore, QtGui, QtWidgets
-from PySide6.QtCore import Qt, QSize, QRect, QObject, Signal, QPoint, QUrl, QTimer
+from PySide6.QtCore import Qt, QSize, QRect, QObject, Signal, QPoint, QUrl, QTimer, QRectF
 from PySide6.QtGui import QPixmap, QAction, QPainter, QTextCursor, QImage, QKeySequence, QIcon, QDesktopServices, QColor, QPen,QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QFileDialog,QRubberBand,
@@ -87,7 +87,7 @@ def qt_icon(style: QStyle, rel_path: str | None = None) -> QIcon:
 # Control what `from deps import *` exports (optional but nice)
 __all__ = [
     # Qt modules & classes
-    "QtCore","QtGui","QtWidgets","Qt","QSize","QRect","QPoint","QObject","Signal","QUrl",
+    "QtCore","QtGui","QtWidgets","Qt","QSize","QRect","QPoint","QObject","Signal","QUrl","QRectF",
     "QAction","QKeySequence","QIcon","QPainter","QPixmap","QTextCursor","QImage","QDockWidget",
     "QApplication","QMainWindow","QWidget","QLabel","QFileDialog","QVBoxLayout","QHBoxLayout","QPushButton",
     "QToolBar","QSlider","QComboBox","QMessageBox","QSizePolicy","QGroupBox","QPlainTextEdit","QLineEdit",

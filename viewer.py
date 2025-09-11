@@ -5,7 +5,8 @@ from functions.measurements_image import *
 from functions.pial_to_stl import *
 from functions.measurements_Nifti import *
 from functions.Fetal_brain_GI_stl import compute_stl_lGI
-from functions.Helpers import get_nifti_present_labels
+from functions.Helpers import get_nifti_present_labels, add_scalebar
+from functions.Nifti2image import nifti_slice_to_image
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.Contour_threshold import ContourThresholdDialog
 from widgets.Scalebar_set_scale import ScalebarSetScaleDialog
@@ -108,6 +109,8 @@ class MainWindow(QMainWindow):
         self.cnt_threshold = 200
         self.kernel_size = 5  # default (pixels)
         self.slice_thickness = 0.5
+        self.mm_per_px_bar = 0
+        self.bar_mm = 25
 
 
         # Slice navigation mode/state
@@ -171,6 +174,7 @@ class MainWindow(QMainWindow):
         process_menu.addSeparator()
         self.act_pial_to_stl = QAction("Pial → STL…", self); self.act_pial_to_stl.triggered.connect(self.on_pial_to_stl); process_menu.addAction(self.act_pial_to_stl)
         self.act_pial_merge = QAction("Combined STL…", self); self.act_pial_merge.triggered.connect(self.on_combined_stl); process_menu.addAction(self.act_pial_merge)
+        self.act_nitfi2png = QAction("Nifti → PNG…", self); self.act_nitfi2png.triggered.connect(self.Nifti_to_png); process_menu.addAction(self.act_nitfi2png)
 
         # Setting menu
         Setting_menu = self.menuBar().addMenu("Setting"); self.Setting_menu = Setting_menu
@@ -492,7 +496,9 @@ class MainWindow(QMainWindow):
 
     def close_current(self):
         self.image_label.clearImage(); self._show_widget(self.image_label); self._set_slice_controls(False);self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False)
-        self._set_current(None, None); print("Closed current file and reset view.")
+        self._set_current(None, None); print("\n Closed current file and reset view.")
+        self.statusBar().showMessage("Closed current file and reset view.", 3000)
+
 
     def quit_app(self):
         print("Quitting application."); self.close()
@@ -672,6 +678,7 @@ class MainWindow(QMainWindow):
         if pm.isNull(): QMessageBox.critical(self, "Open Failed", "Could not read image file."); return
         self.image_label.setImage(pm); self._show_widget(self.image_label); self._set_slice_controls(False)
         print(f"Loaded image: {path}  size={pm.width()}x{pm.height()}"); self._set_current("image", path)
+        self.statusBar().showMessage(f"{self.current_path} image is loaded", 5000)
 
     def load_nifti(self, path: str):
         self._set_current("nifti", path)
@@ -679,14 +686,13 @@ class MainWindow(QMainWindow):
         print(f"NIfTI loaded:\n"
               f"Extent={img.GetExtent()} \n Spacing={img.GetSpacing()} \n  Range={img.GetScalarRange()}")
         self.labels_available = get_nifti_present_labels(path)
+        self.statusBar().showMessage(f"{self.current_path} nifti file is loaded", 5000)
         if self.view_mode.currentText() == "3D":
             self.slice_nav_mode = None
             self.vtk_view.show_image2d(img);  self._show_widget(self.vtk_view); self._sync_slice_controls()
         elif self.view_mode.currentText() == "2D":
             self.slice_nav_mode = "nifti"
             self._nifti_set_orientation(self.orient_combo.currentText());
-
-
 
     def load_stl(self, path: str):
         r = vtkSTLReader(); r.SetFileName(path); r.Update(); poly = r.GetOutput()
@@ -1972,7 +1978,7 @@ class MainWindow(QMainWindow):
         idx = int(self.slice_slider.value()) if hasattr(self, "slice_slider") else 0
         self.view_mode.setCurrentText("2D")
         self.view_mode.setEnabled(False)
-        self._nifti_set_orientation(self.orient_combo)
+        self._nifti_set_orientation(self.orient_combo.currentText())
         self.on_slice_slider_changed(idx)
 
         # Determine labels
@@ -2065,7 +2071,6 @@ class MainWindow(QMainWindow):
         qimg = QImage(rgb_u8.data, w, h, rgb_u8.strides[0], QImage.Format_RGB888)
         return qimg.copy()  # detach from NumPy buffer
 
-            
     def show_nifti_slice(self, idx, axis=None):
         img = nib.load(self.current_path)
         vol = img.get_fdata(dtype=float)
@@ -2114,10 +2119,30 @@ class MainWindow(QMainWindow):
             qimg = QImage(gray.data, w, h, gray.strides[0], QImage.Format_Grayscale8)
             self._last_frame_gray = gray  # keep alive
 
+        zooms = img.header.get_zooms()[:3]  # (z0,z1,z2) voxel sizes in mm
+        qimg, self.mm_per_px_bar , self.bar_mm = add_scalebar(qimg, zooms, ax)
         self.image_label.setImage(QPixmap.fromImage(qimg))
         self._show_widget(self.image_label)
         if hasattr(self, "_update_slice_label"):
             self._update_slice_label(i, depth, mode="nifti")
+
+    def Nifti_to_png(self):
+        """Ask path & save exactly what is displayed (no auto-saving during processing)."""
+        if not (self.current_kind == "nifti"
+                and self.view_mode.currentText() == "2D"):
+            QMessageBox.information(self, "Nifti to Png", "This function only works for Nifti file with 2D view mode"); return
+        base = "view"
+        if self.current_path: base = os.path.splitext(os.path.basename(self.current_path))[0]
+        uid = uuid.uuid4().hex[:8]
+        folder = os.path.join(self.temp_dir, f"nifti_slice_{uid}")
+        os.makedirs(folder, exist_ok=True)
+        path= os.path.join (folder, base + "_view.png")
+        out_path = os.path.join(folder, base + "_section.png")
+        self.current_output_dir = folder
+        pm = self.image_label.grab(); ok = pm.save(path)
+        if not ok: raise RuntimeError("Failed to save nifti slice.")
+        nifti_slice_to_image(path, out_path, unify_color = (255, 0, 0) ,label_text = f"{self.bar_mm} mm")
+        self.load_image(out_path)
 
 # ---------------------------
 # Entry point
