@@ -150,9 +150,12 @@ def nifti_slice_to_image(
     out_path: str,
     *,
     unify_color: Optional[Tuple[int, int, int]] = None,    # (B,G,R), e.g., (255,0,0)
-    new_bar_color: Tuple[int, int, int] = (0, 0, 0),
+#    new_bar_color: Tuple[int, int, int] = None,
     label_text: Optional[str] = None,
-    match_fraction_of_width: Optional[float] = None
+    scale_bar:bool = True,
+#    match_fraction_of_width: Optional[float] = None
+    smooth: Optional[str] = "median",   # "gaussian", "median", "bilateral"
+    smooth_strength: int = 5        # kernel size or strength parameter
 ) -> int:
     """
     1) Read the image (resolution preserved).
@@ -165,30 +168,45 @@ def nifti_slice_to_image(
     img = cv2.imread(in_path, cv2.IMREAD_COLOR)
     if img is None:
         raise FileNotFoundError(in_path)
-
+    
     cleaned = clean_background_keep_colored(img, unify_color=unify_color)
-
+    
     length_px, _ = detect_scale_bar_length(img)
-    if match_fraction_of_width is not None:
-        length_px = int(img.shape[1] * float(match_fraction_of_width))
-    if not length_px or length_px <= 0:
-        # sensible fallback if detection fails
-        length_px = int(img.shape[1] * 0.10)
+#    if match_fraction_of_width is not None:
+#        length_px = int(img.shape[1] * float(match_fraction_of_width))
+#    if not length_px or length_px <= 0:
+#        # sensible fallback if detection fails
+#        length_px = int(img.shape[1] * 0.10)
 
-    result = draw_new_scale_bar(
-        cleaned,
-        length_px,
-        where="bottom_right",
-        color=new_bar_color,
-        text=label_text
-    )
+    # --- Apply optional smoothing ---
+    if smooth:
+        if smooth == "gaussian":
+            # kernel size must be odd
+            k = smooth_strength if smooth_strength % 2 == 1 else smooth_strength + 1
+            cleaned = cv2.GaussianBlur(cleaned, (k, k), 0)
+        elif smooth == "median":
+            k = smooth_strength if smooth_strength % 2 == 1 else smooth_strength + 1
+            cleaned = cv2.medianBlur(cleaned, k)
+        elif smooth == "bilateral":
+            # (diameter, sigmaColor, sigmaSpace)
+            cleaned = cv2.bilateralFilter(cleaned, smooth_strength, 75, 75)
+    
+    if scale_bar:
+        result = draw_new_scale_bar(
+            cleaned,
+            length_px,
+            where="bottom_right",
+#            color=(new_bar_color),
+            text=label_text
+        )
+       
+    
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(out_path, result)
     return length_px
 
 #
-## ---------- Example usage ----------
 #if __name__ == "__main__":
 #    # Example: keep original colors, draw a black scale bar, add "25 mm"
 #    length = nifti_slice_to_image(

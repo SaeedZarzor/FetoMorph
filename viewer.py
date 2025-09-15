@@ -13,6 +13,7 @@ from widgets.Scalebar_set_scale import ScalebarSetScaleDialog
 from widgets.Unit_scale import UnitScaleDialog
 from widgets.VTK_Viewer import VTKViewer
 from widgets.Kernel_size import KernelSizeDialog
+from widgets.OptionsDialog import ProcessingOptionsDialog
 from widgets.RegionDock import *
 from ribbon import *
 
@@ -174,21 +175,21 @@ class MainWindow(QMainWindow):
         process_menu.addSeparator()
         self.act_pial_to_stl = QAction("Pial → STL…", self); self.act_pial_to_stl.triggered.connect(self.on_pial_to_stl); process_menu.addAction(self.act_pial_to_stl)
         self.act_pial_merge = QAction("Combined STL…", self); self.act_pial_merge.triggered.connect(self.on_combined_stl); process_menu.addAction(self.act_pial_merge)
-        self.act_nitfi2png = QAction("Nifti → PNG…", self); self.act_nitfi2png.triggered.connect(self.Nifti_to_png); process_menu.addAction(self.act_nitfi2png)
+        self.act_nitfi2png = QAction("Nifti masking…", self); self.act_nitfi2png.triggered.connect(self.Nifti_to_png); process_menu.addAction(self.act_nitfi2png)
 
         # Setting menu
-        Setting_menu = self.menuBar().addMenu("Setting"); self.Setting_menu = Setting_menu
+        Setting_menu = self.menuBar().addMenu("Adjustments"); self.Setting_menu = Setting_menu
         self.act_set_image_scale = QAction("Set Image Scale…", self); self.act_set_image_scale.triggered.connect(self.set_image_scale); Setting_menu.addAction(self.act_set_image_scale)
         self.act_set_scale = QAction("Set Scale From Scalebar…", self);self.act_set_scale.triggered.connect(self.set_scale_from_scalebar);
         Setting_menu.addAction(self.act_set_scale)
         self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.set_kernel_dialog); Setting_menu.addAction(self.act_kernel_size)
-        self.act_cnt_threshold = QAction("Set Contour Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
+        self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Setting_menu.addAction(self.act_annotate_square)
-        self.act_choose_regions = QAction("Choose Regions of Interest…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
+        self.act_choose_regions = QAction("ROI extraction…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
 
 
         # Disable initially
-        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False)
+        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False); self.act_nitfi2png.setEnabled(False)
   # will enable for STL/polydata
         for a in (self.act_meas_allmarks, self.act_meas_volumes, self.act_meas_area, self.act_meas_perimeter, self.act_meas_lgi, self.act_meas_sulci, self.act_optimization):
             a.setEnabled(False)
@@ -270,12 +271,12 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Measure", self.act_meas_lgi)
         self.ribbon.add_action("Measure", self.act_meas_sulci)
 
-        self.ribbon.add_action("Settings", self.act_set_image_scale)
-        self.ribbon.add_action("Settings", self.act_set_scale)
-        self.ribbon.add_action("Settings", self.act_kernel_size)
-        self.ribbon.add_action("Settings", self.act_cnt_threshold)
-        self.ribbon.add_action("Settings", self.act_annotate_square)
-        self.ribbon.add_action("Settings", self.act_choose_regions)
+        self.ribbon.add_action("Adjustments", self.act_set_image_scale)
+        self.ribbon.add_action("Adjustments", self.act_set_scale)
+        self.ribbon.add_action("Adjustments", self.act_kernel_size)
+        self.ribbon.add_action("Adjustments", self.act_cnt_threshold)
+        self.ribbon.add_action("Adjustments", self.act_annotate_square)
+        self.ribbon.add_action("Adjustments", self.act_choose_regions)
 
 
 
@@ -289,27 +290,28 @@ class MainWindow(QMainWindow):
         self.nav_tb.setIconSize(QSize(20, 20))
         self.nav_tb.setMovable(False)
         self.addToolBar(Qt.TopToolBarArea, self.nav_tb)
-
+        self. nav_tb.hide()
+        
         self.nav_tb.addSeparator()
 
         self.orient_combo = QComboBox()
         self.orient_combo.addItems(["Axial (Z)", "Coronal (Y)", "Sagittal (X)"])
         self.orient_combo.currentTextChanged.connect(self._on_orientation_changed)
         self.nav_tb.addWidget(self.orient_combo)
-        self.orient_combo.setVisible(False)
+#        self.orient_combo.setVisible(False)
         
         self.view_mode = QComboBox()
         self.view_mode.addItems(["2D", "3D"])
         self.view_mode.setCurrentText("3D")
         self.view_mode.currentTextChanged.connect(self._on_view_changed)
         self.nav_tb.addWidget(self.view_mode)
-        self.view_mode.setVisible(False)
+#        self.view_mode.setVisible(False)
         
         self.nav_tb.addSeparator()
 
         self.slice_caption = QLabel("Section:")
         self.nav_tb.addWidget(self.slice_caption)
-        self.slice_caption.setVisible(False)
+#        self.slice_caption.setVisible(False)
 
         self.slice_slider = QSlider(Qt.Horizontal)
         self.slice_slider.setMinimum(0)
@@ -318,11 +320,11 @@ class MainWindow(QMainWindow):
         self.slice_slider.setPageStep(5)
         self.slice_slider.valueChanged.connect(self.on_slice_slider_changed)
         self.nav_tb.addWidget(self.slice_slider)
-        self.slice_slider.setVisible(False)
+#        self.slice_slider.setVisible(False)
 
         self.slice_value_label = QLabel("—")
         self.nav_tb.addWidget(self.slice_value_label)
-        self.slice_value_label.setVisible(False)
+#        self.slice_value_label.setVisible(False)
 
     # ---------- Import handlers ----------
     def import_image(self):
@@ -1732,18 +1734,29 @@ class MainWindow(QMainWindow):
         self.act_pial_to_stl.setEnabled(True)
         self.act_pial_merge.setEnabled(True)
 
-        if kind in ("stl", "vtk_poly", "vtk_surface", "nifti"):
+        if kind in ("stl", "vtk_poly", "vtk_surface"):
             self.act_meas_area.setEnabled(True)
             self.act_meas_perimeter.setEnabled(False)
             self.act_meas_lgi.setEnabled(True)
             self.act_meas_sulci.setEnabled(True)
             self.act_meas_volumes.setEnabled(True)
             self.act_meas_allmarks.setEnabled(True)
+            self.act_nitfi2png.setEnabled(False)
+            self.nav_tb.hide()
+
             
         if kind == "nifti":
+            self.act_meas_area.setEnabled(True)
+            self.act_meas_perimeter.setEnabled(False)
+            self.act_meas_lgi.setEnabled(True)
+            self.act_meas_sulci.setEnabled(True)
+            self.act_meas_volumes.setEnabled(True)
+            self.act_meas_allmarks.setEnabled(True)
             self.act_choose_regions.setEnabled(True)
             self.label_overlay_enabled = True
-            
+            self.act_nitfi2png.setEnabled(True)
+            self.nav_tb.show()
+
         elif kind == "image":
             self.act_meas_area.setEnabled(True)
             self.act_meas_perimeter.setEnabled(True)
@@ -1753,6 +1766,8 @@ class MainWindow(QMainWindow):
             self.act_optimization.setEnabled(True)
             self.act_meas_allmarks.setEnabled(True)
             self.act_annotate_square.setEnabled(True)
+            self.act_nitfi2png.setEnabled(False)
+            self.nav_tb.hide()
 
 
     def enable_png_navigation(self, png_paths: list[str], slice_indices: list[int] | None = None, start_index: int | None = None):
@@ -2126,6 +2141,17 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_update_slice_label"):
             self._update_slice_label(i, depth, mode="nifti")
 
+    def ask_processing_options(self):
+        dlg = ProcessingOptionsDialog(self)
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            return {
+                "unify_color": dlg.unify_color(),       # BGR tuple or None
+                "add_scale_bar": dlg.add_scale_bar(),   # bool
+                "smooth_kind": dlg.smooth_kind(),       # "none", "gaussian", "median", "bilateral"
+                "smooth_strength": dlg.smooth_strength()# int
+            }
+        return None
+        
     def Nifti_to_png(self):
         """Ask path & save exactly what is displayed (no auto-saving during processing)."""
         if not (self.current_kind == "nifti"
@@ -2141,7 +2167,15 @@ class MainWindow(QMainWindow):
         self.current_output_dir = folder
         pm = self.image_label.grab(); ok = pm.save(path)
         if not ok: raise RuntimeError("Failed to save nifti slice.")
-        nifti_slice_to_image(path, out_path, unify_color = (255, 0, 0) ,label_text = f"{self.bar_mm} mm")
+        options= self.ask_processing_options()
+      
+        length_px = nifti_slice_to_image(path, out_path,
+        unify_color = options["unify_color"],
+        label_text = f"{self.bar_mm} mm",
+        scale_bar= options["add_scale_bar"],
+        smooth = options["smooth_kind"],
+        smooth_strength = options["smooth_strength"])
+        self.pixel_size = self.bar_mm/ length_px
         self.load_image(out_path)
 
 # ---------------------------
