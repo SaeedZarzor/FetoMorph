@@ -498,6 +498,7 @@ class MainWindow(QMainWindow):
 
     def close_current(self):
         self.image_label.clearImage(); self._show_widget(self.image_label); self._set_slice_controls(False);self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False)
+        self.nav_tb.hide()
         self._set_current(None, None); print("\n Closed current file and reset view.")
         self.statusBar().showMessage("Closed current file and reset view.", 3000)
 
@@ -672,7 +673,6 @@ class MainWindow(QMainWindow):
         for k, v in vals.items():
             col = keymap.get(k.lower(), k)
             row[col] = v
-
 
     # ---------- Loaders ----------
     def load_image(self, path: str):
@@ -1713,6 +1713,8 @@ class MainWindow(QMainWindow):
         self.act_close.setEnabled(has_file)
         self.act_Reset.setEnabled(has_file)
         self.reset_png_navigation()
+        self._metrics_rebuild_for_current()
+
         if path and kind:
             self._ensure_metric_row(path, kind)
         if kind == "nifti": #"stl", "vtk_poly", "vtk_surface",
@@ -1792,6 +1794,8 @@ class MainWindow(QMainWindow):
         self.on_slice_slider_changed(init)
         # Make sure the image pane is visible
         self._show_widget(self.image_label)
+        self.view_mode.setEnabled(False)
+        self.orient_combo,setEnabled(False)
 
     def reset_png_navigation(self):
         """Return the slider to normal NIfTI navigation."""
@@ -1804,7 +1808,8 @@ class MainWindow(QMainWindow):
             self.slice_slider.setMinimum(0)
             self.slice_slider.setMaximum(max(0, self.nifti_depth - 1))
             self.slice_slider.blockSignals(False)
-
+            self.view_mode.setEnabled(True)
+            self.orient_combo,setEnabled(True)
 
     def _dir_has_files(self, d: str) -> bool:
         if not d or not os.path.isdir(d):
@@ -2177,6 +2182,7 @@ class MainWindow(QMainWindow):
         smooth_strength = options["smooth_strength"])
         self.pixel_size = self.bar_mm/ length_px
         self.load_image(out_path)
+
 
 # ---------------------------
 # Entry point
