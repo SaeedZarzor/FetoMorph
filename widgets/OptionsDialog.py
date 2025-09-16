@@ -1,9 +1,5 @@
 from deps import *
 
-<<<<<<< HEAD
-=======
-
->>>>>>> update3
 class ProcessingOptionsDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -113,7 +109,4 @@ class ProcessingOptionsDialog(QtWidgets.QDialog):
 
     def smooth_strength(self) -> int:
         return self.slider_strength.value()
-<<<<<<< HEAD
-=======
 
->>>>>>> update3
