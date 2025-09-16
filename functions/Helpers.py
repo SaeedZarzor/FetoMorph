@@ -104,3 +104,66 @@ def get_nifti_present_labels(path: str, cap: int = 5000)-> list[int]:
         print(f"[Regions] Could not detect labels: {ex}")
         # Fall back to defaults
         return None
+        
+def _mm_per_pixel_x_for_axis(zooms, ax):
+    """Return the in-plane mm/px for the displayed X axis given the slice axis."""
+    # zooms is (z0,z1,z2) == voxel size along axes 0,1,2 in mm
+    if ax == 0:               # slice is a[i, :, :]
+        return float(zooms[2])  # X shows axis 2
+    elif ax == 1:             # slice is a[:, i, :]
+        return float(zooms[2])  # X shows axis 2
+    else:                     # ax == 2: slice is a[:, :, i]
+        return float(zooms[1])  # X shows axis 1
+
+def add_scalebar(qimg: QImage, zooms, ax) -> QImage:
+    """Draw a scalebar (mm) at the bottom-right of qimg and return it."""
+    # QPainter needs a 32-bit RGB(A) surface for best compatibility
+    if qimg.format() not in (QImage.Format_RGB32, QImage.Format_ARGB32):
+        qimg = qimg.convertToFormat(QImage.Format_RGB32)
+
+    w, h = qimg.width(), qimg.height()
+    mm_per_px = _mm_per_pixel_x_for_axis(zooms, ax)
+
+    # Pick a nice bar length (mm) that fits ~25% of the width
+    max_px = int(w * 0.25)
+    nice_lengths_mm = [100, 50, 25, 20, 10, 5]
+    bar_mm = next((L for L in nice_lengths_mm if (L / mm_per_px) <= max_px and (L / mm_per_px) >= 30), None)
+    if bar_mm is None:
+        # fallback to whatever fits (at least 20 px)
+        bar_mm = max(5, int(max_px * mm_per_px))
+    bar_px = int(round(bar_mm / mm_per_px))
+
+    margin = max(6, int(round(0.03 * min(w, h))))
+    bar_thick = max(4, int(round(0.008 * min(w, h))))
+    label_h = max(12, int(round(0.028 * min(w, h))))
+
+    painter = QPainter(qimg)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+
+    # Backdrop for contrast
+    pad = 6
+    rect_w = bar_px + 2 * pad
+    rect_h = bar_thick + label_h + 3 * pad
+    rect_x = w - margin - rect_w
+    rect_y = h - margin - rect_h
+    painter.fillRect(rect_x, rect_y, rect_w, rect_h, QColor(0, 0, 0, 160))
+
+    # Scalebar line (white)
+    y_bar = rect_y + pad + bar_thick // 2
+    pen = QPen(QColor(255, 255, 255))
+    pen.setWidth(bar_thick)
+    painter.setPen(pen)
+    x1 = rect_x + pad
+    x2 = x1 + bar_px
+    painter.drawLine(x1, y_bar, x2, y_bar)
+
+    # Text (e.g., "20 mm")
+    painter.setPen(QColor(255, 255, 255))
+    font = painter.font()
+    font.setPointSizeF(max(8.0, 0.9 * label_h))
+    painter.setFont(font)
+    text_rect = QRectF(x1, y_bar + pad, bar_px, label_h + pad)
+    painter.drawText(text_rect, Qt.AlignCenter, f"{int(round(bar_mm))} mm")
+
+    painter.end()
+    return qimg, mm_per_px, bar_mm

@@ -5,13 +5,15 @@ from functions.measurements_image import *
 from functions.pial_to_stl import *
 from functions.measurements_Nifti import *
 from functions.Fetal_brain_GI_stl import compute_stl_lGI
-from functions.Helpers import get_nifti_present_labels
+from functions.Helpers import get_nifti_present_labels, add_scalebar
+from functions.Nifti2image import nifti_slice_to_image
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.Contour_threshold import ContourThresholdDialog
 from widgets.Scalebar_set_scale import ScalebarSetScaleDialog
 from widgets.Unit_scale import UnitScaleDialog
 from widgets.VTK_Viewer import VTKViewer
 from widgets.Kernel_size import KernelSizeDialog
+from widgets.OptionsDialog import ProcessingOptionsDialog
 from widgets.RegionDock import *
 from ribbon import *
 
@@ -97,8 +99,6 @@ class MainWindow(QMainWindow):
         self.nifti_selected_regions: set[int] = set()
         self.label_overlay_enabled: bool = True
         self.label_overlay_alpha: float = 0.5
-
-
         
         # Params for measurements
         self.units_length = None          # e.g., "mm" (set by user prompt)
@@ -108,12 +108,16 @@ class MainWindow(QMainWindow):
         self.cnt_threshold = 200
         self.kernel_size = 5  # default (pixels)
         self.slice_thickness = 0.5
+        self.mm_per_px_bar = 0
+        self.bar_mm = 25
 
 
         # Slice navigation mode/state
         self.slice_nav_mode = None           # None | "nifti" | "png"
         self.slice_nav_items = []            # list[str] when mode=="png" (PNG paths)
         self.slice_nav_index_map = []        # list[int] original slice indices (optional label)
+
+        self._init_metrics_dock()
 
         # View widgets
         self.image_label = ScaledImageLabel()
@@ -148,6 +152,7 @@ class MainWindow(QMainWindow):
         self.act_imp_nii = QAction("NIfTI…", self); self.act_imp_nii.setShortcut(QKeySequence("Ctrl+Shift+N")); self.act_imp_nii.triggered.connect(self.import_nifti); import_menu.addAction(self.act_imp_nii)
 
         file_menu.addSeparator()
+        self.act_show_results = QAction("Show Results", self); self.act_show_results.triggered.connect(lambda:self.metricsDock.show()); file_menu.addAction(self.act_show_results)
         self.act_save = QAction("Save View As…", self); self.act_save.setShortcut(QKeySequence("Ctrl+V")); self.act_save.triggered.connect(self.save_view); file_menu.addAction(self.act_save)
         self.act_save_data = QAction("Save Data As…", self); self.act_save_data.setShortcut(QKeySequence.SaveAs); self.act_save_data.triggered.connect(self.save_data_as); file_menu.addAction(self.act_save_data)
         self.act_export_metrics = QAction("Export Metrics to Excel…", self); self.act_export_metrics.setShortcut(QKeySequence("Ctrl+E")); self.act_export_metrics.triggered.connect(self.export_metrics_excel); file_menu.addAction(self.act_export_metrics)
@@ -171,20 +176,21 @@ class MainWindow(QMainWindow):
         process_menu.addSeparator()
         self.act_pial_to_stl = QAction("Pial → STL…", self); self.act_pial_to_stl.triggered.connect(self.on_pial_to_stl); process_menu.addAction(self.act_pial_to_stl)
         self.act_pial_merge = QAction("Combined STL…", self); self.act_pial_merge.triggered.connect(self.on_combined_stl); process_menu.addAction(self.act_pial_merge)
+        self.act_nitfi2png = QAction("Nifti masking…", self); self.act_nitfi2png.triggered.connect(self.Nifti_to_png); process_menu.addAction(self.act_nitfi2png)
 
         # Setting menu
-        Setting_menu = self.menuBar().addMenu("Setting"); self.Setting_menu = Setting_menu
+        Setting_menu = self.menuBar().addMenu("Adjustments"); self.Setting_menu = Setting_menu
         self.act_set_image_scale = QAction("Set Image Scale…", self); self.act_set_image_scale.triggered.connect(self.set_image_scale); Setting_menu.addAction(self.act_set_image_scale)
         self.act_set_scale = QAction("Set Scale From Scalebar…", self);self.act_set_scale.triggered.connect(self.set_scale_from_scalebar);
         Setting_menu.addAction(self.act_set_scale)
         self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.set_kernel_dialog); Setting_menu.addAction(self.act_kernel_size)
-        self.act_cnt_threshold = QAction("Set Contour Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
+        self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Setting_menu.addAction(self.act_annotate_square)
-        self.act_choose_regions = QAction("Choose Regions of Interest…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
+        self.act_choose_regions = QAction("ROI extraction…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
 
 
         # Disable initially
-        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False)
+        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False); self.act_nitfi2png.setEnabled(False)
   # will enable for STL/polydata
         for a in (self.act_meas_allmarks, self.act_meas_volumes, self.act_meas_area, self.act_meas_perimeter, self.act_meas_lgi, self.act_meas_sulci, self.act_optimization):
             a.setEnabled(False)
@@ -242,10 +248,12 @@ class MainWindow(QMainWindow):
         self.act_meas_lgi.setIcon(QIcon(str(ASSETS / "icons/LGI.png")))
         self.act_meas_sulci.setIcon(QIcon(str(ASSETS / "icons/depth.png")))
         self.act_choose_regions.setIcon(QIcon(str(ASSETS / "icons/labels.png")))
+        self.act_show_results.setIcon(QIcon(str(ASSETS / "icons/view_data.png")))
         
         
         self.ribbon.add_action("Home", self.act_nav_import)
         self.ribbon.add_action("Home", self.act_nav_export)
+        self.ribbon.add_action("Home", self.act_show_results)
         self.ribbon.add_action("Home", self.act_Reset)
         self.ribbon.add_action("Home", self.act_close)
         self.ribbon.add_action("Home", self.act_quit)
@@ -266,12 +274,12 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Measure", self.act_meas_lgi)
         self.ribbon.add_action("Measure", self.act_meas_sulci)
 
-        self.ribbon.add_action("Settings", self.act_set_image_scale)
-        self.ribbon.add_action("Settings", self.act_set_scale)
-        self.ribbon.add_action("Settings", self.act_kernel_size)
-        self.ribbon.add_action("Settings", self.act_cnt_threshold)
-        self.ribbon.add_action("Settings", self.act_annotate_square)
-        self.ribbon.add_action("Settings", self.act_choose_regions)
+        self.ribbon.add_action("Adjustments", self.act_set_image_scale)
+        self.ribbon.add_action("Adjustments", self.act_set_scale)
+        self.ribbon.add_action("Adjustments", self.act_kernel_size)
+        self.ribbon.add_action("Adjustments", self.act_cnt_threshold)
+        self.ribbon.add_action("Adjustments", self.act_annotate_square)
+        self.ribbon.add_action("Adjustments", self.act_choose_regions)
 
 
 
@@ -285,27 +293,28 @@ class MainWindow(QMainWindow):
         self.nav_tb.setIconSize(QSize(20, 20))
         self.nav_tb.setMovable(False)
         self.addToolBar(Qt.TopToolBarArea, self.nav_tb)
-
+        self. nav_tb.hide()
+        
         self.nav_tb.addSeparator()
 
         self.orient_combo = QComboBox()
         self.orient_combo.addItems(["Axial (Z)", "Coronal (Y)", "Sagittal (X)"])
         self.orient_combo.currentTextChanged.connect(self._on_orientation_changed)
         self.nav_tb.addWidget(self.orient_combo)
-        self.orient_combo.setVisible(False)
+#        self.orient_combo.setVisible(False)
         
         self.view_mode = QComboBox()
         self.view_mode.addItems(["2D", "3D"])
         self.view_mode.setCurrentText("3D")
         self.view_mode.currentTextChanged.connect(self._on_view_changed)
         self.nav_tb.addWidget(self.view_mode)
-        self.view_mode.setVisible(False)
+#        self.view_mode.setVisible(False)
         
         self.nav_tb.addSeparator()
 
         self.slice_caption = QLabel("Section:")
         self.nav_tb.addWidget(self.slice_caption)
-        self.slice_caption.setVisible(False)
+#        self.slice_caption.setVisible(False)
 
         self.slice_slider = QSlider(Qt.Horizontal)
         self.slice_slider.setMinimum(0)
@@ -314,11 +323,11 @@ class MainWindow(QMainWindow):
         self.slice_slider.setPageStep(5)
         self.slice_slider.valueChanged.connect(self.on_slice_slider_changed)
         self.nav_tb.addWidget(self.slice_slider)
-        self.slice_slider.setVisible(False)
+#        self.slice_slider.setVisible(False)
 
         self.slice_value_label = QLabel("—")
         self.nav_tb.addWidget(self.slice_value_label)
-        self.slice_value_label.setVisible(False)
+#        self.slice_value_label.setVisible(False)
 
     # ---------- Import handlers ----------
     def import_image(self):
@@ -492,7 +501,10 @@ class MainWindow(QMainWindow):
 
     def close_current(self):
         self.image_label.clearImage(); self._show_widget(self.image_label); self._set_slice_controls(False);self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False)
-        self._set_current(None, None); print("Closed current file and reset view.")
+        self.nav_tb.hide()
+        self._set_current(None, None); print("\n Closed current file and reset view.")
+        self.statusBar().showMessage("Closed current file and reset view.", 3000)
+
 
     def quit_app(self):
         print("Quitting application."); self.close()
@@ -664,6 +676,8 @@ class MainWindow(QMainWindow):
         for k, v in vals.items():
             col = keymap.get(k.lower(), k)
             row[col] = v
+            
+        self._metrics_rebuild_for_current()
 
 
     # ---------- Loaders ----------
@@ -672,6 +686,7 @@ class MainWindow(QMainWindow):
         if pm.isNull(): QMessageBox.critical(self, "Open Failed", "Could not read image file."); return
         self.image_label.setImage(pm); self._show_widget(self.image_label); self._set_slice_controls(False)
         print(f"Loaded image: {path}  size={pm.width()}x{pm.height()}"); self._set_current("image", path)
+        self.statusBar().showMessage(f"{self.current_path} image is loaded", 5000)
 
     def load_nifti(self, path: str):
         self._set_current("nifti", path)
@@ -679,14 +694,13 @@ class MainWindow(QMainWindow):
         print(f"NIfTI loaded:\n"
               f"Extent={img.GetExtent()} \n Spacing={img.GetSpacing()} \n  Range={img.GetScalarRange()}")
         self.labels_available = get_nifti_present_labels(path)
+        self.statusBar().showMessage(f"{self.current_path} nifti file is loaded", 5000)
         if self.view_mode.currentText() == "3D":
             self.slice_nav_mode = None
             self.vtk_view.show_image2d(img);  self._show_widget(self.vtk_view); self._sync_slice_controls()
         elif self.view_mode.currentText() == "2D":
             self.slice_nav_mode = "nifti"
             self._nifti_set_orientation(self.orient_combo.currentText());
-
-
 
     def load_stl(self, path: str):
         r = vtkSTLReader(); r.SetFileName(path); r.Update(); poly = r.GetOutput()
@@ -884,7 +898,7 @@ class MainWindow(QMainWindow):
                     perimeter_convex = perimeter_convex,
                     lgi=lGI,
                     sulci_depth = depth)
-
+                    
             except Exception as ex:
                 print(f"[All hallmarks] ERROR: {ex}")
                 QMessageBox.critical(self, "All hallmarks Failed", f"{type(ex).__name__}: {ex}")
@@ -918,7 +932,7 @@ class MainWindow(QMainWindow):
                     lgi=gi,
                     sulci_depth = depth)
                 self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-                
+
                 mid = len(saved_pngs) // 2
                 self.on_slice_slider_changed(mid)
                 
@@ -1319,7 +1333,7 @@ class MainWindow(QMainWindow):
                 pixel_size = self.pixel_size,
                 unite = self.units_length,
                 area=area)
-
+                
             except Exception as ex:
                 print(f"[Area] ERROR : {ex}")
                 QMessageBox.critical(self, "[Area] Failed", f"{type(ex).__name__}: {ex}")
@@ -1475,7 +1489,7 @@ class MainWindow(QMainWindow):
 
         # Track in metrics (so Excel shows context)
         label_text = self.get_label_for_cropped_path(self.last_annotated_path)
-        self._record_metric_for (self.current_path, label= label_text  ,pixel_size= scale, pixel_size_units=f"{unit}/pixel" )
+#        self._record_metric_for (self.current_path, label= label_text  ,pixel_size= scale, pixel_size_units=f"{unit}/pixel" )
 #        row = self._ensure_metric_row(self.current_path, self.current_kind)
 #        row = self.metrics[self.current_path]
 #        row["PixelSize"] = scale
@@ -1516,7 +1530,7 @@ class MainWindow(QMainWindow):
 
             # Record in metrics
             label_text = self.get_label_for_cropped_path(self.last_annotated_path)
-            self._record_metric_for (self.current_path, label = label_text, pixel_size= mm_per_px, pixel_size_units=f"{unit}/pixel" )
+#            self._record_metric_for (self.current_path, label = label_text, pixel_size= mm_per_px, pixel_size_units=f"{unit}/pixel" )
 
             print(f"[Scale] {pixel_length:.2f} px = {px_per_unit:.6f} px/{unit}  "
                   f"→ pixel size {mm_per_px:.6f} {unit}/pixel for {os.path.basename(self.current_path)}")
@@ -1536,7 +1550,7 @@ class MainWindow(QMainWindow):
             # Record in metrics
             if self.current_path:
                 label_text = self.get_label_for_cropped_path(self.last_annotated_path)
-                self._record_metric_for(self.current_path, label = label_text, kernel_size= self.kernel_size)
+#                self._record_metric_for(self.current_path, label = label_text, kernel_size= self.kernel_size)
     
     def set_cnt_threshold_dialog(self):
         dlg = ContourThresholdDialog(self, initial=getattr(self, "cnt_threshold", 50.0))
@@ -1705,8 +1719,10 @@ class MainWindow(QMainWindow):
         self.act_close.setEnabled(has_file)
         self.act_Reset.setEnabled(has_file)
         self.reset_png_navigation()
-        if path and kind:
-            self._ensure_metric_row(path, kind)
+#        self._metrics_rebuild_for_current()
+
+#        if path and kind:
+#            self._ensure_metric_row(path, kind)
         if kind == "nifti": #"stl", "vtk_poly", "vtk_surface",
             self.slice_slider.setEnabled(True)
             self.orient_combo.setEnabled(True)
@@ -1726,18 +1742,29 @@ class MainWindow(QMainWindow):
         self.act_pial_to_stl.setEnabled(True)
         self.act_pial_merge.setEnabled(True)
 
-        if kind in ("stl", "vtk_poly", "vtk_surface", "nifti"):
+        if kind in ("stl", "vtk_poly", "vtk_surface"):
             self.act_meas_area.setEnabled(True)
             self.act_meas_perimeter.setEnabled(False)
             self.act_meas_lgi.setEnabled(True)
             self.act_meas_sulci.setEnabled(True)
             self.act_meas_volumes.setEnabled(True)
             self.act_meas_allmarks.setEnabled(True)
+            self.act_nitfi2png.setEnabled(False)
+            self.nav_tb.hide()
+
             
         if kind == "nifti":
+            self.act_meas_area.setEnabled(True)
+            self.act_meas_perimeter.setEnabled(False)
+            self.act_meas_lgi.setEnabled(True)
+            self.act_meas_sulci.setEnabled(True)
+            self.act_meas_volumes.setEnabled(True)
+            self.act_meas_allmarks.setEnabled(True)
             self.act_choose_regions.setEnabled(True)
             self.label_overlay_enabled = True
-            
+            self.act_nitfi2png.setEnabled(True)
+            self.nav_tb.show()
+
         elif kind == "image":
             self.act_meas_area.setEnabled(True)
             self.act_meas_perimeter.setEnabled(True)
@@ -1747,6 +1774,8 @@ class MainWindow(QMainWindow):
             self.act_optimization.setEnabled(True)
             self.act_meas_allmarks.setEnabled(True)
             self.act_annotate_square.setEnabled(True)
+            self.act_nitfi2png.setEnabled(False)
+            self.nav_tb.hide()
 
 
     def enable_png_navigation(self, png_paths: list[str], slice_indices: list[int] | None = None, start_index: int | None = None):
@@ -1771,6 +1800,8 @@ class MainWindow(QMainWindow):
         self.on_slice_slider_changed(init)
         # Make sure the image pane is visible
         self._show_widget(self.image_label)
+        self.view_mode.setEnabled(False)
+        self.orient_combo,setEnabled(False)
 
     def reset_png_navigation(self):
         """Return the slider to normal NIfTI navigation."""
@@ -1783,7 +1814,8 @@ class MainWindow(QMainWindow):
             self.slice_slider.setMinimum(0)
             self.slice_slider.setMaximum(max(0, self.nifti_depth - 1))
             self.slice_slider.blockSignals(False)
-
+            self.view_mode.setEnabled(True)
+            self.orient_combo,setEnabled(True)
 
     def _dir_has_files(self, d: str) -> bool:
         if not d or not os.path.isdir(d):
@@ -1972,7 +2004,7 @@ class MainWindow(QMainWindow):
         idx = int(self.slice_slider.value()) if hasattr(self, "slice_slider") else 0
         self.view_mode.setCurrentText("2D")
         self.view_mode.setEnabled(False)
-        self._nifti_set_orientation(self.orient_combo)
+        self._nifti_set_orientation(self.orient_combo.currentText())
         self.on_slice_slider_changed(idx)
 
         # Determine labels
@@ -2065,7 +2097,6 @@ class MainWindow(QMainWindow):
         qimg = QImage(rgb_u8.data, w, h, rgb_u8.strides[0], QImage.Format_RGB888)
         return qimg.copy()  # detach from NumPy buffer
 
-            
     def show_nifti_slice(self, idx, axis=None):
         img = nib.load(self.current_path)
         vol = img.get_fdata(dtype=float)
@@ -2114,10 +2145,209 @@ class MainWindow(QMainWindow):
             qimg = QImage(gray.data, w, h, gray.strides[0], QImage.Format_Grayscale8)
             self._last_frame_gray = gray  # keep alive
 
+        zooms = img.header.get_zooms()[:3]  # (z0,z1,z2) voxel sizes in mm
+        qimg, self.mm_per_px_bar , self.bar_mm = add_scalebar(qimg, zooms, ax)
         self.image_label.setImage(QPixmap.fromImage(qimg))
         self._show_widget(self.image_label)
         if hasattr(self, "_update_slice_label"):
             self._update_slice_label(i, depth, mode="nifti")
+
+    def ask_processing_options(self):
+        dlg = ProcessingOptionsDialog(self)
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            return {
+                "unify_color": dlg.unify_color(),       # BGR tuple or None
+                "add_scale_bar": dlg.add_scale_bar(),   # bool
+                "smooth_kind": dlg.smooth_kind(),       # "none", "gaussian", "median", "bilateral"
+                "smooth_strength": dlg.smooth_strength()# int
+            }
+        return None
+        
+    def Nifti_to_png(self):
+        """Ask path & save exactly what is displayed (no auto-saving during processing)."""
+        if not (self.current_kind == "nifti"
+                and self.view_mode.currentText() == "2D"):
+            QMessageBox.information(self, "Nifti to Png", "This function only works for Nifti file with 2D view mode"); return
+        base = "view"
+        if self.current_path: base = os.path.splitext(os.path.basename(self.current_path))[0]
+        uid = uuid.uuid4().hex[:8]
+        folder = os.path.join(self.temp_dir, f"nifti_slice_{uid}")
+        os.makedirs(folder, exist_ok=True)
+        path= os.path.join (folder, base + "_view.png")
+        out_path = os.path.join(folder, base + "_section.png")
+        self.current_output_dir = folder
+        pm = self.image_label.grab(); ok = pm.save(path)
+        if not ok: raise RuntimeError("Failed to save nifti slice.")
+        options= self.ask_processing_options()
+      
+        length_px = nifti_slice_to_image(path, out_path,
+        unify_color = options["unify_color"],
+        label_text = f"{self.bar_mm} mm",
+        scale_bar= options["add_scale_bar"],
+        smooth = options["smooth_kind"],
+        smooth_strength = options["smooth_strength"])
+        self.pixel_size = self.bar_mm/ length_px
+        self.load_image(out_path)
+
+# ---- Metrics Dock (per-path, reads from self.metrics) -----------------------
+
+    def _init_metrics_dock(self):
+        # Ensure container exists
+        if not hasattr(self, "metrics") or not isinstance(self.metrics, dict):
+            self.metrics = {}  # {path: [dict, ...]}
+
+        self.metricsDock = QDockWidget("Metrics", self)
+        self.metricsDock.setObjectName("MetricsDock")
+        self.metricsDock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+
+        host = QWidget()
+        v = QVBoxLayout(host); v.setContentsMargins(0, 0, 0, 0)
+
+        # Toolbar
+        tb = QToolBar()
+        act_copy   = QAction("Copy", self);   act_copy.setShortcut(QKeySequence.Copy)
+        act_export = QAction("Export Excel…", self)
+        act_clear  = QAction("Clear (this file)", self)
+        tb.addAction(act_copy); tb.addAction(act_export); tb.addSeparator(); tb.addAction(act_clear)
+        v.addWidget(tb)
+
+        # Table
+        self.metricsView = QTableView()
+        self.metricsView.setSortingEnabled(True)
+        self.metricsView.horizontalHeader().setStretchLastSection(True)
+        self.metricsView.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        v.addWidget(self.metricsView)
+
+        self.metricsDock.setWidget(host)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.metricsDock)
+        self.metricsDock.hide()
+
+        # Model
+        self._metrics_model = QStandardItemModel(0, 0, self)
+        self.metricsView.setModel(self._metrics_model)
+
+        # Wire actions
+        act_copy.triggered.connect(self._metrics_copy_selection)
+        # Your existing exporter should read from self.metrics; leave as-is:
+        act_export.triggered.connect(self.export_metrics_excel)
+        act_clear.triggered.connect(self._metrics_clear_current_file)
+
+    def _metrics_headers(self):
+        # Adjust/extend columns as you like; keys should match your records
+        return [
+            "File", "Kind", "Label",
+            "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit",
+            "Length(PA)", "Width(LR)", "Hight(IS)",
+            "Area", "Volume", "Perimeter", "Perimeter_convex",
+            "SulciCount", "MinDepth", "MaxDpeth","MeanDepth",
+            "LGI"
+        ]
+
+    def _metrics_rebuild_for_current(self):
+        """Rebuild the table for the currently open file from self.metrics."""
+        headers = self._metrics_headers()
+        m = self._metrics_model
+        m.clear()
+        m.setHorizontalHeaderLabels(headers)
+
+        cur_path = getattr(self, "current_path", None)
+        rows = []
+        if cur_path and cur_path in self.metrics:
+            for rec in (self.metrics.get(cur_path) or []):
+                if not isinstance(rec, dict):
+                    continue
+                rows.append([rec.get(h, "") for h in headers])
+
+        # Append rows
+        for row in rows:
+            items = []
+            for val in row:
+                txt = "" if val is None else str(val)
+                it = QStandardItem(txt)
+                # right-align numeric-looking cells
+                try:
+                    f = float(txt)
+                    it.setText(f"{f:.3f}")
+                    it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                except Exception:
+                    pass
+                items.append(it)
+            m.appendRow(items)
+
+        # Show/hide dock depending on content
+#        if rows:
+#            self.metricsDock.show()
+#        else:
+#            self.metricsDock.hide()
+
+    def _metrics_append_record(self):
+        """
+        Append the last record of the current file (from self.metrics) into the table.
+        Call this right after you add to self.metrics[current_path].
+        """
+        cur_path = getattr(self, "current_path", None)
+        if not cur_path or cur_path not in self.metrics:
+            return
+        seq = self.metrics[cur_path]
+        if not seq:
+            return
+        rec = seq[-1]
+        if not isinstance(rec, dict):
+            return
+
+        headers = self._metrics_headers()
+        # Ensure model columns exist; if not, rebuild fully once
+        if self._metrics_model.columnCount() != len(headers):
+            self._metrics_rebuild_for_current()
+            return
+
+        row_vals = [rec.get(h, "") for h in headers]
+        items = []
+        for val in row_vals:
+            txt = "" if val is None else str(val)
+            it = QStandardItem(txt)
+            try:
+                f = float(txt)
+                it.setText(f"{f:.3f}")
+                it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            except Exception:
+                pass
+            items.append(it)
+
+        self._metrics_model.appendRow(items)
+
+    def _metrics_copy_selection(self):
+        """Copy selected table cells as CSV (with header)."""
+        sel = self.metricsView.selectionModel()
+        if not sel or not sel.hasSelection():
+            return
+        idxs = sorted(sel.selectedIndexes(), key=lambda i: (i.row(), i.column()))
+        # Build a dict row -> {col: text}
+        rows = {}
+        model = self._metrics_model
+        for i in idxs:
+            rows.setdefault(i.row(), {})[i.column()] = model.item(i.row(), i.column()).text()
+
+        header = ",".join(self._metrics_headers())
+        lines = [header]
+        for r in sorted(rows):
+            cols = []
+            for c in range(model.columnCount()):
+                cols.append(rows[r].get(c, ""))
+            lines.append(",".join(cols))
+        QApplication.clipboard().setText("\n".join(lines))
+
+    def _metrics_clear_current_file(self):
+        """Clear in-memory metrics for the current file and refresh the table."""
+        cur_path = getattr(self, "current_path", None)
+        if not cur_path:
+            return
+        self.metrics[cur_path] = []
+        self._metrics_rebuild_for_current()
+        try:
+            self._append_progress(f"[Metrics] Cleared metrics for {cur_path} \n")
+        except Exception:
+            pass
 
 # ---------------------------
 # Entry point

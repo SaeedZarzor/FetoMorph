@@ -2,14 +2,14 @@
 
 # ---------------- Qt ----------------
 from PySide6 import QtCore, QtGui, QtWidgets
-from PySide6.QtCore import Qt, QSize, QRect, QObject, Signal, QPoint, QUrl, QTimer
-from PySide6.QtGui import QPixmap, QAction, QPainter, QTextCursor, QImage, QKeySequence, QIcon, QDesktopServices, QColor, QPen,QFont
+from PySide6.QtCore import Qt, QSize, QRect, QObject, Signal, QPoint, QUrl, QTimer, QRectF
+from PySide6.QtGui import (QPixmap, QAction, QPainter, QTextCursor, QImage, QKeySequence, QIcon, QDesktopServices, QColor, QPen,QFont,QStandardItemModel, QStandardItem)
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QFileDialog,QRubberBand,
     QVBoxLayout, QHBoxLayout, QToolBar, QSlider, QComboBox,QDockWidget,
     QMessageBox, QSizePolicy, QGroupBox, QPlainTextEdit, QSplitter, QInputDialog, QDialog, QFormLayout, QSizePolicy,
     QDoubleSpinBox, QDialogButtonBox, QSpinBox, QStyle, QTabWidget, QGroupBox, QToolButton,
-    QWidgetItem, QListWidget,QListWidgetItem, QLineEdit, QPushButton
+    QWidgetItem, QListWidget,QListWidgetItem, QLineEdit, QPushButton, QTableView, QHeaderView
 )
 
 # -------------- VTK + Qt bridge --------------
@@ -87,12 +87,13 @@ def qt_icon(style: QStyle, rel_path: str | None = None) -> QIcon:
 # Control what `from deps import *` exports (optional but nice)
 __all__ = [
     # Qt modules & classes
-    "QtCore","QtGui","QtWidgets","Qt","QSize","QRect","QPoint","QObject","Signal","QUrl",
-    "QAction","QKeySequence","QIcon","QPainter","QPixmap","QTextCursor","QImage","QDockWidget",
+    "QtCore","QtGui","QtWidgets","Qt","QSize","QRect","QPoint","QObject","Signal","QUrl","QRectF",
+    "QAction","QKeySequence","QIcon","QPainter","QPixmap","QTextCursor","QImage","QDockWidget","QTableView",
     "QApplication","QMainWindow","QWidget","QLabel","QFileDialog","QVBoxLayout","QHBoxLayout","QPushButton",
-    "QToolBar","QSlider","QComboBox","QMessageBox","QSizePolicy","QGroupBox","QPlainTextEdit","QLineEdit",
+    "QToolBar","QSlider","QComboBox","QMessageBox","QSizePolicy","QGroupBox","QPlainTextEdit","QLineEdit", "QHeaderView",
     "QSplitter","QInputDialog","QDialog","QFormLayout","QDoubleSpinBox","QSpinBox", "QListWidget", "QListWidgetItem",
     "QDialogButtonBox","QStyle","QDesktopServices","QTabWidget","QToolButton","QRubberBand","QColor","QPen","QFont",
+    "QStandardItemModel","QStandardItem",
     # VTK
     "QVTKRenderWindowInteractor","vtkRenderer","vtkPolyDataMapper","vtkActor",
     "vtkImageSliceMapper","vtkImageSlice","vtkVolume","vtkVolumeProperty","vtkWindowToImageFilter",
