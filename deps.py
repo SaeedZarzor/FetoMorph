@@ -3,7 +3,7 @@
 # ---------------- Qt ----------------
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt, QSize, QRect, QObject, Signal, QPoint, QUrl, QTimer, QRectF
-from PySide6.QtGui import (QPixmap, QAction, QPainter, QTextCursor, QImage, QKeySequence, QIcon, QDesktopServices, QColor, QPen,QFont,QStandardItemModel)
+from PySide6.QtGui import (QPixmap, QAction, QPainter, QTextCursor, QImage, QKeySequence, QIcon, QDesktopServices, QColor, QPen,QFont,QStandardItemModel, QStandardItem)
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QFileDialog,QRubberBand,
     QVBoxLayout, QHBoxLayout, QToolBar, QSlider, QComboBox,QDockWidget,
@@ -93,7 +93,7 @@ __all__ = [
     "QToolBar","QSlider","QComboBox","QMessageBox","QSizePolicy","QGroupBox","QPlainTextEdit","QLineEdit", "QHeaderView",
     "QSplitter","QInputDialog","QDialog","QFormLayout","QDoubleSpinBox","QSpinBox", "QListWidget", "QListWidgetItem",
     "QDialogButtonBox","QStyle","QDesktopServices","QTabWidget","QToolButton","QRubberBand","QColor","QPen","QFont",
-    "QStandardItemModel",
+    "QStandardItemModel","QStandardItem",
     # VTK
     "QVTKRenderWindowInteractor","vtkRenderer","vtkPolyDataMapper","vtkActor",
     "vtkImageSliceMapper","vtkImageSlice","vtkVolume","vtkVolumeProperty","vtkWindowToImageFilter",

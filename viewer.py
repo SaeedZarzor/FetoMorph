@@ -99,8 +99,6 @@ class MainWindow(QMainWindow):
         self.nifti_selected_regions: set[int] = set()
         self.label_overlay_enabled: bool = True
         self.label_overlay_alpha: float = 0.5
-
-
         
         # Params for measurements
         self.units_length = None          # e.g., "mm" (set by user prompt)
@@ -118,6 +116,8 @@ class MainWindow(QMainWindow):
         self.slice_nav_mode = None           # None | "nifti" | "png"
         self.slice_nav_items = []            # list[str] when mode=="png" (PNG paths)
         self.slice_nav_index_map = []        # list[int] original slice indices (optional label)
+
+        self._init_metrics_dock()
 
         # View widgets
         self.image_label = ScaledImageLabel()
@@ -152,6 +152,7 @@ class MainWindow(QMainWindow):
         self.act_imp_nii = QAction("NIfTI…", self); self.act_imp_nii.setShortcut(QKeySequence("Ctrl+Shift+N")); self.act_imp_nii.triggered.connect(self.import_nifti); import_menu.addAction(self.act_imp_nii)
 
         file_menu.addSeparator()
+        self.act_show_results = QAction("Show Results", self); self.act_show_results.triggered.connect(lambda:self.metricsDock.show()); file_menu.addAction(self.act_show_results)
         self.act_save = QAction("Save View As…", self); self.act_save.setShortcut(QKeySequence("Ctrl+V")); self.act_save.triggered.connect(self.save_view); file_menu.addAction(self.act_save)
         self.act_save_data = QAction("Save Data As…", self); self.act_save_data.setShortcut(QKeySequence.SaveAs); self.act_save_data.triggered.connect(self.save_data_as); file_menu.addAction(self.act_save_data)
         self.act_export_metrics = QAction("Export Metrics to Excel…", self); self.act_export_metrics.setShortcut(QKeySequence("Ctrl+E")); self.act_export_metrics.triggered.connect(self.export_metrics_excel); file_menu.addAction(self.act_export_metrics)
@@ -247,10 +248,12 @@ class MainWindow(QMainWindow):
         self.act_meas_lgi.setIcon(QIcon(str(ASSETS / "icons/LGI.png")))
         self.act_meas_sulci.setIcon(QIcon(str(ASSETS / "icons/depth.png")))
         self.act_choose_regions.setIcon(QIcon(str(ASSETS / "icons/labels.png")))
+        self.act_show_results.setIcon(QIcon(str(ASSETS / "icons/view_data.png")))
         
         
         self.ribbon.add_action("Home", self.act_nav_import)
         self.ribbon.add_action("Home", self.act_nav_export)
+        self.ribbon.add_action("Home", self.act_show_results)
         self.ribbon.add_action("Home", self.act_Reset)
         self.ribbon.add_action("Home", self.act_close)
         self.ribbon.add_action("Home", self.act_quit)
@@ -673,6 +676,9 @@ class MainWindow(QMainWindow):
         for k, v in vals.items():
             col = keymap.get(k.lower(), k)
             row[col] = v
+            
+        self._metrics_rebuild_for_current()
+
 
     # ---------- Loaders ----------
     def load_image(self, path: str):
@@ -892,7 +898,7 @@ class MainWindow(QMainWindow):
                     perimeter_convex = perimeter_convex,
                     lgi=lGI,
                     sulci_depth = depth)
-
+                    
             except Exception as ex:
                 print(f"[All hallmarks] ERROR: {ex}")
                 QMessageBox.critical(self, "All hallmarks Failed", f"{type(ex).__name__}: {ex}")
@@ -926,7 +932,7 @@ class MainWindow(QMainWindow):
                     lgi=gi,
                     sulci_depth = depth)
                 self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-                
+
                 mid = len(saved_pngs) // 2
                 self.on_slice_slider_changed(mid)
                 
@@ -1327,7 +1333,7 @@ class MainWindow(QMainWindow):
                 pixel_size = self.pixel_size,
                 unite = self.units_length,
                 area=area)
-
+                
             except Exception as ex:
                 print(f"[Area] ERROR : {ex}")
                 QMessageBox.critical(self, "[Area] Failed", f"{type(ex).__name__}: {ex}")
@@ -1483,7 +1489,7 @@ class MainWindow(QMainWindow):
 
         # Track in metrics (so Excel shows context)
         label_text = self.get_label_for_cropped_path(self.last_annotated_path)
-        self._record_metric_for (self.current_path, label= label_text  ,pixel_size= scale, pixel_size_units=f"{unit}/pixel" )
+#        self._record_metric_for (self.current_path, label= label_text  ,pixel_size= scale, pixel_size_units=f"{unit}/pixel" )
 #        row = self._ensure_metric_row(self.current_path, self.current_kind)
 #        row = self.metrics[self.current_path]
 #        row["PixelSize"] = scale
@@ -1524,7 +1530,7 @@ class MainWindow(QMainWindow):
 
             # Record in metrics
             label_text = self.get_label_for_cropped_path(self.last_annotated_path)
-            self._record_metric_for (self.current_path, label = label_text, pixel_size= mm_per_px, pixel_size_units=f"{unit}/pixel" )
+#            self._record_metric_for (self.current_path, label = label_text, pixel_size= mm_per_px, pixel_size_units=f"{unit}/pixel" )
 
             print(f"[Scale] {pixel_length:.2f} px = {px_per_unit:.6f} px/{unit}  "
                   f"→ pixel size {mm_per_px:.6f} {unit}/pixel for {os.path.basename(self.current_path)}")
@@ -1544,7 +1550,7 @@ class MainWindow(QMainWindow):
             # Record in metrics
             if self.current_path:
                 label_text = self.get_label_for_cropped_path(self.last_annotated_path)
-                self._record_metric_for(self.current_path, label = label_text, kernel_size= self.kernel_size)
+#                self._record_metric_for(self.current_path, label = label_text, kernel_size= self.kernel_size)
     
     def set_cnt_threshold_dialog(self):
         dlg = ContourThresholdDialog(self, initial=getattr(self, "cnt_threshold", 50.0))
@@ -1713,10 +1719,10 @@ class MainWindow(QMainWindow):
         self.act_close.setEnabled(has_file)
         self.act_Reset.setEnabled(has_file)
         self.reset_png_navigation()
-        self._metrics_rebuild_for_current()
+#        self._metrics_rebuild_for_current()
 
-        if path and kind:
-            self._ensure_metric_row(path, kind)
+#        if path and kind:
+#            self._ensure_metric_row(path, kind)
         if kind == "nifti": #"stl", "vtk_poly", "vtk_surface",
             self.slice_slider.setEnabled(True)
             self.orient_combo.setEnabled(True)
@@ -2183,6 +2189,165 @@ class MainWindow(QMainWindow):
         self.pixel_size = self.bar_mm/ length_px
         self.load_image(out_path)
 
+# ---- Metrics Dock (per-path, reads from self.metrics) -----------------------
+
+    def _init_metrics_dock(self):
+        # Ensure container exists
+        if not hasattr(self, "metrics") or not isinstance(self.metrics, dict):
+            self.metrics = {}  # {path: [dict, ...]}
+
+        self.metricsDock = QDockWidget("Metrics", self)
+        self.metricsDock.setObjectName("MetricsDock")
+        self.metricsDock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+
+        host = QWidget()
+        v = QVBoxLayout(host); v.setContentsMargins(0, 0, 0, 0)
+
+        # Toolbar
+        tb = QToolBar()
+        act_copy   = QAction("Copy", self);   act_copy.setShortcut(QKeySequence.Copy)
+        act_export = QAction("Export Excel…", self)
+        act_clear  = QAction("Clear (this file)", self)
+        tb.addAction(act_copy); tb.addAction(act_export); tb.addSeparator(); tb.addAction(act_clear)
+        v.addWidget(tb)
+
+        # Table
+        self.metricsView = QTableView()
+        self.metricsView.setSortingEnabled(True)
+        self.metricsView.horizontalHeader().setStretchLastSection(True)
+        self.metricsView.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        v.addWidget(self.metricsView)
+
+        self.metricsDock.setWidget(host)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.metricsDock)
+        self.metricsDock.hide()
+
+        # Model
+        self._metrics_model = QStandardItemModel(0, 0, self)
+        self.metricsView.setModel(self._metrics_model)
+
+        # Wire actions
+        act_copy.triggered.connect(self._metrics_copy_selection)
+        # Your existing exporter should read from self.metrics; leave as-is:
+        act_export.triggered.connect(self.export_metrics_excel)
+        act_clear.triggered.connect(self._metrics_clear_current_file)
+
+    def _metrics_headers(self):
+        # Adjust/extend columns as you like; keys should match your records
+        return [
+            "File", "Kind", "Label",
+            "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit",
+            "Length(PA)", "Width(LR)", "Hight(IS)",
+            "Area", "Volume", "Perimeter", "Perimeter_convex",
+            "SulciCount", "MinDepth", "MaxDpeth","MeanDepth",
+            "LGI"
+        ]
+
+    def _metrics_rebuild_for_current(self):
+        """Rebuild the table for the currently open file from self.metrics."""
+        headers = self._metrics_headers()
+        m = self._metrics_model
+        m.clear()
+        m.setHorizontalHeaderLabels(headers)
+
+        cur_path = getattr(self, "current_path", None)
+        rows = []
+        if cur_path and cur_path in self.metrics:
+            for rec in (self.metrics.get(cur_path) or []):
+                if not isinstance(rec, dict):
+                    continue
+                rows.append([rec.get(h, "") for h in headers])
+
+        # Append rows
+        for row in rows:
+            items = []
+            for val in row:
+                txt = "" if val is None else str(val)
+                it = QStandardItem(txt)
+                # right-align numeric-looking cells
+                try:
+                    f = float(txt)
+                    it.setText(f"{f:.3f}")
+                    it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                except Exception:
+                    pass
+                items.append(it)
+            m.appendRow(items)
+
+        # Show/hide dock depending on content
+#        if rows:
+#            self.metricsDock.show()
+#        else:
+#            self.metricsDock.hide()
+
+    def _metrics_append_record(self):
+        """
+        Append the last record of the current file (from self.metrics) into the table.
+        Call this right after you add to self.metrics[current_path].
+        """
+        cur_path = getattr(self, "current_path", None)
+        if not cur_path or cur_path not in self.metrics:
+            return
+        seq = self.metrics[cur_path]
+        if not seq:
+            return
+        rec = seq[-1]
+        if not isinstance(rec, dict):
+            return
+
+        headers = self._metrics_headers()
+        # Ensure model columns exist; if not, rebuild fully once
+        if self._metrics_model.columnCount() != len(headers):
+            self._metrics_rebuild_for_current()
+            return
+
+        row_vals = [rec.get(h, "") for h in headers]
+        items = []
+        for val in row_vals:
+            txt = "" if val is None else str(val)
+            it = QStandardItem(txt)
+            try:
+                f = float(txt)
+                it.setText(f"{f:.3f}")
+                it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            except Exception:
+                pass
+            items.append(it)
+
+        self._metrics_model.appendRow(items)
+
+    def _metrics_copy_selection(self):
+        """Copy selected table cells as CSV (with header)."""
+        sel = self.metricsView.selectionModel()
+        if not sel or not sel.hasSelection():
+            return
+        idxs = sorted(sel.selectedIndexes(), key=lambda i: (i.row(), i.column()))
+        # Build a dict row -> {col: text}
+        rows = {}
+        model = self._metrics_model
+        for i in idxs:
+            rows.setdefault(i.row(), {})[i.column()] = model.item(i.row(), i.column()).text()
+
+        header = ",".join(self._metrics_headers())
+        lines = [header]
+        for r in sorted(rows):
+            cols = []
+            for c in range(model.columnCount()):
+                cols.append(rows[r].get(c, ""))
+            lines.append(",".join(cols))
+        QApplication.clipboard().setText("\n".join(lines))
+
+    def _metrics_clear_current_file(self):
+        """Clear in-memory metrics for the current file and refresh the table."""
+        cur_path = getattr(self, "current_path", None)
+        if not cur_path:
+            return
+        self.metrics[cur_path] = []
+        self._metrics_rebuild_for_current()
+        try:
+            self._append_progress(f"[Metrics] Cleared metrics for {cur_path} \n")
+        except Exception:
+            pass
 
 # ---------------------------
 # Entry point
