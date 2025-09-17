@@ -16,6 +16,8 @@ from widgets.Kernel_size import KernelSizeDialog
 from widgets.OptionsDialog import ProcessingOptionsDialog
 from widgets.RegionDock import *
 from ribbon import *
+from icons import set_icons
+
 
 
 # ---------------------------
@@ -110,6 +112,7 @@ class MainWindow(QMainWindow):
         self.slice_thickness = 0.5
         self.mm_per_px_bar = 0
         self.bar_mm = 25
+        self.custom_label: str = None
 
 
         # Slice navigation mode/state
@@ -180,6 +183,7 @@ class MainWindow(QMainWindow):
 
         # Setting menu
         Setting_menu = self.menuBar().addMenu("Adjustments"); self.Setting_menu = Setting_menu
+        self.act_set_custom_label = QAction("Custom label…", self); self.act_set_custom_label.triggered.connect(self.set_custom_label); Setting_menu.addAction(self.act_set_custom_label)
         self.act_set_image_scale = QAction("Set Image Scale…", self); self.act_set_image_scale.triggered.connect(self.set_image_scale); Setting_menu.addAction(self.act_set_image_scale)
         self.act_set_scale = QAction("Set Scale From Scalebar…", self);self.act_set_scale.triggered.connect(self.set_scale_from_scalebar);
         Setting_menu.addAction(self.act_set_scale)
@@ -224,32 +228,9 @@ class MainWindow(QMainWindow):
         self.act_nav_export.setToolTip("Go to Export tools")
         self.act_nav_export.triggered.connect(lambda: self.ribbon.set_current_tab("Export"))
         
-        self.act_nav_import.setIcon(QIcon(str(ASSETS / "icons/import.png")))
-        self.act_nav_export.setIcon(QIcon(str(ASSETS / "icons/export.png")))
-        self.act_Reset.setIcon(QIcon(str(ASSETS / "icons/rest.png")))
-        self.act_close.setIcon(QIcon(str(ASSETS / "icons/close.png")))
-        self.act_quit.setIcon(QIcon(str(ASSETS / "icons/quit.png")))
-        self.act_imp_img.setIcon(QIcon(str(ASSETS / "icons/image.png")))
-        self.act_imp_vtk.setIcon(QIcon(str(ASSETS / "icons/vtk.png")))
-        self.act_imp_stl.setIcon(QIcon(str(ASSETS / "icons/stl.png")))
-        self.act_imp_nii.setIcon(QIcon(str(ASSETS / "icons/nifti.png")))
-        self.act_save.setIcon(QIcon(str(ASSETS / "icons/screenshot.png")))
-        self.act_save_data.setIcon(QIcon(str(ASSETS / "icons/save.png")))
-        self.act_export_metrics.setIcon(QIcon(str(ASSETS / "icons/export_to_excel.png")))
-        self.act_set_image_scale.setIcon(QIcon(str(ASSETS / "icons/scale.png")))
-        self.act_set_scale.setIcon(QIcon(str(ASSETS / "icons/scale_bar.png")))
-        self.act_kernel_size.setIcon(QIcon(str(ASSETS / "icons/kernel.png")))
-        self.act_annotate_square.setIcon(QIcon(str(ASSETS / "icons/crop_1.png")))
-        self.act_cnt_threshold.setIcon(QIcon(str(ASSETS / "icons/threshold.png")))
-        self.act_meas_allmarks.setIcon(QIcon(str(ASSETS / "icons/hallmarks.png")))
-        self.act_meas_area.setIcon(QIcon(str(ASSETS / "icons/area.png")))
-        self.act_meas_volumes.setIcon(QIcon(str(ASSETS / "icons/volume.png")))
-        self.act_meas_perimeter.setIcon(QIcon(str(ASSETS / "icons/Perimeter.png")))
-        self.act_meas_lgi.setIcon(QIcon(str(ASSETS / "icons/LGI.png")))
-        self.act_meas_sulci.setIcon(QIcon(str(ASSETS / "icons/depth.png")))
-        self.act_choose_regions.setIcon(QIcon(str(ASSETS / "icons/labels.png")))
-        self.act_show_results.setIcon(QIcon(str(ASSETS / "icons/view_data.png")))
-        
+        ASSETS = Path(__file__).resolve().parent / "assets"
+        set_icons(self, ASSETS)
+
         
         self.ribbon.add_action("Home", self.act_nav_import)
         self.ribbon.add_action("Home", self.act_nav_export)
@@ -274,6 +255,7 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Measure", self.act_meas_lgi)
         self.ribbon.add_action("Measure", self.act_meas_sulci)
 
+        self.ribbon.add_action("Adjustments", self.act_set_custom_label)
         self.ribbon.add_action("Adjustments", self.act_set_image_scale)
         self.ribbon.add_action("Adjustments", self.act_set_scale)
         self.ribbon.add_action("Adjustments", self.act_kernel_size)
@@ -515,6 +497,7 @@ class MainWindow(QMainWindow):
         path: Optional[str],
         kind: Optional[str],
         label: Optional[str] = None,
+        annotation:Optional[str] = None,
         *,
         pixel_size: Optional[float] = None,
         pixel_size_units: Optional[str] = None,
@@ -548,8 +531,8 @@ class MainWindow(QMainWindow):
             self.metrics[path] = rows
 
         # Most recent row for this label (if any)
-        last = next((r for r in reversed(rows) if r.get("Label") == label), None)
-
+        last = next((r for r in reversed(rows) if r.get("Annotation") == annotation), None)
+        
         def differs(key: str, new_val):
             if new_val is None:
                 return False
@@ -574,6 +557,7 @@ class MainWindow(QMainWindow):
                 "File": os.path.basename(path),
                 "Kind": kind,
                 "Label": label,
+                "Annotation": annotation,
                 "Area": None,
                 "PixelSize":       pixel_size if pixel_size is not None else (last.get("PixelSize") if last else None),
                 "PixelSizeUnits":  pixel_size_units if pixel_size_units is not None else (last.get("PixelSizeUnits") if last else None),
@@ -614,10 +598,11 @@ class MainWindow(QMainWindow):
         return last
 
         
-    def _record_metric_for(self, path: str, label: Optional[str] = None, **vals):
+    def _record_metric_for(self, path: str, annotation: Optional[str] = None ,**vals):
         if not path:
             return
         kind = getattr(self, "current_kind", None)
+        label = getattr(self, "custom_label", None)
 
         # Extract the triple so _ensure_metric_row can decide whether to create a new row
         psize = vals.pop("pixel_size", None)
@@ -626,7 +611,7 @@ class MainWindow(QMainWindow):
         thicsl = vals.pop("slice_thickness", None)
         uni = vals.pop("unite", None)
         row = self._ensure_metric_row(
-            path, kind, label,
+            path, kind, label, annotation,
             pixel_size=psize,
             pixel_size_units=punit,
             kernel_size=ksize,
@@ -729,6 +714,16 @@ class MainWindow(QMainWindow):
             print(f"Legacy VTK dataset surfaced. Points={poly.GetNumberOfPoints()}  Polys={poly.GetNumberOfPolys()}"); self._set_current("vtk_surface", path); return
         QMessageBox.critical(self, "Open Failed", "Unsupported or empty .vtk dataset (no points after surface extraction).")
         
+        
+    def set_custom_label(self):
+        val, ok = QInputDialog.getText(
+        self,
+        "Set Custom Label",
+        "Enter label:",              # <--- mandatory label text
+        QLineEdit.Normal
+        )
+        self.custom_label = val if ok else None
+            
     # -------------- Export to Excel -------------------------
     def export_metrics_excel(self):
         """Export collected metrics (File, Kind, Label, PixelSize, PixelSizeUnits, KernelSize,
@@ -742,7 +737,7 @@ class MainWindow(QMainWindow):
         # Define columns in the order you want them in Excel
         base_cols = ["File", "Kind"]
         metric_cols = [
-            "Label",
+            "Label", "Annotation",
             "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit",
             "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
@@ -2235,7 +2230,7 @@ class MainWindow(QMainWindow):
     def _metrics_headers(self):
         # Adjust/extend columns as you like; keys should match your records
         return [
-            "File", "Kind", "Label",
+            "File", "Kind", "Label", "Annotation",
             "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit",
             "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
