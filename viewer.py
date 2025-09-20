@@ -14,6 +14,7 @@ from widgets.Unit_scale import UnitScaleDialog
 from widgets.VTK_Viewer import VTKViewer
 from widgets.Kernel_size import KernelSizeDialog
 from widgets.OptionsDialog import ProcessingOptionsDialog
+from widgets.Recent_paths import RecentPaths, populate_recent_menu
 from widgets.RegionDock import *
 from ribbon import *
 from icons import set_icons
@@ -155,7 +156,12 @@ class MainWindow(QMainWindow):
         self.act_imp_nii = QAction("NIfTI…", self); self.act_imp_nii.setShortcut(QKeySequence("Ctrl+Shift+N")); self.act_imp_nii.triggered.connect(self.import_nifti); import_menu.addAction(self.act_imp_nii)
 
         file_menu.addSeparator()
-        self.act_show_results = QAction("Show Results", self); self.act_show_results.triggered.connect(lambda:self.metricsDock.show()); file_menu.addAction(self.act_show_results)
+        
+        self.recent = RecentPaths("YourOrg", "YourApp")
+        self.menu_recent = file_menu.addMenu("Recent")
+        populate_recent_menu(self.menu_recent, self.recent, self.open_path)
+
+        self.act_show_results = QAction("Show Results…", self); self.act_show_results.triggered.connect(lambda:self.metricsDock.show()); file_menu.addAction(self.act_show_results)
         self.act_save = QAction("Save View As…", self); self.act_save.setShortcut(QKeySequence("Ctrl+V")); self.act_save.triggered.connect(self.save_view); file_menu.addAction(self.act_save)
         self.act_save_data = QAction("Save Data As…", self); self.act_save_data.setShortcut(QKeySequence.SaveAs); self.act_save_data.triggered.connect(self.save_data_as); file_menu.addAction(self.act_save_data)
         self.act_export_metrics = QAction("Export Metrics to Excel…", self); self.act_export_metrics.setShortcut(QKeySequence("Ctrl+E")); self.act_export_metrics.triggered.connect(self.export_metrics_excel); file_menu.addAction(self.act_export_metrics)
@@ -315,6 +321,7 @@ class MainWindow(QMainWindow):
     def import_image(self):
         start = self.last_dir if os.path.isdir(self.last_dir) else ""
         path, _ = QFileDialog.getOpenFileName(self, "Import Image", start, "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.gif)")
+        self.open_path(path)
         if not path: return
         self.last_dir = os.path.dirname(path) or self.last_dir
         print(f"Importing image: {path}"); self.load_image(path)
@@ -322,6 +329,7 @@ class MainWindow(QMainWindow):
     def import_vtk(self):
         start = self.last_dir if os.path.isdir(self.last_dir) else ""
         path, _ = QFileDialog.getOpenFileName(self, "Import .vtk", start, "VTK Legacy (*.vtk)")
+        self.open_path(path)
         if not path: return
         self.last_dir = os.path.dirname(path) or self.last_dir
         print(f"Importing VTK: {path}"); self.load_vtk(path)
@@ -329,6 +337,7 @@ class MainWindow(QMainWindow):
     def import_stl(self):
         start = self.last_dir if os.path.isdir(self.last_dir) else ""
         path, _ = QFileDialog.getOpenFileName(self, "Import .stl", start, "STL Mesh (*.stl)")
+        self.open_path(path)
         if not path: return
         self.last_dir = os.path.dirname(path) or self.last_dir
         print(f"Importing STL: {path}"); self.load_stl(path)
@@ -336,6 +345,7 @@ class MainWindow(QMainWindow):
     def import_nifti(self):
         start = self.last_dir if os.path.isdir(self.last_dir) else ""
         path, _ = QFileDialog.getOpenFileName(self, "Import NIfTI", start, "NIfTI (*.nii *.nii.gz)")
+        self.open_path(path)
         if not path: return
         self.last_dir = os.path.dirname(path) or self.last_dir
         print(f"Importing NIfTI: {path}"); self.load_nifti(path)
@@ -665,7 +675,30 @@ class MainWindow(QMainWindow):
         self._metrics_rebuild_for_current()
 
 
-    # ---------- Loaders ----------
+    def open_path(self, path: str):
+        ext = Path(path).suffix.lower()
+        try:
+            if ext in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff"}:
+                self.load_image(path)
+                print(f"Importing image: {path}")
+            elif ext == ".vtk":
+                self.load_vtk(path)
+                print(f"Importing VTK: {path}")
+            elif ext in {".nii", ".nii.gz"}:
+                self.load_nifti(path)
+                print(f"Importing NIfTI: {path}")
+            elif ext == ".stl":
+                self.load_stl(path)
+                print(f"Importing STL: {path}")
+           
+            self.last_dir = os.path.dirname(path) or self.last_dir
+        except Exception as e:
+            print("Failed to open", path, e)
+
+        # Update recent list + menu
+        self.recent.add(path)
+        populate_recent_menu(self.menu_recent, self.recent, self.open_path)
+    # --------- Loaders ----------
     def load_image(self, path: str):
         pm = QPixmap(path)
         if pm.isNull(): QMessageBox.critical(self, "Open Failed", "Could not read image file."); return
