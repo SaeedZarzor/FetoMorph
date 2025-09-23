@@ -30,7 +30,7 @@ def _pial_to_pv_polydata(pial_path: str):
     face_count = getattr(mesh, "n_faces_strict", mesh.n_cells)
 
     dt = time.time() - t0
-    print(f"Loaded mesh: points={mesh.n_points:,}  faces={face_count:,}  ({dt:.2f}s)")
+    print(f"Loaded mesh: points={mesh.n_points:,}  faces={face_count:,}")
     return mesh
 
 
@@ -42,7 +42,7 @@ def pial_to_stl(pial_path: str, temp_path: str):
     mesh = _pial_to_pv_polydata(pial_path)
     mesh.save(temp_path)
     dt = time.time() - t0
-    print(f"Saved STL: (points={mesh.n_points:,}, faces={mesh.n_faces:,}, {dt:.2f}s)")
+    print(f"Saved STL: points={mesh.n_points:,}, faces={mesh.n_faces:,}")
     return temp_path
 
 
@@ -60,5 +60,5 @@ def pial_pair_to_combined_stl(rh_pial: str, lh_pial: str, out_stl: str):
     combined.save(out_stl)
     dt = time.time() - t0
     print(f"Saved combined STL: "
-          f"(points={combined.n_points:,}, faces={combined.n_faces:,}, {dt:.2f}s)")
+          f"points={combined.n_points:,}, faces={combined.n_faces:,}")
     return out_stl

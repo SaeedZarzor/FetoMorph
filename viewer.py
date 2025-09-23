@@ -5,14 +5,16 @@ from functions.measurements_image import *
 from functions.pial_to_stl import *
 from functions.measurements_Nifti import *
 from functions.Fetal_brain_GI_stl import compute_stl_lGI
-from functions.Helpers import get_nifti_present_labels, add_scalebar
+from functions.Helpers import get_nifti_present_labels, add_scalebar, get_max_slice_thinckness
 from functions.Nifti2image import nifti_slice_to_image
+from functions.Fetal_brain_stl import *
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.Contour_threshold import ContourThresholdDialog
 from widgets.Scalebar_set_scale import ScalebarSetScaleDialog
 from widgets.Unit_scale import UnitScaleDialog
 from widgets.VTK_Viewer import VTKViewer
 from widgets.Kernel_size import KernelSizeDialog
+from widgets.Slice_thickness import SilceThicknessDialog
 from widgets.OptionsDialog import ProcessingOptionsDialog
 from widgets.Recent_paths import RecentPaths, populate_recent_menu
 from widgets.RegionDock import *
@@ -108,7 +110,7 @@ class MainWindow(QMainWindow):
         self.pixel_size_default = 0.01
         self.pixel_size = self.pixel_size_default       # current working scale (units/pixel)
         self.image_scales = {}                          # per-file scale: {path: float}
-        self.cnt_threshold = 200
+        self.cnt_threshold = 100
         self.kernel_size = 5  # default (pixels)
         self.slice_thickness = 0.5
         self.mm_per_px_bar = 0
@@ -194,13 +196,14 @@ class MainWindow(QMainWindow):
         self.act_set_scale = QAction("Set Scale From Scalebar…", self);self.act_set_scale.triggered.connect(self.set_scale_from_scalebar);
         Setting_menu.addAction(self.act_set_scale)
         self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.set_kernel_dialog); Setting_menu.addAction(self.act_kernel_size)
+        self.act_slice_thickness = QAction("Set Slice Thikcness…", self); self.act_slice_thickness.triggered.connect(self.set_slice_thickness_dialog); Setting_menu.addAction(self.act_slice_thickness); self.act_slice_thickness.setToolTip("Set the distance between slices")
         self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Setting_menu.addAction(self.act_annotate_square)
         self.act_choose_regions = QAction("ROI extraction…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
 
 
         # Disable initially
-        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False); self.act_nitfi2png.setEnabled(False)
+        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False); self.act_nitfi2png.setEnabled(False); self.act_slice_thickness.setEnabled(False)
   # will enable for STL/polydata
         for a in (self.act_meas_allmarks, self.act_meas_volumes, self.act_meas_area, self.act_meas_perimeter, self.act_meas_lgi, self.act_meas_sulci, self.act_optimization):
             a.setEnabled(False)
@@ -265,6 +268,7 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Adjustments", self.act_set_image_scale)
         self.ribbon.add_action("Adjustments", self.act_set_scale)
         self.ribbon.add_action("Adjustments", self.act_kernel_size)
+        self.ribbon.add_action("Adjustments", self.act_slice_thickness)
         self.ribbon.add_action("Adjustments", self.act_cnt_threshold)
         self.ribbon.add_action("Adjustments", self.act_annotate_square)
         self.ribbon.add_action("Adjustments", self.act_choose_regions)
@@ -556,7 +560,7 @@ class MainWindow(QMainWindow):
                 differs("PixelSize",       pixel_size),
                 differs("PixelSizeUnits",  pixel_size_units),
                 differs("KernelSize",      kernel_size),
-                differs("SliceThickness",      slice_thickness),
+                differs("SliceThickness",  slice_thickness),
                 differs("LengthUnit",      unite),
                 
             ]))
@@ -684,7 +688,7 @@ class MainWindow(QMainWindow):
             elif ext == ".vtk":
                 self.load_vtk(path)
                 print(f"Importing VTK: {path}")
-            elif ext in {".nii", ".nii.gz"}:
+            elif ext == ".nii" or ext == ".nii.gz":
                 self.load_nifti(path)
                 print(f"Importing NIfTI: {path}")
             elif ext == ".stl":
@@ -970,13 +974,56 @@ class MainWindow(QMainWindow):
                 print(f"The Brain GI (Convex surface area/ surfacearea) = {gi:.2f} .")
                 print(f"The Maximum Sulci Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} cm.")
                 dt = time.time() - t0
-                print(f"[NIfTI Area] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[NIfTI hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
                 print(f"[NIfTI hallmarks] ERROR: {ex}")
                 QMessageBox.critical(self, "NIfTI Area Failed", f"{type(ex).__name__}: {ex}")
             return
+            
+        elif self.current_kind == "stl":
+            t0 = time.time()
+            try:
+                uid = uuid.uuid4().hex[:8]
+                out_dir = os.path.join(self.temp_dir, f"STL_allmarks_{uid}")
+                os.makedirs(out_dir, exist_ok=True)
+                
+                self.current_output_dir = out_dir
+                dims, area, volume, gi, saved_pngs, valid_slices = compute_stl_allmarks(file_path=self.current_path,
+                out_dir=out_dir, min_contour_area=self.cnt_threshold, kernel_size = self.kernel_size,                         slice_thickness=self.slice_thickness)
+            
+                if area is None:
+                    return
+
+                # record metrics (consistent with your global export; units in mm unless noted)
+                self._record_metric_for(
+                    self.current_path,
+                    kernel_size = self.kernel_size,
+                    dimensions = dims,
+                    unite = "cm",
+                    slice_thickness= self.slice_thickness,
+                    volume=volume,
+                    area=area,
+                    lgi=gi)
+                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+
+                mid = len(saved_pngs) // 2
+                self.on_slice_slider_changed(mid)
+                
+                print(f"[STL hallmarks]:")
+                print("STL mesh Volume Result = {volume:.2f} cm^3.")
+                print(f"STL mesh Outer Surface Area Result = {area:.2f} cm^2.")
+                print(f"STL mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
+                dt = time.time() - t0
+                print(f"[STL hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
+                      f"Use File → Save Data As… to copy outputs you want to keep.")
+
+            except Exception as ex:
+                print(f"[STL hallmarks] ERROR: {ex}")
+                QMessageBox.critical(self, "NIfTI Area Failed", f"{type(ex).__name__}: {ex}")
+            return
+            
             
     def on_measure_volumes(self):
         if not self.current_path or not os.path.isfile(self.current_path):
@@ -1427,8 +1474,6 @@ class MainWindow(QMainWindow):
 
             # Show it immediately
             self.load_stl(saved)                   # shows in VTK window
-            self._ensure_metric_row(saved, "stl")  # track result row, path = temp file
-            self.metrics[saved]["SourcePial"] = pial
             print("[Pial → STL] Hint: use File → Save Data As… to keep a permanent copy.")
         except Exception as ex:
             print(f"[Pial → STL] ERROR: {ex}")
@@ -1456,9 +1501,6 @@ class MainWindow(QMainWindow):
 
             # Show combined STL
             self.load_stl(saved)
-            self._ensure_metric_row(saved, "stl")
-            self.metrics[saved]["SourcePial_RH"] = rh
-            self.metrics[saved]["SourcePial_LH"] = lh
             print("[Combined STL] Combined STL loaded. Use File → Save Data As… to export.")
         except Exception as ex:
             print(f"[Combined STL] ERROR: {ex}")
@@ -1516,7 +1558,7 @@ class MainWindow(QMainWindow):
         self.pixel_size = scale
 
         # Track in metrics (so Excel shows context)
-        label_text = self.get_label_for_cropped_path(self.last_annotated_path)
+#        label_text = self.get_label_for_cropped_path(self.last_annotated_path)
 #        self._record_metric_for (self.current_path, label= label_text  ,pixel_size= scale, pixel_size_units=f"{unit}/pixel" )
 #        row = self._ensure_metric_row(self.current_path, self.current_kind)
 #        row = self.metrics[self.current_path]
@@ -1536,6 +1578,7 @@ class MainWindow(QMainWindow):
         print("[Scale] Draw a line over the scalebar: click, drag, release.")
         self.image_label.start_scalebar_measure(self._finish_scalebar_scale)
 
+            
     def _finish_scalebar_scale(self, pixel_length: float):
         """Called after the user drags a line; asks for real length & unit, computes px/unit."""
         try:
@@ -1567,6 +1610,13 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Set Scale Failed", f"{type(ex).__name__}: {ex}")
 
 
+    def set_slice_thickness_dialog(self):
+        """Open dialog to set slice khikcness (odd)."""
+        dlg = SilceThicknessDialog(self, initial=getattr(self, "slice_thickness", 0.5), maximum=(get_max_slice_thinckness(self.current_path)/2))
+        if dlg.exec() == QDialog.Accepted:
+            k = dlg.value()
+            self.slice_thickness = k
+            print(f"[Slice Thickness] Set Slice Thickness to {k}")
 
     def set_kernel_dialog(self):
         """Open dialog to set morphology kernel size (odd)."""
@@ -1778,6 +1828,8 @@ class MainWindow(QMainWindow):
             self.act_meas_volumes.setEnabled(True)
             self.act_meas_allmarks.setEnabled(True)
             self.act_nitfi2png.setEnabled(False)
+            
+            self.act_slice_thickness.setEnabled(True)
             self.nav_tb.hide()
 
             
@@ -1791,6 +1843,8 @@ class MainWindow(QMainWindow):
             self.act_choose_regions.setEnabled(True)
             self.label_overlay_enabled = True
             self.act_nitfi2png.setEnabled(True)
+            
+            self.act_slice_thickness.setEnabled(False)
             self.nav_tb.show()
 
         elif kind == "image":
@@ -1803,7 +1857,10 @@ class MainWindow(QMainWindow):
             self.act_meas_allmarks.setEnabled(True)
             self.act_annotate_square.setEnabled(True)
             self.act_nitfi2png.setEnabled(False)
+            
+            self.act_slice_thickness.setEnabled(False)
             self.nav_tb.hide()
+
 
 
     def enable_png_navigation(self, png_paths: list[str], slice_indices: list[int] | None = None, start_index: int | None = None):
@@ -1814,6 +1871,10 @@ class MainWindow(QMainWindow):
         self.slice_nav_items = list(png_paths)
         self.slice_nav_index_map = list(slice_indices) if slice_indices is not None else [None] * len(png_paths)
 
+        self.nav_tb.show()
+        self.slice_slider.setEnabled(True)
+        
+        
         self.slice_slider.blockSignals(True)
         self.slice_slider.setMinimum(0)
         self.slice_slider.setMaximum(len(self.slice_nav_items) - 1)
@@ -1829,7 +1890,7 @@ class MainWindow(QMainWindow):
         # Make sure the image pane is visible
         self._show_widget(self.image_label)
         self.view_mode.setEnabled(False)
-        self.orient_combo,setEnabled(False)
+        self.orient_combo.setEnabled(False)
 
     def reset_png_navigation(self):
         """Return the slider to normal NIfTI navigation."""
@@ -1843,7 +1904,7 @@ class MainWindow(QMainWindow):
             self.slice_slider.setMaximum(max(0, self.nifti_depth - 1))
             self.slice_slider.blockSignals(False)
             self.view_mode.setEnabled(True)
-            self.orient_combo,setEnabled(True)
+            self.orient_combo.setEnabled(True)
 
     def _dir_has_files(self, d: str) -> bool:
         if not d or not os.path.isdir(d):

@@ -1,5 +1,7 @@
 # helpers.py
 from deps import *
+import pyvista as pv
+
 
 def text_thickness(H, style="regular", cap=10):
     base_div = {"thin": 380, "regular": 320, "bold": 260}[style]  # ↑ bigger divisors = thinner
@@ -58,7 +60,7 @@ def contours_exclude(contours, excluded_space, image_shape):
             filtered.append(cnt)
     return filtered
     
-def clac_scale(image_rgb, cube_length_mm):
+def clac_scale(image_rgb, cube_length):
     """
     Compute mm-per-pixel from a red reference cube drawn in the render.
     cube_length_mm: the real cube side length (x_length) in mm.
@@ -67,11 +69,16 @@ def clac_scale(image_rgb, cube_length_mm):
     _, thresh_red = cv2.threshold(red_rect, 150, 255, 0)
     contours, _ = cv2.findContours(thresh_red, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        print("[STL lGI] No red reference contour found; default scale 1.0 mm/px")
+        print("[STL Scale] No red reference contour found; default scale 1.0 mm/px")
         return 1.0
     # Use the largest red blob as reference
     x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
-    return (cube_length_mm / float(w)) if w > 0 else 1.0
+    if float(w)>0:
+        scale = (cube_length/float(w))
+    else:
+        print("[STL Scale] Cup length error: cup length not found!")
+        return None
+    return scale
     
 def get_red_rect_offset(image_rgb):
     """
@@ -167,3 +174,18 @@ def add_scalebar(qimg: QImage, zooms, ax) -> QImage:
 
     painter.end()
     return qimg, mm_per_px, bar_mm
+
+
+def get_max_slice_thinckness(path: str):
+    
+    ext = Path(path).suffix.lower()
+    
+    if ext == ".stl":
+        mesh = pv.read(str(path))
+
+        # --- Bounds / dims (mm)
+        x_min, x_max, y_min, y_max, z_min, z_max = mesh.bounds
+        mesh_dim = [x_max - x_min, y_max - y_min, z_max - z_min]
+        return min(mesh_dim)
+    
+    else: return None

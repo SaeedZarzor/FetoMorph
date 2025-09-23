@@ -154,7 +154,7 @@ def compute_nifti_allmarks(file_path: str, out_dir: str, valid_labels: set[int],
                                 start = tuple(cnt[s][0])
                                 end = tuple(cnt[e][0])
                                 far = tuple(cnt[f][0])
-                                annotated = cv2.line(annotated, start, end, [255, 0, 0], 2)
+                                annotated = cv2.line(annotated, start, end, [255, 0, 0], 1)
                                 if d>256:
                                     if pixel_size_x!=pixel_size_z:
                                         mm_per_px, mm_per_fixed = defect_mm_per_px_and_fixed(start, end, far, pixel_size_x, pixel_size_z)
