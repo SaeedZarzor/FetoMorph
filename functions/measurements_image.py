@@ -2,7 +2,7 @@
 import cv2
 import numpy as np
 from typing import Tuple, Union
-from functions.Helpers import text_thickness, compute_kernel_convex
+from helpers.Helpers import text_thickness, compute_kernel_convex
 
 
 def measure_image_allmarks(

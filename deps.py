@@ -56,7 +56,7 @@ except Exception:
     nib = None
     
     
-import os, sys, math, tempfile, shutil, pathlib, uuid, time, shutil, re
+import os, sys, math, tempfile, shutil, pathlib, uuid, time, shutil, re, trimesh
 from datetime import datetime
 from typing import Optional, Tuple, List
 from pathlib import Path
@@ -102,6 +102,7 @@ __all__ = [
     "vtkSTLReader","vtkImageData","vtkPolyData","vtkDataSetSurfaceFilter","vtkOutputWindow",
     # Sci/IO
     "np","cv2","pd","os","sys","math","tempfile","shutil","pathlib","datetime","Optional","Tuple","Path","re", "List",
+    "trimesh",
     # helpers
     "qt_icon",
 ]

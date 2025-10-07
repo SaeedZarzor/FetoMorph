@@ -29,6 +29,7 @@ def set_icons(ui, assets: Path):
         "act_choose_regions":   "icons/labels.png",
         "act_show_results":     "icons/view_data.png",
         "act_set_custom_label": "icons/label.png",
+        "act_slice_thickness":  "icons/thickness.png",
     }
 
     for attr, rel in icons.items():

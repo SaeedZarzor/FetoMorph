@@ -1,0 +1,427 @@
+# measurements_stl.py
+from deps import *
+import pyvista as pv
+from helpers.Helpers import compute_kernel_convex, contours_exclude, clac_scale, get_red_rect_offset
+from helpers.check_mesh import check_brain
+
+# ----------------- main API -----------------
+def compute_stl_allmarks(
+    parent,
+    file_path: str,
+    out_dir: str,
+    min_contour_area: float = 20.0,
+    kernel_size: int = 5,
+    slice_thickness: float = 0.5):
+    # --- Load mesh
+    
+    dic = check_brain(file_path)
+    
+
+    if dic["label"] == "not_brain":
+        reply = QMessageBox.question(parent,"Check measurement",
+            "The imported mesh does not represent a human brain. Do you want to continue processing it?",   # message
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if reply == QMessageBox.No:
+            return dic["label"],[],0,0,0,[],[],[]
+        
+    mesh = pv.read(str(file_path))
+    print(f"[STL All Hallmarks] Loaded mesh: {mesh}")
+
+    # --- Bounds / dims (mm)
+    x_min, x_max, y_min, y_max, z_min, z_max = mesh.bounds
+    brain_dim = [x_max - x_min, y_max - y_min, z_max - z_min]
+    print(f"[STL All Hallmarks] Brain dimensions (mm): {brain_dim}")
+
+    brain_dim_cm = [dim/10 for dim in brain_dim]
+    brain_dim_cm = sorted(brain_dim_cm, reverse=True)
+    # --- Slice positions along Y
+    if slice_thickness <= 0:
+        slice_thickness = 0.5
+    slice_positions = np.arange(y_min, y_max, slice_thickness)
+    N = len(slice_positions)
+    if N == 0:
+        print("[STL All Hallmarks] No slices to process (thickness too large vs. Y range).")
+        return 0.0, [], []
+
+    # Effective thickness to exactly span Y-extent
+    slice_thickness_eff = brain_dim[1] / N
+    print(f"[STL All Hallmarks] Effective slice thickness (mm): {slice_thickness_eff}")
+
+    # --- Outputs
+    os.makedirs(out_dir, exist_ok=True)
+    out_dir_slices = os.path.join(out_dir, "stl_slices")
+    os.makedirs(out_dir_slices, exist_ok=True)
+    
+    out_dir_orgin = os.path.join(out_dir, "stl_orgin")
+    os.makedirs(out_dir_orgin, exist_ok=True)
+    
+    print(f"[STL All Hallmarks] Temp output dir: {out_dir}")
+
+    # --- Screenshot resolution via target mm/px spacing
+    pixel_spacing = 0.1  # mm per pixel
+    image_width = int(np.clip(np.ceil(brain_dim[0] / pixel_spacing), 64, 4096))
+    image_height = int(np.clip(np.ceil(brain_dim[2] / pixel_spacing), 64, 4096))
+    window_size = (image_width, image_height)
+
+    # --- Camera (look along +Y onto XZ)
+    center = [(x_min + x_max) / 2.0, (y_min + y_max) / 2.0, (z_min + z_max) / 2.0]
+    cam_position = [
+        (center[0], y_max + 100.0, center[2]),  # camera position
+        (center[0], center[1], center[2]),      # focal point
+        (0.0, 0.0, 1.0),                        # view up
+    ]
+
+    saved_pngs: list[str] = []
+    valid_slices: list[int] = []
+    rows = []
+    total_depth = []
+    sum_inner_mm = 0.0
+    sum_outer_mm = 0.0
+    sum_area = 0.0
+
+    # --- Use a context manager so the plotter is *guaranteed* to be closed safely
+    p = pv.Plotter(off_screen=True, window_size=window_size)
+    p.set_background("white")
+    p.camera_position = cam_position
+
+    for idx, y in enumerate(slice_positions):
+        # Cross-section slice
+        section = mesh.slice(normal=[0, 1, 0], origin=[0.0, float(y), 0.0])
+        if section.n_points == 0:
+            continue
+
+        # Red cube reference (10% of X extent)
+        cube_len = max(1e-6, brain_dim[1] / 10.0)
+        scale_cube = pv.Cube(x_length=cube_len, y_length=0.01, z_length=cube_len)
+        scale_cube.translate((50, 0, 50), inplace=True)
+
+        # Render: section + scale cube
+        p.clear()
+        p.add_mesh(scale_cube, color="red")
+        p.add_mesh(section, color="black")
+        p.view_xz()  # no .show()!
+
+        # Screenshot (array for processing, file for debugging)
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_orgin, f"image_{idx:03d}.png"))
+
+        # Compute mm/px scale from the red cube
+        mm_per_px = clac_scale(img_rgb, cube_len)
+
+
+        # Prepare masks / contours (pixel space)
+        bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        red_rect = np.where((img_rgb[:, :, 0] > 150) & (img_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
+
+        # Binary for contours
+        _, bw = cv2.threshold(gray, 200, 255, 1)
+        contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+
+        # Inner contours: exclude red ref + area filter
+        inner_candidates = contours_exclude(contours, red_rect, bw.shape)
+        inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+
+        # Outer contours via morph close, exclude red + area filter
+        kernel = compute_kernel_convex(max(1, int(kernel_size)))
+        closed = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel)
+        outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        outer_candidates = contours_exclude(outer_candidates, red_rect, bw.shape)
+        outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
+        cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), 1)
+
+        # Perimeters (mm)
+        area_perim_px  = sum(cv2.contourArea(c)     for c in inner_filtered)
+        inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
+        outer_perim_px = sum(cv2.arcLength(c, True) for c in outer_filtered)
+        inner_perim_mm = inner_perim_px * mm_per_px
+        outer_perim_mm = outer_perim_px * mm_per_px
+        area_perim_mm  = area_perim_px * (mm_per_px ** 2)
+
+
+        depth = []
+        if inner_filtered:
+            for cnt in inner_filtered:
+                hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)  # Compute convex hull
+                if hull is not None and np.all(np.diff(hull.ravel()) > 0) and len(hull) >= 3 and len(cnt) > 3:
+                    defects = cv2.convexityDefects(cnt, hull)
+                    if defects is not None:
+                        for i in range(defects.shape[0]):
+                            s, e, f, d = defects[i, 0]
+                            start = tuple(cnt[s][0])
+                            end = tuple(cnt[e][0])
+                            far = tuple(cnt[f][0])
+                            bgr = cv2.line(bgr, start, end, [255, 0, 0], 1)
+                            if d>256:
+                                mm_per_fixed = mm_per_px/256
+                                depth_mm = d *mm_per_fixed
+                                if depth_mm < (0.25* brain_dim[1]) and depth_mm > (0.005* brain_dim[1]):
+                                    bgr = cv2.circle(bgr, far, 2, [255, 255, 0], -1)
+                                    depth.append(depth_mm)
+                
+        mean_depth = (sum(depth)/len(depth)) if depth else None
+        total_depth.extend(depth)
+        rows.append([idx, area_perim_mm, inner_perim_mm, outer_perim_mm,
+            len(depth),                         # n_defects
+            (min(depth) if depth else None),    # min_depth_mm
+            (max(depth) if depth else None),    # max_depth_mm
+            mean_depth                          # mean_depth_mm
+            ])
+        # Accumulate
+        sum_inner_mm += inner_perim_mm
+        sum_outer_mm += outer_perim_mm
+        sum_area     += area_perim_mm
+#        GI_slice = (inner_perim_mm / outer_perim_mm) if outer_perim_mm > 0 else 0.0
+
+        # Save annotated slice
+        slice_path = os.path.join(out_dir_slices, f"slice_{idx:03d}.png")
+        cv2.imwrite(slice_path, bgr)
+        saved_pngs.append(slice_path)
+        valid_slices.append(idx)
+
+      
+    # ---- end with: plotter is fully and safely closed here ----
+
+    # Totals
+    brain_volume = (sum_area * slice_thickness_eff)/1000
+    Area = sum_inner_mm * slice_thickness_eff /100
+    GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
+    
+    total_depth = [x/10 for x in total_depth]
+    for i,v in enumerate(total_depth):
+        total_depth[i] = v/10
+    mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
+
+
+    # Save per-slice + total to Excel
+    try:
+        df = pd.DataFrame(rows, columns=["Slice", "Inner_area_mm^2", "Inner_Perimeter_mm", "Outer_Perimeter_mm" ,"Sulci_count",
+            "min_depth_mm", "max_dpeth_mm", "mean_depth_mm"])
+        
+        rows.append(["Volume cm^3",round(brain_volume,2), "Surface Area cm^2",round(Area,2)])
+        rows.append(["GI",round(GI_total,2)])
+        rows.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices_cm",(round(mean_total, 2) if mean_total is not None else None)])
+        rows.append(["Max_sulci_across_slices_cm",(round(max(total_depth),2) if total_depth else None),
+        "Min_sulci_across_slices_cm",(round(min(total_depth),2) if total_depth else None)])
+        
+        xlsx_path = os.path.join(out_dir, "Mesh_Allmarks.xlsx")
+        df.to_excel(xlsx_path, index=False)
+        print(f"[STL All Hallmarks] Saved Excel → {xlsx_path}")
+    except Exception as ex:
+        print(f"[STL All Hallmarks] WARN: could not save Excel: {ex}")
+
+
+    # Always return a 3-tuple
+    return dic["label"], brain_dim_cm, Area, brain_volume, GI_total, total_depth ,saved_pngs, valid_slices
+
+
+
+# ----------------- main API -----------------
+def compute_stl_lGI(
+    parent,
+    file_path: str,
+    out_dir: str,
+    min_contour_area: float = 20.0,
+    kernel_size: int = 5,
+    slice_thickness: float = 0.5,
+    build_solid: bool = False,  # set True if you want the extruded solid (may be crashy on some macOS stacks)
+):
+    """
+    Compute a slice-based LGI proxy from an STL surface using off-screen PyVista rendering.
+
+    Returns:
+        GI_total (float), saved_pngs (list[str]), valid_slices (list[int])
+    """
+    
+    dic = check_brain(file_path)
+    
+
+    if dic["label"] == "not_brain":
+        reply = QMessageBox.question(parent,"Check measurement",
+            "The imported mesh does not represent a human brain. Do you want to continue processing it?",   # message
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if reply == QMessageBox.No:
+            return dic["label"],[],0,[],[]
+    # --- Load mesh
+    mesh = pv.read(str(file_path))
+    print(f"[STL lGI] Loaded mesh: {mesh}")
+
+    # --- Bounds / dims (mm)
+    x_min, x_max, y_min, y_max, z_min, z_max = mesh.bounds
+    brain_dim = [x_max - x_min, y_max - y_min, z_max - z_min]
+    brain_dim_cm = [dim/10 for dim in brain_dim]
+    print(f"[STL lGI] Brain dimensions (mm): {brain_dim}")
+
+    # --- Slice positions along Y
+    if slice_thickness <= 0:
+        slice_thickness = 0.5
+    slice_positions = np.arange(y_min, y_max, slice_thickness)
+    N = len(slice_positions)
+    if N == 0:
+        print("[STL lGI] No slices to process (thickness too large vs. Y range).")
+        return 0.0, [], []
+
+    # Effective thickness to exactly span Y-extent
+    slice_thickness_eff = brain_dim[1] / N
+    print(f"[STL lGI] Effective slice thickness (mm): {slice_thickness_eff}")
+
+    # --- Outputs
+    os.makedirs(out_dir, exist_ok=True)
+    out_dir_slices = os.path.join(out_dir, "stl_slices")
+    os.makedirs(out_dir_slices, exist_ok=True)
+    
+    out_dir_orgin = os.path.join(out_dir, "stl_orgin")
+    os.makedirs(out_dir_orgin, exist_ok=True)
+
+    print(f"[STL lGI] Temp output dir: {out_dir}")
+
+    # --- Screenshot resolution via target mm/px spacing
+    pixel_spacing = 0.1  # mm per pixel
+    image_width = int(np.clip(np.ceil(brain_dim[0] / pixel_spacing), 64, 4096))
+    image_height = int(np.clip(np.ceil(brain_dim[2] / pixel_spacing), 64, 4096))
+    window_size = (image_width, image_height)
+
+    # --- Camera (look along +Y onto XZ)
+    center = [(x_min + x_max) / 2.0, (y_min + y_max) / 2.0, (z_min + z_max) / 2.0]
+    cam_position = [
+        (center[0], y_max + 100.0, center[2]),  # camera position
+        (center[0], center[1], center[2]),      # focal point
+        (0.0, 0.0, 1.0),                        # view up
+    ]
+
+    saved_pngs: list[str] = []
+    valid_slices: list[int] = []
+    rows = []
+    all_3d_contours = []
+    sum_inner_mm = 0.0
+    sum_outer_mm = 0.0
+
+    # --- Use a context manager so the plotter is *guaranteed* to be closed safely
+    p = pv.Plotter(off_screen=True, window_size=window_size)
+    p.set_background("white")
+    p.camera_position = cam_position
+
+    for idx, y in enumerate(slice_positions):
+        # Cross-section slice
+        section = mesh.slice(normal=[0, 1, 0], origin=[0.0, float(y), 0.0])
+        if section.n_points == 0:
+            continue
+
+        # Red cube reference (10% of X extent)
+        cube_len = max(1e-6, brain_dim[0] / 10.0)
+        scale_cube = pv.Cube(x_length=cube_len, y_length=0.01, z_length=cube_len)
+        scale_cube.translate((50, 0, 50), inplace=True)
+
+        # Render: section + scale cube
+        p.clear()
+        p.add_mesh(scale_cube, color="red")
+        p.add_mesh(section, color="black")
+        p.view_xz()  # no .show()!
+
+        # Screenshot (array for processing, file for debugging)
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_orgin, f"image_{idx:03d}.png"))
+
+        # Compute mm/px scale from the red cube
+        mm_per_px = clac_scale(img_rgb, cube_len)
+
+
+        # Prepare masks / contours (pixel space)
+        bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        red_rect = np.where((img_rgb[:, :, 0] > 150) & (img_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
+
+        # Binary for contours
+        _, bw = cv2.threshold(gray, 200, 255, 1)
+        contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+
+        # Inner contours: exclude red ref + area filter
+        inner_candidates = contours_exclude(contours, red_rect, bw.shape)
+        inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+
+        # Outer contours via morph close, exclude red + area filter
+        kernel = compute_kernel_convex(max(1, int(kernel_size)))
+        closed = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel)
+        outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        outer_candidates = contours_exclude(outer_candidates, red_rect, bw.shape)
+        outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
+        cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), 1)
+
+        # Perimeters (mm)
+        inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
+        outer_perim_px = sum(cv2.arcLength(c, True) for c in outer_filtered)
+        inner_perim_mm = inner_perim_px * mm_per_px
+        outer_perim_mm = outer_perim_px * mm_per_px
+
+        # Accumulate
+        sum_inner_mm += inner_perim_mm
+        sum_outer_mm += outer_perim_mm
+        GI_slice = (inner_perim_mm / outer_perim_mm) if outer_perim_mm > 0 else 0.0
+        rows.append([idx, inner_perim_mm, outer_perim_mm, GI_slice])
+
+        # Save annotated slice
+        slice_path = os.path.join(out_dir_slices, f"slice_{idx:03d}.png")
+        cv2.imwrite(slice_path, bgr)
+        saved_pngs.append(slice_path)
+        valid_slices.append(idx)
+
+            # Store 3D outer contours in mm coords for optional solid build
+        if build_solid and outer_filtered:
+            offset_2d = get_red_rect_offset(img_rgb)  # center of red cube in px
+            for cnt in outer_filtered:
+                pts = cnt.squeeze()
+                if pts.ndim != 2 or pts.shape[0] < 3:
+                    continue
+                # XZ from pixels -> mm; Y from slice index
+                aligned = pts - offset_2d
+                cnt_3d = np.column_stack([
+                    aligned[:, 0] * mm_per_px,                       # X
+                    np.full((pts.shape[0],), idx * slice_thickness_eff),  # Y
+                    aligned[:, 1] * mm_per_px,                       # Z
+                ])
+                all_3d_contours.append(cnt_3d)
+
+    # ---- end with: plotter is fully and safely closed here ----
+
+    # Totals
+    GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
+    print(f"[STL lGI] GI_total = {GI_total:.6f}")
+
+    # Save per-slice + total to Excel
+    try:
+        df = pd.DataFrame(rows, columns=["Slice", "Inner_Perimeter_mm", "Outer_Perimeter_mm", "GI"])
+        df.loc[len(df)] = ["GI", round(GI_total, 3), None, None]
+        xlsx_path = os.path.join(out_dir, "STL_lGI.xlsx")
+        df.to_excel(xlsx_path, index=False)
+        print(f"[STL lGI] Saved Excel → {xlsx_path}")
+    except Exception as ex:
+        print(f"[STL lGI] WARN: could not save Excel: {ex}")
+
+    # Optional: build extruded solid (can be fragile on some macOS OpenGL stacks)
+    if build_solid and all_3d_contours:
+        try:
+            solids = []
+            for cnt in all_3d_contours:
+                if cnt.shape[0] < 3:
+                    continue
+                n = cnt.shape[0]
+                faces = np.hstack(([n], np.arange(n, dtype=np.int64))).astype(np.int64)
+                surf = pv.PolyData(cnt, faces=faces).triangulate()
+                extruded = surf.extrude([0, slice_thickness_eff, 0], capping=True)
+                solids.append(extruded)
+            if solids:
+                merged = solids[0].copy()
+                for part in solids[1:]:
+                    merged = merged.merge(part)
+                solid_path = os.path.join(out_dir, "solid_volume_convex.stl")
+                merged.save(solid_path)
+                print(f"[STL lGI] Saved extruded solid → {solid_path}")
+        except Exception as ex:
+            print(f"[STL lGI] NOTE: solid build skipped: {ex}")
+
+    # Always return a 3-tuple
+    return dic["label"], brain_dim_cm, float(GI_total), saved_pngs, valid_slices

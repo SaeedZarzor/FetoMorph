@@ -1,7 +1,7 @@
 from deps import *
 import nibabel as nib
 from scipy.ndimage import binary_opening, binary_closing, label
-from functions.Helpers import compute_kernel_convex, defect_mm_per_px_and_fixed
+from helpers.Helpers import compute_kernel_convex, defect_mm_per_px_and_fixed
 from nibabel.affines import apply_affine
 
 
@@ -48,7 +48,7 @@ def compute_nifti_dims(brain_mask: np.ndarray, affine: np.ndarray):
 
 
 
-def compute_nifti_allmarks(file_path: str, out_dir: str, valid_labels: set[int],min_contour_area: float=30, kernel_size: int=5, ):
+def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: set[int],min_contour_area: float=30, kernel_size: int=5, ):
     nifti_img = nib.load(file_path)
     nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
@@ -86,7 +86,7 @@ def compute_nifti_allmarks(file_path: str, out_dir: str, valid_labels: set[int],
     dims = compute_nifti_dims(brain_mask,affine)
     brain_slices = np.where(np.any(brain_mask, axis=(0, 2)))[0]
     if brain_slices.size == 0:
-        QMessageBox.information(self, "[NIfTI All hallmarks]", "No slices contain the selected mask.")
+        QMessageBox.information(parent, "[NIfTI All hallmarks]", "No slices contain the selected mask.")
         return
         
    
@@ -163,7 +163,7 @@ def compute_nifti_allmarks(file_path: str, out_dir: str, valid_labels: set[int],
 
                                     depth_mm = d *mm_per_fixed
                                     
-                                    if depth_mm < (0.25* dims[2]*10):
+                                    if depth_mm < (0.25* dims[2]*10)  and depth_mm > (0.005* dims[2]*10):
                                         annotated = cv2.circle(annotated, far, 2, [255, 255, 0], -1)
                                         depth.append(depth_mm)
                 
@@ -214,12 +214,12 @@ def compute_nifti_allmarks(file_path: str, out_dir: str, valid_labels: set[int],
         return dims, Area, brain_volume, GI_total, total_depth ,saved_pngs, valid_slices
 
     else:
-        QMessageBox.information(self, "[NIfTI All hallmarks]", "All slices were filtered out (too small).")
+        QMessageBox.information(parent, "[NIfTI All hallmarks]", "All slices were filtered out (too small).")
         return
 
 
 
-def compute_nifti_volume(file_path: str, out_dir: str, valid_labels: set[int]):
+def compute_nifti_volume(parent, file_path: str, out_dir: str, valid_labels: set[int]):
 
 
     nifti_img = nib.load(file_path)
@@ -264,7 +264,7 @@ def compute_nifti_volume(file_path: str, out_dir: str, valid_labels: set[int]):
 
     brain_slices = np.where(np.any(brain_mask, axis=(0, 2)))[0]
     if brain_slices.size == 0:
-        QMessageBox.information(self, "[NIfTI Volume]", "No slices contain the selected mask.")
+        QMessageBox.information(parent, "[NIfTI Volume]", "No slices contain the selected mask.")
         return
         
    
@@ -329,13 +329,13 @@ def compute_nifti_volume(file_path: str, out_dir: str, valid_labels: set[int]):
         return dims, brain_volume, saved_pngs, valid_slices
 
     else:
-        QMessageBox.information(self, "[NIfTI Volume]", "All slices were filtered out (too small).")
+        QMessageBox.information(parent, "[NIfTI Volume]", "All slices were filtered out (too small).")
         return
 
 
 
 
-def compute_nifti_arae(file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30,):
+def compute_nifti_arae(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30,):
 
 
     nifti_img = nib.load(file_path)
@@ -375,7 +375,7 @@ def compute_nifti_arae(file_path: str, out_dir: str,  valid_labels: set[int], mi
 
     brain_slices = np.where(np.any(brain_mask, axis=(0, 2)))[0]
     if brain_slices.size == 0:
-        QMessageBox.information(self, "[NIfTI Area]", "No slices contain the selected mask.")
+        QMessageBox.information(parent, "[NIfTI Area]", "No slices contain the selected mask.")
         return
         
    
@@ -448,12 +448,12 @@ def compute_nifti_arae(file_path: str, out_dir: str,  valid_labels: set[int], mi
         return dims,Area, saved_pngs, valid_slices
 
     else:
-        QMessageBox.information(self, "[NIfTI Area]", "All slices were filtered out (too small).")
+        QMessageBox.information(parent, "[NIfTI Area]", "All slices were filtered out (too small).")
         return
     
     
 
-def compute_nifti_lGI(file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30, kernel_size: int=5):
+def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30, kernel_size: int=5):
     nifti_img = nib.load(file_path)
     nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
@@ -490,7 +490,7 @@ def compute_nifti_lGI(file_path: str, out_dir: str,  valid_labels: set[int], min
 
     brain_slices = np.where(np.any(brain_mask, axis=(0, 2)))[0]
     if brain_slices.size == 0:
-        QMessageBox.information(self, "[NIfTI lGI]", "No slices contain the selected mask.")
+        QMessageBox.information(parent, "[NIfTI lGI]", "No slices contain the selected mask.")
         return
         
    
@@ -598,12 +598,12 @@ def compute_nifti_lGI(file_path: str, out_dir: str,  valid_labels: set[int], min
         return GI_total, saved_pngs, valid_slices
 
     else:
-        QMessageBox.information(self, "[NIfTI lGI]", "All slices were filtered out (too small).")
+        QMessageBox.information(parent, "[NIfTI lGI]", "All slices were filtered out (too small).")
         return
 
 
         
-def compute_nifti_sulci_depth(file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30,):
+def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30,):
     nifti_img = nib.load(file_path)
     nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
@@ -641,7 +641,7 @@ def compute_nifti_sulci_depth(file_path: str, out_dir: str,  valid_labels: set[i
 
     brain_slices = np.where(np.any(brain_mask, axis=(0, 2)))[0]
     if brain_slices.size == 0:
-        QMessageBox.information(self, "[NIfTI Sulci depth]", "No slices contain the selected mask.")
+        QMessageBox.information(parent, "[NIfTI Sulci depth]", "No slices contain the selected mask.")
         return
         
    
@@ -701,7 +701,7 @@ def compute_nifti_sulci_depth(file_path: str, out_dir: str,  valid_labels: set[i
 
                                     depth_mm = d *mm_per_fixed
                                     
-                                    if depth_mm < (0.25* dims[2]*10):
+                                    if depth_mm < (0.25* dims[2]*10)  and depth_mm > (0.005* dims[2]*10):
                                         annotated = cv2.circle(annotated, far, 2, [255, 255, 0], -1)
                                         depth.append(depth_mm)
                                         
@@ -745,7 +745,7 @@ def compute_nifti_sulci_depth(file_path: str, out_dir: str,  valid_labels: set[i
         return  dims, total_depth, saved_pngs, valid_slices
 
     else:
-        QMessageBox.information(self, "[NIfTI Sulci depth]", "All slices were filtered out (too small).")
+        QMessageBox.information(parent, "[NIfTI Sulci depth]", "All slices were filtered out (too small).")
         return
 
 

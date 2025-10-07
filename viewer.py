@@ -1,13 +1,10 @@
 from deps import *
-
-# ---- Measurements (your OpenCV routine, now pure) ----
 from functions.measurements_image import *
-from functions.pial_to_stl import *
 from functions.measurements_Nifti import *
-from functions.Fetal_brain_GI_stl import compute_stl_lGI
-from functions.Helpers import get_nifti_present_labels, add_scalebar, get_max_slice_thinckness
+from functions.measurements_stl import *
+from functions.pial_to_stl import *
 from functions.Nifti2image import nifti_slice_to_image
-from functions.Fetal_brain_stl import *
+from helpers.Helpers import get_nifti_present_labels, add_scalebar, get_max_slice_thinckness
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.Contour_threshold import ContourThresholdDialog
 from widgets.Scalebar_set_scale import ScalebarSetScaleDialog
@@ -20,7 +17,6 @@ from widgets.Recent_paths import RecentPaths, populate_recent_menu
 from widgets.RegionDock import *
 from ribbon import *
 from icons import set_icons
-
 
 
 # ---------------------------
@@ -512,6 +508,7 @@ class MainWindow(QMainWindow):
         kind: Optional[str],
         label: Optional[str] = None,
         annotation:Optional[str] = None,
+        source: Optional[str] = None,
         *,
         pixel_size: Optional[float] = None,
         pixel_size_units: Optional[str] = None,
@@ -572,6 +569,7 @@ class MainWindow(QMainWindow):
                 "Kind": kind,
                 "Label": label,
                 "Annotation": annotation,
+                "Source": source,
                 "Area": None,
                 "PixelSize":       pixel_size if pixel_size is not None else (last.get("PixelSize") if last else None),
                 "PixelSizeUnits":  pixel_size_units if pixel_size_units is not None else (last.get("PixelSizeUnits") if last else None),
@@ -612,7 +610,7 @@ class MainWindow(QMainWindow):
         return last
 
         
-    def _record_metric_for(self, path: str, annotation: Optional[str] = None ,**vals):
+    def _record_metric_for(self, path: str, annotation: Optional[str] = None, source: Optional[str] = None, **vals):
         if not path:
             return
         kind = getattr(self, "current_kind", None)
@@ -625,7 +623,7 @@ class MainWindow(QMainWindow):
         thicsl = vals.pop("slice_thickness", None)
         uni = vals.pop("unite", None)
         row = self._ensure_metric_row(
-            path, kind, label, annotation,
+            path, kind, label, annotation, source,
             pixel_size=psize,
             pixel_size_units=punit,
             kernel_size=ksize,
@@ -688,12 +686,14 @@ class MainWindow(QMainWindow):
             elif ext == ".vtk":
                 self.load_vtk(path)
                 print(f"Importing VTK: {path}")
-            elif ext == ".nii" or ext == ".nii.gz":
+            elif ext == ".nii" or ext == ".gz":
                 self.load_nifti(path)
                 print(f"Importing NIfTI: {path}")
             elif ext == ".stl":
                 self.load_stl(path)
                 print(f"Importing STL: {path}")
+            else:
+                print("The file type unknown")
            
             self.last_dir = os.path.dirname(path) or self.last_dir
         except Exception as e:
@@ -774,8 +774,8 @@ class MainWindow(QMainWindow):
         # Define columns in the order you want them in Excel
         base_cols = ["File", "Kind"]
         metric_cols = [
-            "Label", "Annotation",
-            "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit",
+            "Label", "Annotation", "Source",
+            "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit", "SliceThickness",
             "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "MinDepth", "MaxDpeth","MeanDepth",
@@ -815,7 +815,7 @@ class MainWindow(QMainWindow):
         # Keep only rows that have at least one *real* metric filled in
         # (exclude Label and PixelSizeUnits; keep PixelSize/KernelSize and numeric metrics)
         real_metric_cols = [
-            "PixelSize", "KernelSize", "LengthUnit",
+            "PixelSize", "KernelSize", "SliceThickness",
             "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "MinDepth", "MaxDpeth","MeanDepth",
@@ -829,7 +829,7 @@ class MainWindow(QMainWindow):
             return
 
         # Drop metric columns that are entirely empty across remaining rows
-        drop_all_null = [c for c in real_metric_cols + ["Label", "PixelSizeUnits"] if c in df.columns and df[c].isna().all()]
+        drop_all_null = [c for c in real_metric_cols + ["Label", "Annotation", "Source","LengthUnit","PixelSizeUnits"] if c in df.columns and df[c].isna().all()]
         if drop_all_null:
             df.drop(columns=drop_all_null, inplace=True)
 
@@ -947,7 +947,7 @@ class MainWindow(QMainWindow):
                 self.current_output_dir = out_dir
                 
                 labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
-                dims, area, volume, gi, depth, saved_pngs, valid_slices = compute_nifti_allmarks(file_path=nif_path,
+                dims, area, volume, gi, depth, saved_pngs, valid_slices = compute_nifti_allmarks(self, file_path=nif_path,
                 out_dir=out_dir,valid_labels = labels, min_contour_area=self.cnt_threshold, kernel_size = self.kernel_size)
             
                 if area is None:
@@ -990,21 +990,26 @@ class MainWindow(QMainWindow):
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
-                dims, area, volume, gi, saved_pngs, valid_slices = compute_stl_allmarks(file_path=self.current_path,
-                out_dir=out_dir, min_contour_area=self.cnt_threshold, kernel_size = self.kernel_size,                         slice_thickness=self.slice_thickness)
+                source_label, dims, area, volume, gi, depth, saved_pngs, valid_slices = compute_stl_allmarks(self, file_path=self.current_path,     out_dir=out_dir, min_contour_area=self.cnt_threshold,
+                kernel_size = self.kernel_size, slice_thickness=self.slice_thickness)
             
-                if area is None:
+                if source_label == "not_brain":
+                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
+                    return
+                elif area is None:
                     return
 
                 # record metrics (consistent with your global export; units in mm unless noted)
                 self._record_metric_for(
                     self.current_path,
+                    source = source_label,
                     kernel_size = self.kernel_size,
                     dimensions = dims,
                     unite = "cm",
                     slice_thickness= self.slice_thickness,
                     volume=volume,
                     area=area,
+                    sulci_depth = depth,
                     lgi=gi)
                 self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
 
@@ -1015,13 +1020,15 @@ class MainWindow(QMainWindow):
                 print("STL mesh Volume Result = {volume:.2f} cm^3.")
                 print(f"STL mesh Outer Surface Area Result = {area:.2f} cm^2.")
                 print(f"STL mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
+                print(f"The Maximum Grooves Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} cm.")
+
                 dt = time.time() - t0
                 print(f"[STL hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
                 print(f"[STL hallmarks] ERROR: {ex}")
-                QMessageBox.critical(self, "NIfTI Area Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self, "STL Area Failed", f"{type(ex).__name__}: {ex}")
             return
             
             
@@ -1045,7 +1052,7 @@ class MainWindow(QMainWindow):
                 self.current_output_dir = out_dir
                 labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
 
-                dims, volume,saved_pngs, valid_slices = compute_nifti_volume(file_path=nif_path, out_dir=out_dir, valid_labels = labels)
+                dims, volume,saved_pngs, valid_slices = compute_nifti_volume(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels)
             
                 if volume is None:
                     return
@@ -1196,7 +1203,7 @@ class MainWindow(QMainWindow):
                     self.current_output_dir = out_dir
                     labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
 
-                    lGI,saved_pngs, valid_slices = compute_nifti_lGI(file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold, kernel_size= self.kernel_size,)
+                    lGI,saved_pngs, valid_slices = compute_nifti_lGI(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold, kernel_size= self.kernel_size,)
                 
                     if lGI is None:
                         return
@@ -1234,9 +1241,10 @@ class MainWindow(QMainWindow):
                     
                     self.current_output_dir = out_dir
                     lGI,saved_pngs, valid_slices =compute_stl_lGI(
+                        self,
                         file_path=stl_path,
                         out_dir=out_dir,
-                        cnt_threshold=self.cnt_threshold,
+                        min_contour_area=self.cnt_threshold,
                         kernel_size=self.kernel_size,
                         slice_thickness=self.slice_thickness,
                         build_solid=False,   # keep False for stability
@@ -1265,9 +1273,53 @@ class MainWindow(QMainWindow):
                     print(f"[STL lGI] ERROR: {ex}")
                     QMessageBox.critical(self, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
                 return
+                
+        elif self.current_kind == "stl":
+        
+            t0 = time.time()
+            try:
+                uid = uuid.uuid4().hex[:8]
+                out_dir = os.path.join(self.temp_dir, f"STL_allmarks_{uid}")
+                os.makedirs(out_dir, exist_ok=True)
+                
+                self.current_output_dir = out_dir
+                source_label, dims, gi, saved_pngs, valid_slices = compute_stl_lGI(self, file_path=self.current_path,     out_dir=out_dir, min_contour_area=self.cnt_threshold,
+                kernel_size = self.kernel_size, slice_thickness=self.slice_thickness)
+            
+                if source_label == "not_brain":
+                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
+                    return
+                elif gi is None:
+                    return
+
+                # record metrics (consistent with your global export; units in mm unless noted)
+                self._record_metric_for(
+                    self.current_path,
+                    source = source_label,
+                    kernel_size = self.kernel_size,
+                    dimensions = dims,
+                    unite = "cm",
+                    slice_thickness= self.slice_thickness,
+                    lgi=gi)
+                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+
+                mid = len(saved_pngs) // 2
+                self.on_slice_slider_changed(mid)
+                
+                print(f"[STL lGI]:")
+                print(f"STL mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
+
+                dt = time.time() - t0
+                print(f"[STL lGI] Done in {dt:.2f}s. Results live in TEMP.\n"
+                      f"Use File → Save Data As… to copy outputs you want to keep.")
+
+            except Exception as ex:
+                print(f"[STL lGI] ERROR: {ex}")
+                QMessageBox.critical(self, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
+            return
             
         else:
-            print("[lGI] Unsupported current kind. Open an image or NIfTI first.")
+            print("[lGI] Unsupported current kind. Open an image, NIfTI or STL file.")
 
             
         
@@ -1336,7 +1388,7 @@ class MainWindow(QMainWindow):
                 self.current_output_dir = out_dir
                 labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
 
-                dims, depth,saved_pngs, valid_slices = compute_nifti_sulci_depth(file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold)
+                dims, depth,saved_pngs, valid_slices = compute_nifti_sulci_depth(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold)
             
                 if depth is None:
                     return
@@ -1426,7 +1478,7 @@ class MainWindow(QMainWindow):
                 self.current_output_dir = out_dir
                 labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
 
-                dims, area,saved_pngs, valid_slices = compute_nifti_arae(file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold,)
+                dims, area,saved_pngs, valid_slices = compute_nifti_arae(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold,)
             
                 if area == 0:
                     QMessageBox.information(self, "NIfTI Area", "All slices were filtered out (too small).")
@@ -1972,12 +2024,15 @@ class MainWindow(QMainWindow):
 #                    self._nifti_set_orientation(axis_name)
 
             elif kind in ("stl", "vtk", "vtk_poly", "vtk_surface"):
+            
                 # You usually don't need to re-read the mesh to "reset view".
                 # Just reset the camera. If you do want to re-read, call your existing loader here.
-                if hasattr(self, "_vtk_view_isometric"):
-                    self._vtk_view_isometric()
-                elif hasattr(self, "_vtk_set_view"):
-                    self._vtk_set_view("coronal", flip=False, ortho=True)
+                r = vtkSTLReader(); r.SetFileName(path); r.Update(); poly = r.GetOutput()
+                self.vtk_view.show_polydata(poly); self._show_widget(self.vtk_view); self._set_slice_controls(False)
+#                if hasattr(self, "_vtk_view_isometric"):
+#                    self._vtk_view_isometric()
+#                elif hasattr(self, "_vtk_set_view"):
+#                    self._vtk_set_view("coronal", flip=False, ortho=True)
 
             # If any PNG navigation mode is on, turn it off
             if hasattr(self, "disable_png_navigation"):
@@ -2324,8 +2379,8 @@ class MainWindow(QMainWindow):
     def _metrics_headers(self):
         # Adjust/extend columns as you like; keys should match your records
         return [
-            "File", "Kind", "Label", "Annotation",
-            "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit",
+            "File", "Kind", "Label", "Annotation", "Source",
+            "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit", "SliceThickness",
             "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "MinDepth", "MaxDpeth","MeanDepth",
