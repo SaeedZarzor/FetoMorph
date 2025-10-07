@@ -979,7 +979,7 @@ class MainWindow(QMainWindow):
 
             except Exception as ex:
                 print(f"[NIfTI hallmarks] ERROR: {ex}")
-                QMessageBox.critical(self, "NIfTI Area Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self, "NIfTI All hallmarks Failed", f"{type(ex).__name__}: {ex}")
             return
             
         elif self.current_kind == "stl":
@@ -1074,9 +1074,48 @@ class MainWindow(QMainWindow):
                 print(f"ERROR (NIfTI Volume): {ex}")
                 QMessageBox.critical(self, "NIfTI Volume Failed", f"{type(ex).__name__}: {ex}")
             return
+        elif self.current_kind == "stl":
+            t0 = time.time()
+            try:
+                uid = uuid.uuid4().hex[:8]
+                out_dir = os.path.join(self.temp_dir, f"STL_volume_{uid}")
+                os.makedirs(out_dir, exist_ok=True)
+                
+                self.current_output_dir = out_dir
+                source_label, dims,volume, saved_pngs, valid_slices = compute_stl_volume(self, file_path=self.current_path,     out_dir=out_dir, min_contour_area=self.cnt_threshold, slice_thickness=self.slice_thickness)
+            
+                if source_label == "not_brain":
+                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
+                    return
+                elif volume is None:
+                    return
+
+                # record metrics (consistent with your global export; units in mm unless noted)
+                self._record_metric_for(
+                    self.current_path,
+                    source = source_label,
+                    dimensions = dims,
+                    unite = "cm",
+                    volume=volume)
+                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+
+                mid = len(saved_pngs) // 2
+                self.on_slice_slider_changed(mid)
+                
+                print("STL mesh Volume Result = {volume:.2f} cm^3.")
+
+
+                dt = time.time() - t0
+                print(f"[STL Volume] Done in {dt:.2f}s. Results live in TEMP.\n"
+                      f"Use File → Save Data As… to copy outputs you want to keep.")
+
+            except Exception as ex:
+                print(f"[STL Volume] ERROR: {ex}")
+                QMessageBox.critical(self, "STL Volume Failed", f"{type(ex).__name__}: {ex}")
+            return
         
         else:
-            print("[Volume] Unsupported current kind. Open an image or NIfTI first.")
+            print("[Volume] Unsupported current kind. Open an image, NIfTI or STL file.")
 
     
     def on_measure_perimeter(self):
@@ -1279,7 +1318,7 @@ class MainWindow(QMainWindow):
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"STL_allmarks_{uid}")
+                out_dir = os.path.join(self.temp_dir, f"STL_lgi_{uid}")
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
@@ -1306,7 +1345,6 @@ class MainWindow(QMainWindow):
                 mid = len(saved_pngs) // 2
                 self.on_slice_slider_changed(mid)
                 
-                print(f"[STL lGI]:")
                 print(f"STL mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
 
                 dt = time.time() - t0
@@ -1410,12 +1448,46 @@ class MainWindow(QMainWindow):
                 print(f"[NIfTI Sulci depth] ERROR: {ex}")
                 QMessageBox.critical(self, "NIfTI Sulci depth Failed", f"{type(ex).__name__}: {ex}")
             return
+            
+        elif self.current_kind == "stl":
+            t0 = time.time()
+            try:
+                uid = uuid.uuid4().hex[:8]
+                out_dir = os.path.join(self.temp_dir, f"STL_sulic_depth_{uid}")
+                os.makedirs(out_dir, exist_ok=True)
+                
+                self.current_output_dir = out_dir
+                source_label, dims, depth, saved_pngs, valid_slices = compute_stl_sulci_depth (self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold, slice_thickness=self.slice_thickness)
+            
+                if source_label == "not_brain":
+                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
+                    return
+                elif depth is None:
+                    return
+
+                # record metrics (consistent with your global export; units in mm unless noted)
+                self._record_metric_for(self.current_path, source = source_label,
+                    dimensions = dims,unite ="mm", sulci_depth = depth)
+
+                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+                
+                mid = len(saved_pngs) // 2
+                self.on_slice_slider_changed(mid)
+                
+                print(f"[STL Sulci depth] The max Brain Sulci depth across slices = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f}. mm")
+                dt = time.time() - t0
+                print(f"[STL Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
+                      f"Use File → Save Data As… to copy outputs you want to keep.")
+
+            except Exception as ex:
+                print(f"[STL Sulci depth] ERROR: {ex}")
+                QMessageBox.critical(self, "STL Sulci depth Failed", f"{type(ex).__name__}: {ex}")
+            return
         else:
             print("[Sulci depth] Unsupported current kind. Open an image or NIfTI first.")
 
             
             
-    
     def on_measure_area(self):
         """Process → Measures → Area: compute and show annotated result WITHOUT saving."""
         if self.current_kind == "image":
@@ -1501,9 +1573,49 @@ class MainWindow(QMainWindow):
                 print(f"[NIfTI Area] ERROR: {ex}")
                 QMessageBox.critical(self, "[NIfTI Area] Failed", f"{type(ex).__name__}: {ex}")
             return
+            
+        elif self.current_kind == "stl":
+            t0 = time.time()
+            try:
+                uid = uuid.uuid4().hex[:8]
+                out_dir = os.path.join(self.temp_dir, f"STL_area_{uid}")
+                os.makedirs(out_dir, exist_ok=True)
+                
+                self.current_output_dir = out_dir
+                source_label, dims,area, saved_pngs, valid_slices = compute_stl_area(self, file_path=self.current_path,     out_dir=out_dir, min_contour_area=self.cnt_threshold, slice_thickness=self.slice_thickness)
+            
+                if source_label == "not_brain":
+                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
+                    return
+                elif area is None:
+                    return
+
+                # record metrics (consistent with your global export; units in mm unless noted)
+                self._record_metric_for(
+                    self.current_path,
+                    source = source_label,
+                    dimensions = dims,
+                    unite = "cm",
+                    area=area)
+                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+
+                mid = len(saved_pngs) // 2
+                self.on_slice_slider_changed(mid)
+                
+                print("STL mesh Area Result = {area:.2f} cm^2.")
+
+
+                dt = time.time() - t0
+                print(f"[STL Area] Done in {dt:.2f}s. Results live in TEMP.\n"
+                      f"Use File → Save Data As… to copy outputs you want to keep.")
+
+            except Exception as ex:
+                print(f"[STL Area] ERROR: {ex}")
+                QMessageBox.critical(self, "STL Area Failed", f"{type(ex).__name__}: {ex}")
+            return
 
         else:
-            print("[Area] Unsupported current kind. Open an image or NIfTI first.")
+            print("[Area] Unsupported current kind. Open an image, NIfTI, or STL file.")
 
     def on_optimization(self): pass
             
