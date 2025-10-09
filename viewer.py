@@ -4,6 +4,7 @@ from functions.measurements_Nifti import *
 from functions.measurements_stl import *
 from functions.pial_to_stl import *
 from functions.Nifti2image import nifti_slice_to_image
+from functions.curvature import compute_curvature_profile, save_curvature_plot
 from helpers.Helpers import get_nifti_present_labels, add_scalebar, get_max_slice_thinckness
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.Contour_threshold import ContourThresholdDialog
@@ -118,9 +119,15 @@ class MainWindow(QMainWindow):
         self.slice_nav_mode = None           # None | "nifti" | "png"
         self.slice_nav_items = []            # list[str] when mode=="png" (PNG paths)
         self.slice_nav_index_map = []        # list[int] original slice indices (optional label)
-
         self._init_metrics_dock()
 
+        self._pm_index = 0
+        self._pms = []
+        s = QShortcut(QKeySequence("Ctrl+M"), self)
+        s.setContext(Qt.ApplicationShortcut)
+        s.activated.connect(self._toggle_pm)
+        
+        
         # View widgets
         self.image_label = ScaledImageLabel()
         self.vtk_view = VTKViewer()
@@ -176,9 +183,15 @@ class MainWindow(QMainWindow):
         self.act_meas_volumes = QAction("Volumes", self); self.act_meas_volumes.triggered.connect(self.on_measure_volumes); measures_menu.addAction(self.act_meas_volumes)
         self.act_meas_area = QAction("Area", self); self.act_meas_area.triggered.connect(self.on_measure_area); measures_menu.addAction(self.act_meas_area)
         self.act_meas_perimeter = QAction("Perimeter", self); self.act_meas_perimeter.triggered.connect(self.on_measure_perimeter); measures_menu.addAction(self.act_meas_perimeter)
-        self.act_meas_lgi = QAction("LGI", self); self.act_meas_lgi.triggered.connect(self.on_measure_lgi); measures_menu.addAction(self.act_meas_lgi); self.act_meas_lgi.setToolTip("Compute Local Gyrification Index")
         self.act_meas_sulci = QAction("Sulci Depth", self); self.act_meas_sulci.triggered.connect(self.on_measure_sulci_depth); measures_menu.addAction(self.act_meas_sulci)
         process_menu.addSeparator()
+        
+        analysis_menu = process_menu.addMenu("Analysis")
+        self.act_meas_lgi = QAction("LGI", self); self.act_meas_lgi.triggered.connect(self.on_measure_lgi); analysis_menu.addAction(self.act_meas_lgi); self.act_meas_lgi.setToolTip("Compute Local Gyrification Index")
+        self.act_meas_curvature = QAction("Curvature", self); self.act_meas_curvature.triggered.connect(self.on_measure_curvature); analysis_menu.addAction(self.act_meas_curvature)
+        self.act_hausdorf = QAction("Hausdorff distance", self); self.act_hausdorf.triggered.connect(self.on_measure_hausdorff); analysis_menu.addAction(self.act_hausdorf)
+        process_menu.addSeparator()
+        
         self.act_optimization = QAction("Optimization", self); self.act_optimization.triggered.connect(self.on_optimization); process_menu.addAction(self.act_optimization)
         process_menu.addSeparator()
         self.act_pial_to_stl = QAction("Pial → STL…", self); self.act_pial_to_stl.triggered.connect(self.on_pial_to_stl); process_menu.addAction(self.act_pial_to_stl)
@@ -196,6 +209,7 @@ class MainWindow(QMainWindow):
         self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Setting_menu.addAction(self.act_annotate_square)
         self.act_choose_regions = QAction("ROI extraction…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
+
 
 
         # Disable initially
@@ -257,8 +271,12 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Measure", self.act_meas_perimeter)
         self.ribbon.add_action("Measure", self.act_meas_area)
         self.ribbon.add_action("Measure", self.act_meas_volumes)
-        self.ribbon.add_action("Measure", self.act_meas_lgi)
         self.ribbon.add_action("Measure", self.act_meas_sulci)
+        
+        self.ribbon.add_action("Analysis", self.act_meas_lgi)
+        self.ribbon.add_action("Analysis", self.act_meas_curvature)
+        self.ribbon.add_action("Analysis", self.act_hausdorf)
+
 
         self.ribbon.add_action("Adjustments", self.act_set_custom_label)
         self.ribbon.add_action("Adjustments", self.act_set_image_scale)
@@ -912,6 +930,7 @@ class MainWindow(QMainWindow):
 
                 pm = self._np_bgr_to_qpixmap(annotated_bgr)
                 self.image_label.setImage(pm)
+                
                 self.image_label.remove_last_annotation()
                 self._show_widget(self.image_label)
                 # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
@@ -1117,7 +1136,6 @@ class MainWindow(QMainWindow):
         else:
             print("[Volume] Unsupported current kind. Open an image, NIfTI or STL file.")
 
-    
     def on_measure_perimeter(self):
         """Process → Measures → Perimeter: compute and show annotated result WITHOUT saving."""
         if not self.current_path or not os.path.isfile(self.current_path):
@@ -1617,8 +1635,45 @@ class MainWindow(QMainWindow):
         else:
             print("[Area] Unsupported current kind. Open an image, NIfTI, or STL file.")
 
-    def on_optimization(self): pass
+    def on_measure_curvature(self):
+        if self.current_kind == "image":
+            try:
+                uid = uuid.uuid4().hex[:8]
+                out_dir = os.path.join(self.temp_dir, f"Curvature_{uid}")
+                os.makedirs(out_dir, exist_ok=True)
+                self.current_output_dir = out_dir
+
+                mask, edge_pixels, curvature_values,curvature_values_s  = compute_curvature_profile(path =self.current_path, min_area = self.cnt_threshold)
+                
+                print(f"[Curvature] Analysis completed for image {self.current_path}")
+                # Convert BGR ndarray → QPixmap and show (no disk write)
+                
+                img = save_curvature_plot(out_dir,  mask, edge_pixels, curvature_values)
+                img2 = save_curvature_plot(out_dir,  mask, edge_pixels, curvature_values_s, filename="curvature_plot_2.png")
+                pm = self._np_bgr_to_qpixmap(img)
+                pm2 = self._np_bgr_to_qpixmap(img2)
+                
+                self._pms = [pm, pm2]
+                self._pm_index = 0
+                self.image_label.setImage(self._pms[self._pm_index])
+                self._show_widget(self.image_label)
+                # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
+                
+                self._active_view = "image"
+                # Ensure File/Process actions stay enabled
+                self._set_current("image", self.current_path)
+            except Exception as ex:
+                print(f"[Curvature] ERROR: {ex}")
+                QMessageBox.critical(self, "[Curvature] Failed", f"{type(ex).__name__}: {ex}")
+            return
             
+        else:
+            print("[Curvature] Unsupported current kind. Open an image first.")
+
+    def on_optimization(self): pass
+
+    def on_measure_hausdorff(self): pass
+    
     def on_pial_to_stl(self):
         """Pick one .pial, convert to STL in TEMP, show it, and keep source in metrics."""
         start = self.last_dir if os.path.isdir(self.last_dir) else ""
@@ -1805,13 +1860,27 @@ class MainWindow(QMainWindow):
 
     # ---------- Utils ----------
     def _np_bgr_to_qpixmap(self, arr: np.ndarray) -> QPixmap:
-        if arr.ndim != 3 or arr.shape[2] != 3:
-            raise ValueError("Expected HxWx3 BGR array.")
-        h, w, _ = arr.shape
-        rgb = arr[:, :, ::-1].copy(order="C")
-        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
-        return QPixmap.fromImage(qimg)
+        if arr.dtype != np.uint8:
+            raise ValueError("Expected uint8 array.")
+        if arr.ndim != 3 or arr.shape[2] not in (1, 3, 4):
+            raise ValueError("Expected HxWx1/3/4 array.")
 
+        h, w = arr.shape[:2]
+
+        if arr.shape[2] == 3:  # BGR -> RGB
+            rgb = arr[:, :, ::-1].copy(order="C")
+            qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
+            qimg._np_ref = rgb
+        elif arr.shape[2] == 4:  # BGRA -> RGBA
+            rgba = arr[:, :, [2, 1, 0, 3]].copy(order="C")
+            qimg = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888)
+            qimg._np_ref = rgba
+        else:  # 1 channel grayscale
+            gray = arr[:, :, 0].copy(order="C")
+            qimg = QImage(gray.data, w, h, w, QImage.Format_Grayscale8)
+            qimg._np_ref = gray
+
+        return QPixmap.fromImage(qimg)
     # ---------- Plumbing ----------
     def _show_widget(self, w: QWidget):
         self.image_label.setVisible(False); self.vtk_view.setVisible(False); w.setVisible(True)
@@ -1825,6 +1894,13 @@ class MainWindow(QMainWindow):
         try: shutil.rmtree(self.temp_dir, ignore_errors=True); print(f"[Temp] Cleaned: {self.temp_dir}")
         except Exception as ex: print(f"[Temp] Cleanup error: {ex}")
         super().closeEvent(e)
+
+    def _toggle_pm(self):
+        if len(self._pms) < 2:
+            return
+        self._pm_index ^= 1
+        self.image_label.setImage(self._pms[self._pm_index])
+        self._show_widget(self.image_label)
 
     # ----- slice controls -----
     def _sync_slice_controls(self):

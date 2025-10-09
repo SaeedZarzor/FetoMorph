@@ -30,6 +30,8 @@ def set_icons(ui, assets: Path):
         "act_show_results":     "icons/view_data.png",
         "act_set_custom_label": "icons/label.png",
         "act_slice_thickness":  "icons/thickness.png",
+        "act_meas_curvature":  "icons/angle.png",
+        "act_hausdorf":        "icons/hausdorff.png",
     }
 
     for attr, rel in icons.items():
