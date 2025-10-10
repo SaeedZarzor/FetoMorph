@@ -5,6 +5,7 @@ from functions.measurements_stl import *
 from functions.pial_to_stl import *
 from functions.Nifti2image import nifti_slice_to_image
 from functions.curvature import compute_curvature_profile, save_curvature_plot
+from functions.hausdorff import calculate_hausdorff_distance, convert_image
 from helpers.Helpers import get_nifti_present_labels, add_scalebar, get_max_slice_thinckness
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.Contour_threshold import ContourThresholdDialog
@@ -123,10 +124,11 @@ class MainWindow(QMainWindow):
 
         self._pm_index = 0
         self._pms = []
-        s = QShortcut(QKeySequence("Ctrl+M"), self)
-        s.setContext(Qt.ApplicationShortcut)
-        s.activated.connect(self._toggle_pm)
-        
+        QShortcut(QKeySequence("Ctrl+M"), self).activated.connect(self._next_pm)
+        QShortcut(QKeySequence("Ctrl+Shift+M"), self).activated.connect(self._prev_pm)
+        self._resume_sc = QShortcut(QKeySequence("Shift+Alt+E"), self)
+        self._resume_sc.setContext(Qt.ApplicationShortcut)
+
         
         # View widgets
         self.image_label = ScaledImageLabel()
@@ -228,6 +230,7 @@ class MainWindow(QMainWindow):
         vtk_output = QtVTKOutputWindow(self._qt_console); vtkOutputWindow.SetInstance(vtk_output)
         print("Application started. Progress output will appear here.")
 
+        self.all_actions = {self.act_show_results, self.act_Reset, self.act_close, self.act_quit, self.act_imp_img, self.act_imp_vtk, self.act_imp_stl, self.act_imp_nii, self.act_save, self.act_save_data, self.act_export_metrics, self.act_meas_allmarks, self.act_meas_perimeter, self.act_meas_area, self.act_meas_volumes, self.act_meas_lgi, self.act_meas_sulci, self.act_meas_curvature, self.act_hausdorf, self.act_set_custom_label,  self.act_set_image_scale, self.act_set_scale,  self.act_kernel_size, self.act_slice_thickness,  self.act_cnt_threshold, self.act_annotate_square, self.act_choose_regions, self.act_optimization, self.act_nitfi2png}
         self._update_process_actions()
     
 
@@ -250,7 +253,7 @@ class MainWindow(QMainWindow):
         ASSETS = Path(__file__).resolve().parent / "assets"
         set_icons(self, ASSETS)
 
-        
+
         self.ribbon.add_action("Home", self.act_nav_import)
         self.ribbon.add_action("Home", self.act_nav_export)
         self.ribbon.add_action("Home", self.act_show_results)
@@ -517,7 +520,43 @@ class MainWindow(QMainWindow):
 
 
     def quit_app(self):
-        print("Quitting application."); self.close()
+        if getattr(self, "_shutting_down", False):
+            return
+        self._shutting_down = True
+
+        # Block user input
+        self.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        # Disable all actions
+        acts = set(self.findChildren(QAction))
+        mb = self.menuBar()
+        if mb:
+            for menu in mb.findChildren(QMenu):
+                acts.update(menu.actions())
+        for tb in self.findChildren(QToolBar):
+            acts.update(tb.actions())
+        for a in acts:
+            a.setEnabled(False)
+            a.setVisible(False)
+
+        # Stop timers
+        for t in getattr(self, "_timers", []):
+            try: t.stop()
+            except Exception: pass
+
+        # Stop threads/workers
+        for w in getattr(self, "_workers", []):
+            try:
+                if hasattr(w, "stop"): w.stop()
+                if hasattr(w, "quit"): w.quit()
+                if hasattr(w, "wait"): w.wait()
+            except Exception: pass
+
+        # Finish
+        QApplication.restoreOverrideCursor()
+        print("Quitting application.")
+        self.close()
         
 
     def _ensure_metric_row(
@@ -896,8 +935,15 @@ class MainWindow(QMainWindow):
             print("[All hallmarks] No image file is loaded."); return
         if self.current_kind == "image":
             try:
-                if not self.units_length or self.current_path not in self.image_scales:
-                    self.set_image_scale()  # pops the single dialog
+                while True:
+                    if not self.units_length or self.current_path not in self.image_scales:
+                        ok = self.set_image_scale()  # pops the single dialog
+                        if ok:
+                            break
+                        else:
+                            return
+                    else:
+                        break
                 u = self.ensure_units()                # <-- get unit (e.g., 'mm')
                 px_size = self.image_scales.get(self.current_path, self.pixel_size)
 
@@ -1143,8 +1189,15 @@ class MainWindow(QMainWindow):
         
         if self.current_kind == "image":
             try:
-                if not self.units_length or self.current_path not in self.image_scales:
-                    self.set_image_scale()  # pops the single dialog
+                while True:
+                    if not self.units_length or self.current_path not in self.image_scales:
+                        ok = self.set_image_scale()  # pops the single dialog
+                        if ok:
+                            break
+                        else:
+                            return
+                    else:
+                        break
                 u = self.ensure_units()                # <-- get unit (e.g., 'mm')
                 px_size = self.image_scales.get(self.current_path, self.pixel_size)
                 
@@ -1195,9 +1248,15 @@ class MainWindow(QMainWindow):
             print("[lGI] No file is loaded."); return
         if self.current_kind == "image":
             try:
-            
-                if not self.units_length or self.current_path not in self.image_scales:
-                    self.set_image_scale()  # pops the single dialog
+                while True:
+                    if not self.units_length or self.current_path not in self.image_scales:
+                        ok = self.set_image_scale()  # pops the single dialog
+                        if ok:
+                            break
+                        else:
+                            return
+                    else:
+                        break
                 u = self.ensure_units()                # <-- get unit (e.g., 'mm')
                 px_size = self.image_scales.get(self.current_path, self.pixel_size)
                 
@@ -1388,8 +1447,15 @@ class MainWindow(QMainWindow):
         if self.current_kind == "image":
 
             try:
-                if not self.units_length or self.current_path not in self.image_scales:
-                    self.set_image_scale()  # pops the single dialog
+                while True:
+                    if not self.units_length or self.current_path not in self.image_scales:
+                        ok = self.set_image_scale()  # pops the single dialog
+                        if ok:
+                            break
+                        else:
+                            return
+                    else:
+                        break
                 u = self.ensure_units()                # <-- get unit (e.g., 'mm')
                 px_size = self.image_scales.get(self.current_path, self.pixel_size)
                 
@@ -1512,8 +1578,15 @@ class MainWindow(QMainWindow):
             if not self.current_path or not os.path.isfile(self.current_path):
                 print("[Area] No image file is loaded."); return
             try:
-                if not self.units_length or self.current_path not in self.image_scales:
-                    self.set_image_scale()  # pops the single dialog
+                while True:
+                    if not self.units_length or self.current_path not in self.image_scales:
+                        ok = self.set_image_scale()  # pops the single dialog
+                        if ok:
+                            break
+                        else:
+                            return
+                    else:
+                        break
                 u = self.ensure_units()                # <-- get unit (e.g., 'mm')
                 px_size = self.image_scales.get(self.current_path, self.pixel_size)
 
@@ -1658,7 +1731,8 @@ class MainWindow(QMainWindow):
                 self.image_label.setImage(self._pms[self._pm_index])
                 self._show_widget(self.image_label)
                 # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
-                
+                self.statusBar().showMessage("Use Ctrl+M to toggle between the two modes.")
+
                 self._active_view = "image"
                 # Ensure File/Process actions stay enabled
                 self._set_current("image", self.current_path)
@@ -1672,7 +1746,134 @@ class MainWindow(QMainWindow):
 
     def on_optimization(self): pass
 
-    def on_measure_hausdorff(self): pass
+    def on_measure_hausdorff(self):
+        """Pick first & second images, convert and save in TEMP, compute hausdorff distance and show the plot."""
+
+        # TEMP output
+        uid = uuid.uuid4().hex[:8]
+        out_dir = os.path.join(self.temp_dir, f"Huasdorff_{uid}")
+        os.makedirs(out_dir, exist_ok=True)
+        self.current_output_dir = out_dir
+        print(f"[Hausdorff] TEMP output: {out_dir}")
+
+        if  self.current_kind !="image" and self.current_path is None:
+            start = self.last_dir if os.path.isdir(self.last_dir) else ""
+            First, _ = QFileDialog.getOpenFileName(self, "Select the first image",
+                                            start, "Images (*.png *.jpg *.jpeg )")
+            if not First:
+                return
+            
+            self.last_dir = os.path.dirname(First)
+            self.load_image(First)
+        else:
+            First = self.current_path
+        
+        self._enter_adjustment_mode()
+        self.statusBar().showMessage("Adjust now. Press Shift+Alt+E to continue.")
+        print("[Hausdorff] Adjust now. Press Shift+Alt+E to continue.")
+        self.wait_for_resume()   # blocks here; resumes after key press
+        self.statusBar().clearMessage()
+
+        while True:
+            if not self.units_length or self.current_path not in self.image_scales:
+                ok = self.set_image_scale()  # pops the single dialog
+                if ok:
+                    break
+                else:
+                    return
+            else:
+                break
+        u1 = self.ensure_units()                # <-- get unit (e.g., 'mm')
+        px_size_1 = self.image_scales.get(self.current_path, self.pixel_size)
+
+                        
+        annotated1, basename1, First_array, label1 =self.anntotation_con(out_dir)
+        
+        self.reset_view()
+        
+        self.statusBar().showMessage("Select two images to measure the Hausdorff distance")
+        print("[Hausdorff] Select two images to measure the Hausdorff distance.")
+        
+        start = self.last_dir if os.path.isdir(self.last_dir) else ""
+        Second, _ =  QFileDialog.getOpenFileName(self, "Select the second image",
+                                            start, "Images (*.png *.jpg *.jpeg )")
+        if not Second:
+            return
+        self.load_image(Second)
+        self.last_dir = os.path.dirname(Second)
+
+        
+        self.statusBar().clearMessage()
+        
+        self._enter_adjustment_mode()
+        self.statusBar().showMessage("Adjust now. Press Shift+Alt+E to continue.")
+        print("[Hausdorff] Adjust now. Press Shift+Alt+E to continue.")
+        self.wait_for_resume()   # blocks here; resumes after key press
+        self.statusBar().clearMessage()
+        
+        while True:
+            if not self.units_length or self.current_path not in self.image_scales:
+                ok = self.set_image_scale()  # pops the single dialog
+                if ok:
+                    break
+                else:
+                    return
+            else:
+                break
+        u2 = self.ensure_units()                # <-- get unit (e.g., 'mm')
+        px_size_2 = self.image_scales.get(self.current_path, self.pixel_size)
+                
+        while True:
+            if u1 == u2:
+                break
+            else:
+                btn = QMessageBox.warning(
+                    self,
+                    "Hausdorff distance",
+                    "Both images must use the same measuring units to compute the Hausdorff distance.",
+                    QMessageBox.Ok | QMessageBox.Cancel)
+                if btn == QMessageBox.Cancel:
+                    return
+                ok = self.set_image_scale()
+                if ok:
+                    u2 = self.ensure_units()                 # return unit string or None on cancel
+                    px_size_2 = self.image_scales.get(self.current_path, self.pixel_size)
+                else:
+                    return
+            # Units mismatch: ask to retry or cancel
+
+
+        annotated2,basename2, Second_array, label2= self.anntotation_con(out_dir)
+        self.reset_view()
+        self._exit_adjustment_mode()
+
+        try:
+            img, hd, d12, d21 = calculate_hausdorff_distance(First_array, Second_array, First_label= label1 or "First", Second_label = label2 or "Second", out_dir=out_dir )
+            
+            pm = self._np_bgr_to_qpixmap(img)
+            pm2 = self._np_bgr_to_qpixmap(annotated1)
+            pm3 = self._np_bgr_to_qpixmap(annotated2)
+                
+            self._pms = [pm, pm2, pm3]
+            self._pm_index = 0
+            self.image_label.setImage(self._pms[self._pm_index])
+            self._show_widget(self.image_label)
+            # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
+                
+            self._active_view = "image"
+            # Ensure File/Process actions stay enabled
+            self._set_current("image", str(First))
+
+            print("[Hausdorff] The Hausdorff distance results:")
+            print(f"Between {basename1} and {basename2}: {d12} {u1}")
+            print(f"Between {basename2} and {basename1}: {d21} {u1}")
+            print(f"Maximum distance: {hd} {u1}")
+            
+            self.statusBar().showMessage("Use Ctrl+M and Ctrl+Shift+M to switch between images.")
+
+        except Exception as ex:
+            print(f"[Hausdorff] ERROR: {ex}")
+            QMessageBox.critical(self, "Hausdorff distance", f"{type(ex).__name__}: {ex}")
     
     def on_pial_to_stl(self):
         """Pick one .pial, convert to STL in TEMP, show it, and keep source in metrics."""
@@ -1763,13 +1964,18 @@ class MainWindow(QMainWindow):
         px_init = float(self.image_scales.get(self.current_path, getattr(self, "pixel_size", 0.03)))
 
         dlg = UnitScaleDialog(self, unit_init=unit_init, pixel_size_init=px_init)
+                    
         if dlg.exec() != QDialog.Accepted:
-            return
-
+            if dlg._get_status():
+                ok= self.set_scale_from_scalebar()
+                return ok
+            else:
+                return False
+        
         unit, scale = dlg.values()
         if not (scale > 0):
             QMessageBox.warning(self, "Invalid value", "Pixel size must be a positive number.")
-            return
+            return False
 
         # Store for this file and as current
         self.units_length = unit
@@ -1785,8 +1991,10 @@ class MainWindow(QMainWindow):
 #        row["PixelSizeUnits"] = f"{unit}/pixel"
 
         print(f"[Units] {unit}  |  [Scale] {scale} {unit}/pixel  —  {os.path.basename(self.current_path)}")
-
+        return True
+            
     def set_scale_from_scalebar(self):
+        ok = False
         """Activate line measurement on the image; on release we ask real length+unit."""
         if self.current_kind != "image":
             QMessageBox.information(self, "Set Scale", "Open a 2D image to set scale from a scalebar.")
@@ -1795,21 +2003,34 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Set Scale", "No image visible.")
             return
         print("[Scale] Draw a line over the scalebar: click, drag, release.")
-        self.image_label.start_scalebar_measure(self._finish_scalebar_scale)
 
-            
-    def _finish_scalebar_scale(self, pixel_length: float):
+        loop = QEventLoop(self)
+        result = {"ok": False}
+
+        def _cb(px_len):
+            try:
+                result["ok"] = self._finish_scalebar_scale(px_len)  # returns True/False
+            finally:
+                loop.quit()
+
+        self.image_label.start_scalebar_measure(_cb)  # callback will be called later
+        loop.exec()                                   # wait here
+        return result["ok"]
+        
+        
+    def _finish_scalebar_scale(self, pixel_length: float) -> bool:
         """Called after the user drags a line; asks for real length & unit, computes px/unit."""
         try:
             unit_init = self.units_length or "mm"
             dlg = ScalebarSetScaleDialog(pixel_length, unit_init=unit_init, parent=self)
             if dlg.exec() != QDialog.Accepted:
                 print("[Scale] Canceled.")
-                return
+                return False
+                
             px_per_unit, unit = dlg.values()  # e.g., px/mm
             if px_per_unit <= 0:
                 QMessageBox.warning(self, "Set Scale", "Scale must be positive.")
-                return
+                return False
 
             # Store: keep px/mm per file; keep working mm/pixel for algorithms
             self.units_length = unit
@@ -1821,12 +2042,14 @@ class MainWindow(QMainWindow):
             # Record in metrics
             label_text = self.get_label_for_cropped_path(self.last_annotated_path)
 #            self._record_metric_for (self.current_path, label = label_text, pixel_size= mm_per_px, pixel_size_units=f"{unit}/pixel" )
-
             print(f"[Scale] {pixel_length:.2f} px = {px_per_unit:.6f} px/{unit}  "
                   f"→ pixel size {mm_per_px:.6f} {unit}/pixel for {os.path.basename(self.current_path)}")
+            return True
+                              
         except Exception as ex:
             print(f"ERROR (Set Scale): {ex}")
             QMessageBox.critical(self, "Set Scale Failed", f"{type(ex).__name__}: {ex}")
+            return False
 
 
     def set_slice_thickness_dialog(self):
@@ -1894,14 +2117,19 @@ class MainWindow(QMainWindow):
         try: shutil.rmtree(self.temp_dir, ignore_errors=True); print(f"[Temp] Cleaned: {self.temp_dir}")
         except Exception as ex: print(f"[Temp] Cleanup error: {ex}")
         super().closeEvent(e)
+        self.statusBar().clearMessage()
 
-    def _toggle_pm(self):
-        if len(self._pms) < 2:
+    def _next_pm(self):
+        if not self._pms:
             return
-        self._pm_index ^= 1
+        self._pm_index = (self._pm_index + 1) % len(self._pms)
         self.image_label.setImage(self._pms[self._pm_index])
-        self._show_widget(self.image_label)
 
+    def _prev_pm(self):
+        if not self._pms:
+            return
+        self._pm_index = (self._pm_index - 1) % len(self._pms)
+        self.image_label.setImage(self._pms[self._pm_index])
     # ----- slice controls -----
     def _sync_slice_controls(self):
         if self.vtk_view.has_slice():
@@ -2226,7 +2454,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, "disable_png_navigation"):
                 self.disable_png_navigation()
 
-            self._append_progress("\n [View] Reloaded from disk and cleared on-screen annotations.")
+            self._append_progress("\n [View] Reloaded from disk and cleared on-screen annotations. \n")
             self.statusBar().showMessage("\n Reloaded from path; annotations cleared (data kept).", 3000)
 
         except Exception as ex:
@@ -2681,6 +2909,56 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+
+# ------------------ hausdorff helpers ------------------
+
+    def wait_for_resume(self):
+        loop = QEventLoop(self)
+        # unique connect; if already connected, reconnect
+        try:
+            self._resume_sc.activated.connect(loop.quit, Qt.UniqueConnection)
+        except TypeError:
+            try: self._resume_sc.activated.disconnect(loop.quit)
+            except Exception: pass
+            self._resume_sc.activated.connect(loop.quit)
+        loop.exec()
+        # cleanup for next time
+        try: self._resume_sc.activated.disconnect(loop.quit)
+        except Exception: pass
+
+    def _enter_adjustment_mode(self):
+        allow = { self.act_annotate_square, self.act_cnt_threshold, self.act_set_scale, self.act_set_image_scale, self.act_set_custom_label}
+
+        for a in self.all_actions:
+            if a in allow:
+                a.setEnabled(True)
+            else:
+                a.setEnabled(False)
+
+    def _exit_adjustment_mode(self):
+        for a in self.all_actions:
+            a.setEnabled(True)
+            self._update_process_actions()
+
+
+    def anntotation_con(self, out_dir):
+                    
+        image_path = self.current_path
+        if self.last_annotated_path is not None:
+            image_path = self.last_annotated_path
+
+        annotated, basename, array = convert_image(image_path, out_dir, pixel_spacing= self.pixel_size, min_contour_area=self.cnt_threshold)
+
+        label_text = self.get_label_for_cropped_path(image_path)
+        if label_text:
+            annotated_bgr = put_label_on_bgr(annotated, label_text, pos="topleft")
+    
+        self._record_metric_for(self.current_path, label=label_text ,
+                pixel_size_units = f"{self.units_length}/pixel",
+                pixel_size = self.pixel_size,
+                unite = self.units_length)
+        label = getattr(self, "custom_label", None)
+        return annotated, basename, array, label
 # ---------------------------
 # Entry point
 # ---------------------------

@@ -6,7 +6,10 @@ class UnitScaleDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Units & Pixel Size")
         self.setModal(True)
-
+        self.setAttribute(Qt.WA_DeleteOnClose, True)  # ensure destruction on close
+        self.status = False
+        self.unit = unit_init
+        self.scale = pixel_size_init
         form = QFormLayout(self)
 
         # Unit selector (editable combo with common presets)
@@ -37,12 +40,23 @@ class UnitScaleDialog(QDialog):
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         form.addRow(btns)
+        
+        btn_scalebar = btns.addButton("Set from scalebar…", QDialogButtonBox.ActionRole)
+        btn_scalebar.clicked.connect(self._start_scalebar)
 
     def _update_suffix(self, unit: str):
-        unit = (unit or "mm").strip()
+        self.unit = (unit or "mm").strip()
         self.scale_spin.setSuffix(f" {unit}/pixel")
+        self.scale = self.scale_spin.value()
 
     def values(self) -> tuple[str, float]:
-        unit = (self.unit_box.currentText() or "mm").strip()
-        return unit, float(self.scale_spin.value())
+        return self.unit, self.scale
 
+
+    def _start_scalebar(self):
+        self.status = True
+        self.reject()       # closes the dialog; with WA_DeleteOnClose it will be destroyed
+        self.deleteLater()  # safety
+
+    def _get_status(self) -> bool:
+        return self.status

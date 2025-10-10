@@ -2,8 +2,11 @@ import cv2
 import numpy as np
 import os
 from PIL import Image
-from scipy.spatial.distance import directed_hausdorff
+from pathlib import Path
+from scipy.spatial.distance import directed_hausdorff, cdist
 import matplotlib.pyplot as plt
+from helpers.Helpers import text_thickness
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 
 def _to_xy2(a):
@@ -27,43 +30,18 @@ def _align_points(c1, c2, mode="right_bottom"):
     return c1 + np.array([dx, dy]), (dx, dy)
 
 
-def display_image_with_contours(min_contour_area: float =200):
-    # You can replace this with the actual path to your image
-    image_path = input("Enter image path: ").strip().strip('"')  # Change this to your image file name
-    
-    #"""Extract pixel spacing from image metadata"""
-    try:
-        with Image.open(image_path) as img:
-            if "Pixel Spacing" in img.info:
-                pixel_spacing = img.info["Pixel Spacing"]
-                print(f"Pixel Spacing: {pixel_spacing}")
-                pixel_spacing = float(pixel_spacing)
-                print(f"Type: {type(pixel_spacing)}")
-             
-    except Exception as e:
-        print(f"Error reading {image_path}: {e}")
-    # Check if file exists
-    if not os.path.exists(image_path):
-        print(f"Error: File '{image_path}' not found!")
-        print("Current directory:", os.getcwd())
-        print("Available image files:")
-        for file in os.listdir('.'):
-            if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif')):
-                print(f"  - {file}")
-        return
-    
+def convert_image(
+        image_path, out_dir,
+        pixel_spacing: float = 0.01,
+        min_contour_area: float =200):
+
     # Load the image
     image = cv2.imread(image_path)
     
     if image is None:
-        print(f"Error: Could not load image from {image_path}")
+        print(f"[Hausdorff] Error: Could not load image from {image_path}")
         return
     
-    print(f"Image loaded successfully! Shape: {image.shape}")
-    
-    # Display original image
-    cv2.namedWindow('Original Image', cv2.WINDOW_NORMAL)
-    cv2.imshow('Original Image', image)
     
     # Convert BGR to RGB
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -81,15 +59,15 @@ def display_image_with_contours(min_contour_area: float =200):
     # Find contours
     contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_contour_area]
-
-    print(f"Number of contours found: {len(contours)}")
+    
+    annotated = image.copy()
+    W, H = annotated.shape[:2]
+    thickness = text_thickness(H, style="thin")
     
     if len(filtered_contours) > 0:
-        # Get the first contour
-#        cnt = filtered_contours[0]
-        
+
         # Draw contours on original image
-        image1 = cv2.drawContours(image.copy(), filtered_contours, -1, (0, 255, 255), 3)
+        annotated = cv2.drawContours(annotated, filtered_contours, -1, (0, 255, 255), thickness)
         
         # Extract contour coordinates
         contour_coordinates = []
@@ -102,9 +80,7 @@ def display_image_with_contours(min_contour_area: float =200):
         # Convert the list to a NumPy array
         contour_coordinates_array = np.array(contour_coordinates)
         
-        # Print the coordinates of all contour points
-#        print("Contour coordinates:", contour_coordinates_array)
-        print(f"Total contour points: {len(contour_coordinates_array)}")
+        print(f"[Hausdorff] Total contour points: {len(contour_coordinates_array)}")
         
           # Force conversion to float, removing any string data
         contour_coordinates_numeric = contour_coordinates_array.astype(float)
@@ -112,40 +88,34 @@ def display_image_with_contours(min_contour_area: float =200):
 
         corrected_pixel_array = contour_coordinates_numeric * pixel_spacing
 
-#        print("Corrected pixel array:")
-#        print(corrected_pixel_array)
-        # Draw contours with green color
-#        image_with_contours = cv2.drawContours(image.copy(), contours, -1, (0, 255, 0), 2)
-#        
-#        # Display image with contours
-#        cv2.namedWindow('Contours', cv2.WINDOW_NORMAL)
-#        cv2.imshow('Contours', image_with_contours)
-#        
-#        # Display image with yellow contours
-#        cv2.namedWindow('Yellow Contours', cv2.WINDOW_NORMAL)
-#        cv2.imshow('Yellow Contours', image1)
-#        
-#        print("Images displayed!")
-#        print("Press any key to close all windows...")
-#        cv2.waitKey(0)
-#        cv2.destroyAllWindows()
-        
-        return corrected_pixel_array
-    else:
-        print("No contours found!")
-        print("Try adjusting the threshold value.")
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-        return None
-        
-        
-def calculate_hausdorff_distance(contours_coords_sim, contours_coords_MRI,
-                                 out_path=None, invert_y=True, align_mode="right_bottom"):
-    if contours_coords_sim is None or contours_coords_MRI is None:
-        print("Error: inputs are None"); return None, None, None
 
-    c1 = _to_xy2(contours_coords_sim)
-    c2 = _to_xy2(contours_coords_MRI)
+        os.makedirs(out_dir, exist_ok=True)
+        basename = Path(image_path).stem
+        path = os.path.join(out_dir, f"{basename}_annotated.png")
+        cv2.imwrite(path, annotated)
+
+        return annotated, basename, corrected_pixel_array
+        
+    else:
+        print("[Hausdorff] No contours found!")
+        print("Try adjusting the threshold value.")
+        return None, None
+        
+        
+def calculate_hausdorff_distance(
+    contours_coords_first, contours_coords_second,
+    First_label="First", Second_label="Second",
+    invert_y=True, align_mode="right_bottom",
+    out_dir=None, filename="Hausdorff_distance_plot.png"):
+    
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, filename)
+    
+    if contours_coords_first is None or contours_coords_second is None:
+        print("[Hausdorff] Error: inputs are None"); return None, None, None
+
+    c1 = _to_xy2(contours_coords_first)
+    c2 = _to_xy2(contours_coords_second)
 
     # align SIM to MRI (to the right and down by default)
     c1_aligned, shift = _align_points(c1, c2, mode=align_mode)
@@ -154,101 +124,71 @@ def calculate_hausdorff_distance(contours_coords_sim, contours_coords_MRI,
     d12 = directed_hausdorff(c1_aligned, c2)[0]
     d21 = directed_hausdorff(c2, c1_aligned)[0]
     hd  = max(d12, d21)
+    
+    # ----- find the actual extremal pairs to draw -----
+    # First->Second (d12)
+    D12 = cdist(c1_aligned, c2)                 # shape (N,M)
+    nn12_idx = D12.argmin(axis=1)               # nearest B index for each A point
+    min12     = D12[np.arange(D12.shape[0]), nn12_idx]
+    i12 = int(min12.argmax())                   # A index giving the max of mins
+    j12 = int(nn12_idx[i12])                    # its nearest B index
+    p12 = c1_aligned[i12]                       # point in First (aligned)
+    q12 = c2[j12]                               # nearest in Second
+
+    # Second->First (d21)
+    D21 = D12.T                                 # reuse by transposing
+    nn21_idx = D21.argmin(axis=1)               # nearest A index for each B point
+    min21     = D21[np.arange(D21.shape[0]), nn21_idx]
+    j21 = int(min21.argmax())                   # B index giving the max of mins
+    i21 = int(nn21_idx[j21])                    # its nearest A index
+    p21 = c2[j21]                               # point in Second
+    q21 = c1_aligned[i21]                       # nearest in First (aligned)
+
 
     # plot
-    plt.figure()
-    plt.plot(c1_aligned[:,0], c1_aligned[:,1], linewidth=1.5, label=f"SIM aligned ({shift[0]:.2f},{shift[1]:.2f})")
-    plt.plot(c2[:,0],        c2[:,1],        linewidth=1.5, label="MRI")
-    plt.scatter(c1_aligned[:,0], c1_aligned[:,1], s=4)
-    plt.scatter(c2[:,0],        c2[:,1],        s=4)
-    ax = plt.gca()
+    fig, ax = plt.subplots()
+
+    ax.plot(c1_aligned[:,0], c1_aligned[:,1], linewidth=1.5,
+            label=f"{First_label} aligned ({shift[0]:.2f},{shift[1]:.2f})")
+    ax.plot(c2[:,0], c2[:,1], linewidth=1.5, label=f"{Second_label}")
+    ax.scatter(c1_aligned[:,0], c1_aligned[:,1], s=4)
+    ax.scatter(c2[:,0], c2[:,1], s=4)
+
+    #draw Hausdorff segments
+    ax.plot([p12[0], q12[0]], [p12[1], q12[1]], linestyle='--', linewidth=2, label=f"d12={d12:.3f}")
+    ax.plot([p21[0], q21[0]], [p21[1], q21[1]], linestyle='--', linewidth=2, label=f"d21={d21:.3f}")
+    
+    # emphasize endpoints
+    ax.scatter([p12[0], q12[0]], [p12[1], q12[1]], s=30, marker='o')
+    ax.scatter([p21[0], q21[0]], [p21[1], q21[1]], s=30, marker='s')
+    
+    # annotate near midpoints
+    m12 = (p12 + q12) / 2.0
+    m21 = (p21 + q21) / 2.0
+    ax.text(m12[0], m12[1], f"d12={d12:.3f}", fontsize=9, va='bottom', ha='center')
+    ax.text(m21[0], m21[1], f"d21={d21:.3f}", fontsize=9, va='bottom', ha='center')
+    
     ax.set_aspect('equal', adjustable='box')
     if invert_y:
         ax.invert_yaxis()
-    plt.legend()
-    plt.xlabel("x"); plt.ylabel("y")
-    plt.title(f"Hausdorff: {hd:.3f}  (d12={d12:.3f}, d21={d21:.3f})")
-    plt.tight_layout()
-    if out_path:
-        plt.savefig(out_path, dpi=300, bbox_inches='tight')
-    plt.show()
-    plt.close()
+    ax.legend()
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_title(f"Hausdorff: {hd:.3f}  (d12={d12:.3f}, d21={d21:.3f})")
+    fig.tight_layout()
 
-    return hd, d12, d21
+    if out_dir:
+        fig.savefig(path, dpi=300, bbox_inches='tight')
+    
+    print(f"[Hausdorff] the image {filename} has been saved")
 
-def display_image_with_adjustable_threshold():
-    """Version with adjustable threshold using trackbar"""
-    image_path = "image.png"  # Change this to your image file name
+    canvas = FigureCanvas(fig)
+    canvas.draw()
+    img = np.frombuffer(canvas.buffer_rgba(), dtype=np.uint8)
+    img = img.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+    plt.close(fig)
     
-    if not os.path.exists(image_path):
-        print(f"Error: File '{image_path}' not found!")
-        return
-    
-    image = cv2.imread(image_path)
-    if image is None:
-        print(f"Error: Could not load image from {image_path}")
-        return
-    
-    def update_threshold(val):
-        # Convert BGR to RGB
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        
-        # Convert to grayscale
-        im_bw = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
-        
-        # Apply threshold with trackbar value
-        (thresh, im_bw) = cv2.threshold(im_bw, val, 255, cv2.THRESH_BINARY)
-        
-        # Find contours
-        contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Draw contours
-        image_with_contours = cv2.drawContours(image.copy(), contours, -1, (0, 255, 0), 2)
-        
-        # Show images
-        cv2.imshow('Binary Image', im_bw)
-        cv2.imshow('Contours', image_with_contours)
-        
-        # Print number of contours
-        cv2.setWindowTitle('Contours', f'Contours - Found: {len(contours)} contours')
-    
-    # Create windows
-    cv2.namedWindow('Original Image', cv2.WINDOW_NORMAL)
-    cv2.namedWindow('Binary Image', cv2.WINDOW_NORMAL)
-    cv2.namedWindow('Contours', cv2.WINDOW_NORMAL)
-    
-    # Create trackbar
-    cv2.createTrackbar('Threshold', 'Binary Image', 200, 255, update_threshold)
-    
-    # Show original image
-    cv2.imshow('Original Image', image)
-    
-    # Initial call
-    update_threshold(200)
-    
-    print("Use the trackbar to adjust threshold value.")
-    print("Press any key to close all windows...")
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-
+    return img, hd, d12, d21
    
 
-if __name__ == "__main__":
-    # Choose which version to run
-    print("Choose version:")
-    print("1. Fixed threshold (200)")
-    print("2. Adjustable threshold with trackbar")
-    
-    choice = input("Enter choice (1 or 2): ").strip()
-    
-    if choice == "2":
-        display_image_with_adjustable_threshold()
-    else:
-        contours_coords_sim = display_image_with_contours()
-        contours_coords_MRI = display_image_with_contours()
-        distance_1_to_2, distance_2_to_1, bidirectional_distance = calculate_hausdorff_distance(contours_coords_sim, contours_coords_MRI)
-        print(f"The max distance is {bidirectional_distance}")
-        if contours_coords_sim is None or contours_coords_MRI is None:
-            print(f"\nContour detection completed successfully!")
-            print(f"Coordinates saved in 'contours_coords' variable")
 
