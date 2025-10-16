@@ -16,6 +16,7 @@ def measure_image_allmarks(
 
     font_scale = 0.01/pixel_size
     margin = 6
+    radius_px = int(round(0.1 / pixel_size))
 
     image = cv2.imread(file_path)
     if image is None:
@@ -47,44 +48,44 @@ def measure_image_allmarks(
     else:
         x1, y1 = 15, 40
 
-    text_area = f"Area: {area:.2f} {unit}^2"
-    (tw, th), baseline = cv2.getTextSize(text_area, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
+#    text_area = f"Area: {area:.2f} {unit}^2"
+#    (tw, th), baseline = cv2.getTextSize(text_area, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+#    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
+#    
+#    inside = (0 <= x1 <= max(0, W - bw)) and (0 <= y1 <= max(0, H - bh))
+#    x1 = min(max(0, x1), max(0, W - bw))
+#    y1 = min(max(0, y1), max(0, H - bh))
     
-    inside = (0 <= x1 <= max(0, W - bw)) and (0 <= y1 <= max(0, H - bh))
-    x1 = min(max(0, x1), max(0, W - bw))
-    y1 = min(max(0, y1), max(0, H - bh))
+#    cv2.putText(
+#        annotated,
+#        text_area,
+#        (int(x1+ margin), int(y1 + margin + th)),
+#        cv2.FONT_HERSHEY_SIMPLEX,
+#        font_scale,
+#        (255, 0, 100),
+#        thickness,
+#        cv2.LINE_AA,
+#    )
     
-    cv2.putText(
-        annotated,
-        text_area,
-        (int(x1+ margin), int(y1 + margin + th)),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        font_scale,
-        (255, 0, 100),
-        thickness,
-        cv2.LINE_AA,
-    )
-    
-    text_Perimeter= f"Perimeter_unite:{perimeter:.2f} {unit}"
-    (tw, th), baseline = cv2.getTextSize(text_Perimeter, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
-    
-    inside = (0 <= x1 <= max(0, W - bw)) and (0 <= y1 <= max(0, H - bh))
-    x1 = min(max(0, x1), max(0, W - bw))
-    y1 = min(max(0, y1), max(0, H - bh))
-    
-    cv2.putText(
-        annotated,
-        f"Perimeter_unite:{perimeter:.2f} {unit}",
-        (int(x1+ margin), int(y1 + margin + th - 30)),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        font_scale,
-        (255, 0, 200),
-        thickness,
-        cv2.LINE_AA,
-
-    )
+#    text_Perimeter= f"Perimeter_unite:{perimeter:.2f} {unit}"
+#    (tw, th), baseline = cv2.getTextSize(text_Perimeter, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+#    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
+#    
+#    inside = (0 <= x1 <= max(0, W - bw)) and (0 <= y1 <= max(0, H - bh))
+#    x1 = min(max(0, x1), max(0, W - bw))
+#    y1 = min(max(0, y1), max(0, H - bh))
+#    
+#    cv2.putText(
+#        annotated,
+#        f"Perimeter_unite:{perimeter:.2f} {unit}",
+#        (int(x1+ margin), int(y1 + margin + th - 30)),
+#        cv2.FONT_HERSHEY_SIMPLEX,
+#        font_scale,
+#        (255, 0, 200),
+#        thickness,
+#        cv2.LINE_AA,
+#
+#    )
 
         
             
@@ -114,17 +115,17 @@ def measure_image_allmarks(
                 end = tuple(cnt[e][0])
                 far = tuple(cnt[f][0])
                 annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
-                if d > 256:
-                    cv2.putText(
-                        annotated,
-                        f" d:{d * pixel_size / 256:.2f} {unit}",
-                        far,
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        font_scale,
-                        (100, 0, 0),
-                        thickness,
-                    )
-                    annotated = cv2.circle(annotated, far, 4, [0, 0, 255], -1)
+                if (d * pixel_size / 256) > 0.5:
+#                    cv2.putText(
+#                        annotated,
+#                        f" d:{d * pixel_size / 256:.2f} {unit}",
+#                        far,
+#                        cv2.FONT_HERSHEY_SIMPLEX,
+#                        font_scale,
+#                        (100, 0, 0),
+#                        thickness,
+#                    )
+                    annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
                     depth.append(d * pixel_size / 256 )
 
             depth.sort(reverse=True)
@@ -235,24 +236,24 @@ def measure_image_area(
     else:
         x1, y1 = 15, 40
 
-    text_area =  f"Area: {area_units2:.3f} {unit}^2"
-    (tw, th), baseline = cv2.getTextSize(text_area, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
+#    text_area =  f"Area: {area_units2:.3f} {unit}^2"
+#    (tw, th), baseline = cv2.getTextSize(text_area, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+#    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
     
-    inside = (0 <= x1 <= max(0, W - bw)) and (0 <= y1 <= max(0, H - bh))
-    x1 = min(max(0, x1), max(0, W - bw))
-    y1 = min(max(0, y1), max(0, H - bh))
-    
-    cv2.putText(
-        annotated,
-        text_area,
-        (int(x1 + margin), int(y1 + margin + th)),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        font_scale,
-        (255, 0, 100),
-        thickness,
-        cv2.LINE_AA,
-    )
+#    inside = (0 <= x1 <= max(0, W - bw)) and (0 <= y1 <= max(0, H - bh))
+#    x1 = min(max(0, x1), max(0, W - bw))
+#    y1 = min(max(0, y1), max(0, H - bh))
+#    
+#    cv2.putText(
+#        annotated,
+#        text_area,
+#        (int(x1 + margin), int(y1 + margin + th)),
+#        cv2.FONT_HERSHEY_SIMPLEX,
+#        font_scale,
+#        (255, 0, 100),
+#        thickness,
+#        cv2.LINE_AA,
+#    )
     return area_units2, annotated  # BGR ndarray
 
 def measure_image_lGI(    file_path: str,
@@ -307,23 +308,23 @@ def measure_image_lGI(    file_path: str,
         x1, y1 = 15, 40
 
 
-    text_lgi =   f"lGI:{perimeter_Rate:.2f}"
-    (tw, th), baseline = cv2.getTextSize(text_lgi, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
-    
-    inside = (0 <= x1 <= max(0, W - bw)) and (0 <= y1 <= max(0, H - bh))
-    x1 = min(max(0, x1), max(0, W - bw))
-    y1 = min(max(0, y1), max(0, H - bh))
-    cv2.putText(
-        annotated,
-        text_lgi,
-        (int(x1 + margin), int(y1 + margin + th)),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        font_scale,
-        (255, 0, 200),
-        thickness,
-        cv2.LINE_AA,
-    )
+#    text_lgi =   f"lGI:{perimeter_Rate:.2f}"
+#    (tw, th), baseline = cv2.getTextSize(text_lgi, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+#    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
+#    
+#    inside = (0 <= x1 <= max(0, W - bw)) and (0 <= y1 <= max(0, H - bh))
+#    x1 = min(max(0, x1), max(0, W - bw))
+#    y1 = min(max(0, y1), max(0, H - bh))
+#    cv2.putText(
+#        annotated,
+#        text_lgi,
+#        (int(x1 + margin), int(y1 + margin + th)),
+#        cv2.FONT_HERSHEY_SIMPLEX,
+#        font_scale,
+#        (255, 0, 200),
+#        thickness,
+#        cv2.LINE_AA,
+#    )
     
     return perimeter_Rate, perimeter*pixel_size, perimeter_convex*pixel_size, annotated  # BGR ndarray
 
@@ -335,6 +336,7 @@ def measure_image_sulci_depth(    file_path: str,
 ):
 
     font_scale = 0.01/pixel_size
+    radius_px = int(round(0.1 / pixel_size))
 
     image = cv2.imread(file_path)
     if image is None:
@@ -367,17 +369,17 @@ def measure_image_sulci_depth(    file_path: str,
                 end = tuple(cnt[e][0])
                 far = tuple(cnt[f][0])
                 annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
-                if d > 256:
-                    cv2.putText(
-                        annotated,
-                        f" d:{d * pixel_size / 256:.2f} {unit}",
-                        far,
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        font_scale,
-                        (100, 0, 0),
-                        thickness,
-                    )
-                    annotated = cv2.circle(annotated, far, 4, [0, 0, 255], -1)
+                if (d * pixel_size / 256) > 0.5:
+#                    cv2.putText(
+#                        annotated,
+#                        f" d:{d * pixel_size / 256:.2f} {unit}",
+#                        far,
+#                        cv2.FONT_HERSHEY_SIMPLEX,
+#                        font_scale,
+#                        (100, 0, 0),
+#                        thickness,
+#                    )
+                    annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
                     depth.append(d * pixel_size / 256 )
 
             depth.sort(reverse=True)

@@ -2,6 +2,7 @@ from deps import *
 from functions.measurements_image import *
 from functions.measurements_Nifti import *
 from functions.measurements_stl import *
+from functions.measurement_Batch import *
 from functions.pial_to_stl import *
 from functions.Nifti2image import nifti_slice_to_image
 from functions.curvature import compute_curvature_profile, save_curvature_plot
@@ -194,6 +195,7 @@ class MainWindow(QMainWindow):
         self.act_hausdorf = QAction("Hausdorff distance", self); self.act_hausdorf.triggered.connect(self.on_measure_hausdorff); analysis_menu.addAction(self.act_hausdorf)
         process_menu.addSeparator()
         
+        self.act_img_batch = QAction("Process images batch", self); self.act_img_batch.triggered.connect(self.on_process_batch); process_menu.addAction(self.act_img_batch)
         self.act_optimization = QAction("Optimization", self); self.act_optimization.triggered.connect(self.on_optimization); process_menu.addAction(self.act_optimization)
         process_menu.addSeparator()
         self.act_pial_to_stl = QAction("Pial → STL…", self); self.act_pial_to_stl.triggered.connect(self.on_pial_to_stl); process_menu.addAction(self.act_pial_to_stl)
@@ -215,7 +217,7 @@ class MainWindow(QMainWindow):
 
 
         # Disable initially
-        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False); self.act_nitfi2png.setEnabled(False); self.act_slice_thickness.setEnabled(False)
+        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False); self.act_nitfi2png.setEnabled(False); self.act_slice_thickness.setEnabled(False); self.act_hausdorf.setEnabled(False); self.act_meas_curvature.setEnabled(False)
   # will enable for STL/polydata
         for a in (self.act_meas_allmarks, self.act_meas_volumes, self.act_meas_area, self.act_meas_perimeter, self.act_meas_lgi, self.act_meas_sulci, self.act_optimization):
             a.setEnabled(False)
@@ -1708,6 +1710,76 @@ class MainWindow(QMainWindow):
         else:
             print("[Area] Unsupported current kind. Open an image, NIfTI, or STL file.")
 
+    def on_process_batch(self):
+        """Process → Measure hallmarks for a set of images simultaneously """
+        start = self.last_dir if os.path.isdir(self.last_dir) else ""
+        dir_path = QFileDialog.getExistingDirectory(
+            self, "Choose a folder", start,
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+        )
+        if not dir_path:
+            return  # user canceled
+            
+        exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+        imgs = sorted(
+        (e.path for e in os.scandir(dir_path) if e.is_file()
+         and os.path.splitext(e.name.lower())[1] in exts),
+        key=lambda p: os.path.basename(p).lower())
+        if not imgs:
+            QMessageBox.warning(self, "No images", "The selected folder contains no image files.")
+            return
+
+        self.last_dir = dir_path
+        self.load_image(imgs[0])  # show first image
+
+        self._enter_adjustment_mode()
+        self.statusBar().showMessage("Adjust now. Press Shift+Alt+E to continue.")
+        print("[Process Batch] Adjust now. Press Shift+Alt+E to continue.")
+        self.wait_for_resume()   # blocks here; resumes after key press
+        self.statusBar().clearMessage()
+        self._exit_adjustment_mode()
+
+        btn = QMessageBox.warning(self,
+                    "Processing Images Batch",
+                    "All images must share the same resolution (pixel spacing) and measurement unit.",
+                    QMessageBox.Ok | QMessageBox.Cancel)
+        if btn == QMessageBox.Cancel:
+            return
+
+        while True:
+            if not self.units_length or self.current_path not in self.image_scales:
+                ok = self.set_image_scale()  # pops the single dialog
+                if not ok:
+                    return
+                break
+            else:
+                break
+        u = self.ensure_units()                # <-- get unit (e.g., 'mm')
+        px_size = self.image_scales.get(self.current_path, self.pixel_size)
+
+        uid = uuid.uuid4().hex[:8]
+        out_dir = os.path.join(self.temp_dir, f"Process_images_{uid}")
+        os.makedirs(out_dir, exist_ok=True)
+        self.current_output_dir = out_dir
+        print(f"[Process Batch] TEMP output: {out_dir}")
+
+        self.reset_view()
+
+
+        try:
+            valid_slices, saved_pngs = process_on_images_batch(dir_path, out_dir, pixel_size=px_size, kernel_size= self.kernel_size,
+                cnt_threshold = self.cnt_threshold, unit = u)
+                
+            self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+
+            mid = len(saved_pngs) // 2
+            self.on_slice_slider_changed(mid)
+            
+        except Exception as ex:
+            print(f"[Process Batch] ERROR: {ex}")
+            QMessageBox.critical(self, "Process Batch Failed", f"{type(ex).__name__}: {ex}")
+            return
+
     def on_measure_curvature(self):
         if self.current_kind == "image":
             try:
@@ -1847,8 +1919,10 @@ class MainWindow(QMainWindow):
         self.reset_view()
         self._exit_adjustment_mode()
 
+        mode = self.ask_align_direction()
+    
         try:
-            img, hd, d12, d21 = calculate_hausdorff_distance(First_array, Second_array, First_label= label1 or "First", Second_label = label2 or "Second", out_dir=out_dir )
+            img, hd, d12, d21 = calculate_hausdorff_distance(First_array, Second_array, First_label= label1 or "First", Second_label = label2 or "Second", align_mode= mode,  out_dir=out_dir )
             
             pm = self._np_bgr_to_qpixmap(img)
             pm2 = self._np_bgr_to_qpixmap(annotated1)
@@ -2192,7 +2266,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtGui import QPixmap
         pm = QPixmap(png_path)
         if pm.isNull():
-            print(f"[NIfTI] Could not load preview image: {png_path}")
+            print(f"Could not load preview image: {png_path}")
             return
         self.image_label.setImage(pm)
         self._show_widget(self.image_label)   # show the image pane, keep kind='nifti'
@@ -2296,7 +2370,8 @@ class MainWindow(QMainWindow):
             self.act_meas_volumes.setEnabled(True)
             self.act_meas_allmarks.setEnabled(True)
             self.act_nitfi2png.setEnabled(False)
-            
+            self.act_hausdorf.setEnabled(False)
+            self.act_meas_curvature.setEnabled(False)
             self.act_slice_thickness.setEnabled(True)
             self.nav_tb.hide()
 
@@ -2311,6 +2386,8 @@ class MainWindow(QMainWindow):
             self.act_choose_regions.setEnabled(True)
             self.label_overlay_enabled = True
             self.act_nitfi2png.setEnabled(True)
+            self.act_hausdorf.setEnabled(False)
+            self.act_meas_curvature.setEnabled(False)
             
             self.act_slice_thickness.setEnabled(False)
             self.nav_tb.show()
@@ -2325,6 +2402,8 @@ class MainWindow(QMainWindow):
             self.act_meas_allmarks.setEnabled(True)
             self.act_annotate_square.setEnabled(True)
             self.act_nitfi2png.setEnabled(False)
+            self.act_hausdorf.setEnabled(True)
+            self.act_meas_curvature.setEnabled(True)
             
             self.act_slice_thickness.setEnabled(False)
             self.nav_tb.hide()
@@ -2927,7 +3006,7 @@ class MainWindow(QMainWindow):
         except Exception: pass
 
     def _enter_adjustment_mode(self):
-        allow = { self.act_annotate_square, self.act_cnt_threshold, self.act_set_scale, self.act_set_image_scale, self.act_set_custom_label}
+        allow = { self.act_annotate_square, self.act_cnt_threshold, self.act_set_scale, self.act_set_image_scale, self.act_set_custom_label, self.act_kernel_size}
 
         for a in self.all_actions:
             if a in allow:
@@ -2959,6 +3038,27 @@ class MainWindow(QMainWindow):
                 unite = self.units_length)
         label = getattr(self, "custom_label", None)
         return annotated, basename, array, label
+        
+    def ask_align_direction(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("Align direction")
+        box.setText("Which direction do you want to align?")
+        btn_rb = box.addButton("Right + Down", QMessageBox.AcceptRole)
+        btn_lt = box.addButton("Left + Up", QMessageBox.AcceptRole)
+        btn_lr = box.addButton("Left", QMessageBox.AcceptRole)
+        btn_ud = box.addButton("Up", QMessageBox.AcceptRole)
+        btn_none = box.addButton("No alignment", QMessageBox.DestructiveRole)
+        box.addButton(QMessageBox.Cancel)
+
+        box.exec()
+
+        b = box.clickedButton()
+        if b is btn_rb:   return "right_bottom"
+        if b is btn_lt:   return "left_top"
+        if b is btn_lr:   return "left"
+        if b is btn_ud:   return "up"
+        if b is btn_none: return "none"
+        return None  # Cancel
 # ---------------------------
 # Entry point
 # ---------------------------

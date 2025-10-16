@@ -117,50 +117,38 @@ def calculate_hausdorff_distance(
     c1 = _to_xy2(contours_coords_first)
     c2 = _to_xy2(contours_coords_second)
 
-    # align SIM to MRI (to the right and down by default)
-    c1_aligned, shift = _align_points(c1, c2, mode=align_mode)
+    if align_mode != "none" :
+        # align SIM to MRI (to the right and down by default)
+        c1, shift = _align_points(c1, c2, mode=align_mode)
 
     # Hausdorff
-    d12 = directed_hausdorff(c1_aligned, c2)[0]
-    d21 = directed_hausdorff(c2, c1_aligned)[0]
+    d12, i12_c1, j12_c2 = directed_hausdorff(c1, c2)
+    d21, j21_c2, i21_c1 = directed_hausdorff(c2, c1)
     hd  = max(d12, d21)
+
+    p12 = c1[i12_c1]   # [x,y]
+    q12 = c2[j12_c2]           # [x,y]
+    p21 = c2[j21_c2]
+    q21 = c1[i21_c1]
     
-    # ----- find the actual extremal pairs to draw -----
-    # First->Second (d12)
-    D12 = cdist(c1_aligned, c2)                 # shape (N,M)
-    nn12_idx = D12.argmin(axis=1)               # nearest B index for each A point
-    min12     = D12[np.arange(D12.shape[0]), nn12_idx]
-    i12 = int(min12.argmax())                   # A index giving the max of mins
-    j12 = int(nn12_idx[i12])                    # its nearest B index
-    p12 = c1_aligned[i12]                       # point in First (aligned)
-    q12 = c2[j12]                               # nearest in Second
-
-    # Second->First (d21)
-    D21 = D12.T                                 # reuse by transposing
-    nn21_idx = D21.argmin(axis=1)               # nearest A index for each B point
-    min21     = D21[np.arange(D21.shape[0]), nn21_idx]
-    j21 = int(min21.argmax())                   # B index giving the max of mins
-    i21 = int(nn21_idx[j21])                    # its nearest A index
-    p21 = c2[j21]                               # point in Second
-    q21 = c1_aligned[i21]                       # nearest in First (aligned)
-
 
     # plot
     fig, ax = plt.subplots()
 
-    ax.plot(c1_aligned[:,0], c1_aligned[:,1], linewidth=1.5,
-            label=f"{First_label} aligned ({shift[0]:.2f},{shift[1]:.2f})")
+    ax.plot(c1[:,0], c1[:,1], linewidth=1.5,
+            label=f"{First_label}")
     ax.plot(c2[:,0], c2[:,1], linewidth=1.5, label=f"{Second_label}")
-    ax.scatter(c1_aligned[:,0], c1_aligned[:,1], s=4)
+    ax.scatter(c1[:,0], c1[:,1], s=4)
     ax.scatter(c2[:,0], c2[:,1], s=4)
 
-    #draw Hausdorff segments
+    # draw Hausdorff segments (note the lists)
     ax.plot([p12[0], q12[0]], [p12[1], q12[1]], linestyle='--', linewidth=2, label=f"d12={d12:.3f}")
     ax.plot([p21[0], q21[0]], [p21[1], q21[1]], linestyle='--', linewidth=2, label=f"d21={d21:.3f}")
     
     # emphasize endpoints
     ax.scatter([p12[0], q12[0]], [p12[1], q12[1]], s=30, marker='o')
     ax.scatter([p21[0], q21[0]], [p21[1], q21[1]], s=30, marker='s')
+
     
     # annotate near midpoints
     m12 = (p12 + q12) / 2.0
