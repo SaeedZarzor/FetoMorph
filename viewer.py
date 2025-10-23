@@ -201,6 +201,7 @@ class MainWindow(QMainWindow):
         self.act_pial_to_stl = QAction("Pial → STL…", self); self.act_pial_to_stl.triggered.connect(self.on_pial_to_stl); process_menu.addAction(self.act_pial_to_stl)
         self.act_pial_merge = QAction("Combined STL…", self); self.act_pial_merge.triggered.connect(self.on_combined_stl); process_menu.addAction(self.act_pial_merge)
         self.act_nitfi2png = QAction("Nifti masking…", self); self.act_nitfi2png.triggered.connect(self.Nifti_to_png); process_menu.addAction(self.act_nitfi2png)
+        self.act_niftiextractor = QAction("Nifti extract regions…", self); self.act_niftiextractor.triggered.connect(self.Nifti_extractor); process_menu.addAction(self.act_niftiextractor)
 
         # Setting menu
         Setting_menu = self.menuBar().addMenu("Adjustments"); self.Setting_menu = Setting_menu
@@ -217,7 +218,7 @@ class MainWindow(QMainWindow):
 
 
         # Disable initially
-        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False); self.act_nitfi2png.setEnabled(False); self.act_slice_thickness.setEnabled(False); self.act_hausdorf.setEnabled(False); self.act_meas_curvature.setEnabled(False)
+        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False); self.act_nitfi2png.setEnabled(False); self.act_slice_thickness.setEnabled(False); self.act_meas_curvature.setEnabled(False)
   # will enable for STL/polydata
         for a in (self.act_meas_allmarks, self.act_meas_volumes, self.act_meas_area, self.act_meas_perimeter, self.act_meas_lgi, self.act_meas_sulci, self.act_optimization):
             a.setEnabled(False)
@@ -1358,7 +1359,7 @@ class MainWindow(QMainWindow):
                     os.makedirs(out_dir, exist_ok=True)
                     
                     self.current_output_dir = out_dir
-                    lGI,saved_pngs, valid_slices =compute_stl_lGI(
+                    source_label, dims, gi, saved_pngs, valid_slices =compute_stl_lGI(
                         self,
                         file_path=stl_path,
                         out_dir=out_dir,
@@ -1369,20 +1370,27 @@ class MainWindow(QMainWindow):
                     )
                                         
                 
-                    if lGI is None:
+                    if gi is None:
                         return
 
                     # record metrics (consistent with your global export; units in mm unless noted)
-                    self._record_metric_for(self.current_path,
-                            slice_thickness =self.slice_thickness,
-                            kernel_size =self.kernel_size, lgi = lGI,)
+                    self._record_metric_for(
+                        self.current_path,
+                        source = source_label,
+                        kernel_size = self.kernel_size,
+                        dimensions = dims,
+                        unite = "cm",
+                        slice_thickness= self.slice_thickness,
+                        lgi=gi)
+                        
+                    self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
 
                     self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                     
                     mid = len(saved_pngs) // 2
                     self.on_slice_slider_changed(mid)
                     
-                    print(f"[STL lGI] The Brain GI (Convex surface area/ surfacearea) = {lGI:.2f}. ")
+                    print(f"[STL lGI] The Brain GI (Convex surface area/ surfacearea) = {gi:.2f}. ")
                     dt = time.time() - t0
                     print(f"[STL lGI] Done in {dt:.2f}s. Results live in TEMP.\n"
                           f"Use File → Save Data As… to copy outputs you want to keep.")
@@ -2251,15 +2259,15 @@ class MainWindow(QMainWindow):
             self._nifti_set_orientation(text);
             self._update_slice_readout()
                     
-    def _on_view_changed(self, text: str):
+    def _on_view_changed(self, text: str, path: Optional[str] = None):
         if text == "3D":
             self.slice_nav_mode = None
-            rdr = vtkNIFTIImageReader(); rdr.SetFileName(self.current_path); rdr.Update(); img = rdr.GetOutput()
+            rdr = vtkNIFTIImageReader(); rdr.SetFileName(self.current_path if path is None else path); rdr.Update(); img = rdr.GetOutput()
             self.vtk_view.show_image2d(img);  self._show_widget(self.vtk_view); self._sync_slice_controls()
             self._on_orientation_changed(self.orient_combo.currentText())
         elif text == "2D":
             self.slice_nav_mode = "nifti"
-            self._nifti_set_orientation(self.orient_combo.currentText());
+            self._nifti_set_orientation(self.orient_combo.currentText(), path);
             
             
     def _show_png_on_image_label(self, png_path: str):
@@ -2273,14 +2281,14 @@ class MainWindow(QMainWindow):
         self._active_view = "image"
 
 
-    def _nifti_set_orientation(self, view: str):
+    def _nifti_set_orientation(self, view: str, path: Optional[str] = None):
         """
         Set slice axis from a name and reconfigure the slider + view.
         view in {'sagittal','coronal','axial'}
         """
         import nibabel as nib
 
-        img = nib.load(self.current_path)
+        img = nib.load(self.current_path if path is None else path)
             # Use dataobj (lazy) but rounding requires actual values; this will page from disk
         vol = img.get_fdata(dtype=float)
         if vol is None:
@@ -2370,7 +2378,6 @@ class MainWindow(QMainWindow):
             self.act_meas_volumes.setEnabled(True)
             self.act_meas_allmarks.setEnabled(True)
             self.act_nitfi2png.setEnabled(False)
-            self.act_hausdorf.setEnabled(False)
             self.act_meas_curvature.setEnabled(False)
             self.act_slice_thickness.setEnabled(True)
             self.nav_tb.hide()
@@ -2386,7 +2393,6 @@ class MainWindow(QMainWindow):
             self.act_choose_regions.setEnabled(True)
             self.label_overlay_enabled = True
             self.act_nitfi2png.setEnabled(True)
-            self.act_hausdorf.setEnabled(False)
             self.act_meas_curvature.setEnabled(False)
             
             self.act_slice_thickness.setEnabled(False)
@@ -2827,6 +2833,21 @@ class MainWindow(QMainWindow):
         smooth_strength = options["smooth_strength"])
         self.pixel_size = self.bar_mm/ length_px
         self.load_image(out_path)
+
+# -------------------------------------------------------
+
+    def Nifti_extractor(self):
+    
+        uid = uuid.uuid4().hex[:8]
+        out_dir = os.path.join(self.temp_dir, f"nifti_allmarks_{uid}")
+        os.makedirs(out_dir, exist_ok=True)
+        self.current_output_dir = out_dir
+    
+        labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
+
+        nii_output = nifti_extractor (self, self.current_path, out_dir, valid_labels = labels)
+        
+        _on_view_changed()
 
 # ---- Metrics Dock (per-path, reads from self.metrics) -----------------------
 

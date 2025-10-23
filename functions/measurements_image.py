@@ -31,7 +31,7 @@ def measure_image_allmarks(
    
     annotated = image.copy()
     W, H = annotated.shape[:2]
-    thickness = text_thickness(H, style="thin")
+    thickness = text_thickness(H, style="bold")
 
     if filtered_contours:
         cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
