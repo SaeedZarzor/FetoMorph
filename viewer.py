@@ -7,6 +7,7 @@ from functions.pial_to_stl import *
 from functions.Nifti2image import nifti_slice_to_image
 from functions.curvature import compute_curvature_profile, save_curvature_plot
 from functions.hausdorff import calculate_hausdorff_distance, convert_image
+from functions.nii_extractor import nifti_extractor
 from helpers.Helpers import get_nifti_present_labels, add_scalebar, get_max_slice_thinckness
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.Contour_threshold import ContourThresholdDialog
@@ -2846,9 +2847,8 @@ class MainWindow(QMainWindow):
         labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
 
         nii_output = nifti_extractor (self, self.current_path, out_dir, valid_labels = labels)
-        
-        _on_view_changed()
-
+                
+        self.load_nifti(nii_output)
 # ---- Metrics Dock (per-path, reads from self.metrics) -----------------------
 
     def _init_metrics_dock(self):
