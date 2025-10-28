@@ -96,7 +96,8 @@ def load_vtk_as_trimesh(path):
     mesh = pv.read(path)
     mesh_tri = mesh.triangulate()
     vertices = np.array(mesh_tri.points)
-    faces = mesh_tri.faces.reshape((-1, 4))[:, 1:4]  # drop count
+    faces = np.array(mesh_tri.faces)  # ensure numpy array
+    faces = faces.reshape((-1, 4))[:, 1:4]  # drop first value in each row
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 

@@ -2,6 +2,7 @@ from deps import *
 from functions.measurements_image import *
 from functions.measurements_Nifti import *
 from functions.measurements_stl import *
+from functions.measurements_vtk import *
 from functions.measurement_Batch import *
 from functions.pial_to_stl import *
 from functions.Nifti2image import nifti_slice_to_image
@@ -18,10 +19,10 @@ from widgets.Kernel_size import KernelSizeDialog
 from widgets.Slice_thickness import SilceThicknessDialog
 from widgets.OptionsDialog import ProcessingOptionsDialog
 from widgets.Recent_paths import RecentPaths, populate_recent_menu
+from widgets.GeometryDialog import GeometryDialogWithAspect
 from widgets.RegionDock import *
 from ribbon import *
 from icons import set_icons
-
 
 # ---------------------------
 # Supported extensions
@@ -116,7 +117,9 @@ class MainWindow(QMainWindow):
         self.mm_per_px_bar = 0
         self.bar_mm = 25
         self.custom_label: str = None
-
+        self.physical_dim: tuple[int, int, int] = (0, 0, 0)
+        self.slice_direction: Literal["X", "Y", "Z"] = "Y"
+        
 
         # Slice navigation mode/state
         self.slice_nav_mode = None           # None | "nifti" | "png"
@@ -1094,11 +1097,65 @@ class MainWindow(QMainWindow):
                 dt = time.time() - t0
                 print(f"[STL hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
-
+            
             except Exception as ex:
                 print(f"[STL hallmarks] ERROR: {ex}")
-                QMessageBox.critical(self, "STL Area Failed", f"{type(ex).__name__}: {ex}")
-            return
+                QMessageBox.critical(self, "STL hallmarks Failed", f"{type(ex).__name__}: {ex}")
+                return
+        
+        elif self.current_kind == "vtk_surface":
+            t0 = time.time()
+            try:
+                uid = uuid.uuid4().hex[:8]
+                out_dir = os.path.join(self.temp_dir, f"VTL_allmarks_{uid}")
+                os.makedirs(out_dir, exist_ok=True)
+                
+                self.current_output_dir = out_dir
+                
+                ok = self.load_mesh_and_ask_geometry()
+                 
+                if ok:
+                    area, volume, gi, depth, saved_pngs, valid_slices = compute_vtk_allmarks(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,
+                    kernel_size = self.kernel_size, Slice_direction = self.slice_direction, Pysical_dim= self.Pysical_dim, pixel_size=self.pixel_size, unit =  self.units_length, slice_thickness=self.slice_thickness)
+            
+                else:
+                    return
+
+                # record metrics (consistent with your global export; units in mm unless noted)
+                self._record_metric_for(
+                    self.current_path,
+                    label = self.slice_direction,
+                    kernel_size = self.kernel_size,
+                    unite = self.units_length,
+                    pixel_size = self.pixel_size,
+                    dimensions = self.Pysical_dim,
+                    slice_thickness= self.slice_thickness,
+                    volume=volume,
+                    area=area,
+                    sulci_depth = depth,
+                    lgi=gi)
+                    
+                
+                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+
+                mid = len(saved_pngs) // 2
+                self.on_slice_slider_changed(mid)
+                
+                print(f"[VTK hallmarks]:")
+                print(f"VTK mesh Volume Result = {volume:.2f} {u}^3.")
+                print(f"VTK mesh Outer Surface Area Result = {area:.2f} {u}^2.")
+                print(f"VTK mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
+                if len(depth)>=3:
+                    print(f"The Maximum Grooves Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} {u}.")
+
+                dt = time.time() - t0
+                print(f"[VTK hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
+                      f"Use File → Save Data As… to copy outputs you want to keep.")
+                      
+            except Exception as ex:
+                print(f"[VTK hallmarks] ERROR: {ex}")
+                QMessageBox.critical(self, "VTK hallmarks Failed", f"{type(ex).__name__}: {ex}")
+                return
             
             
     def on_measure_volumes(self):
@@ -2031,8 +2088,43 @@ class MainWindow(QMainWindow):
 
         print(f"[Units] Using {self.units_length}")
         return self.units_length
+        
 
-    
+    def load_mesh_and_ask_geometry(self) -> bool:
+        """
+        Reads a VTK mesh, derives bounds, opens one window to adjust
+        dimensions with aspect lock and live unit conversion.
+        Returns (physical_dim, slice_direction, unit).
+        """
+        if self.current_kind == "vtk_surface":
+            mesh = pv.read(str(self.current_path))
+            xmin, xmax, ymin, ymax, zmin, zmax = mesh.bounds
+            Lx0, Ly0, Lz0 = xmax - xmin, ymax - ymin, zmax - zmin
+            Lx0, Ly0, Lz0 = max(Lx0, 1e-9), max(Ly0, 1e-9), max(Lz0, 1e-9)
+
+            
+            unit = self.ensure_units()
+            slice_dir = getattr(self, "slice_direction", "Y").upper()
+
+
+            dlg = GeometryDialogWithAspect(self, Lx=Lx0, Ly=Ly0, Lz=Lz0, unit=unit, slice_dir=slice_dir)
+            if dlg.exec() == QDialog.Accepted:
+                (Lx, Ly, Lz), slice_dir, unit = dlg.values()
+            else:
+                (Lx, Ly, Lz) = (Lx0, Ly0, Lz0)
+
+            self.physical_dim = (Lx, Ly, Lz)
+            self.slice_direction = slice_dir
+            self.units_length = unit
+
+            print(f"[Geometry] from mesh={file_path}")
+            print(f"  bounds=({xmin}, {xmax}, {ymin}, {ymax}, {zmin}, {zmax})")
+            print(f"  physical_dim={self.physical_dim} {unit}, slice_direction={slice_dir}")
+
+            return True
+        else:
+            return False
+
     
     def set_image_scale(self):
         """
@@ -2525,7 +2617,7 @@ class MainWindow(QMainWindow):
 #                    axis_name = {0: "sagittal", 1: "coronal", 2: "axial"}.get(getattr(self, "nifti_axis", 1), "coronal")
 #                    self._nifti_set_orientation(axis_name)
 
-            elif kind in ("stl", "vtk", "vtk_poly", "vtk_surface"):
+            elif kind in ("stl", "vtk_image", "vtk_poly", "vtk_surface"):
             
                 # You usually don't need to re-read the mesh to "reset view".
                 # Just reset the camera. If you do want to re-read, call your existing loader here.

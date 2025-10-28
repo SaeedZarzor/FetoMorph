@@ -1,6 +1,8 @@
 # helpers.py
 from deps import *
 import pyvista as pv
+from pyvista import _vtk as vtk
+
 
 
 def text_thickness(H, style="regular", cap=10):
@@ -69,7 +71,7 @@ def clac_scale(image_rgb, cube_length):
     _, thresh_red = cv2.threshold(red_rect, 150, 255, 0)
     contours, _ = cv2.findContours(thresh_red, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        print("[STL Scale] No red reference contour found; default scale 1.0 mm/px")
+        print("[Scale] No red reference contour found; default scale 1.0 mm/px")
         return 1.0
     # Use the largest red blob as reference
     x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
@@ -179,13 +181,89 @@ def add_scalebar(qimg: QImage, zooms, ax) -> QImage:
 def get_max_slice_thinckness(path: str):
     
     ext = Path(path).suffix.lower()
-    
-    if ext == ".stl":
-        mesh = pv.read(str(path))
+    mesh = pv.read(str(path))
 
-        # --- Bounds / dims (mm)
+    if ext in (".stl", ".vtk"):
+        # ensure we have polygonal surface
+        if not isinstance(mesh, pv.PolyData):
+            mesh = mesh.extract_surface()
+
         x_min, x_max, y_min, y_max, z_min, z_max = mesh.bounds
-        mesh_dim = [x_max - x_min, y_max - y_min, z_max - z_min]
-        return min(mesh_dim)
-    
-    else: return None
+        dims = [x_max - x_min, y_max - y_min, z_max - z_min]
+        return min(dims)
+
+    return None
+
+
+#def view_params(Slice_direction, bounds, center, pixel_spacing, margin=100.0):
+#    x_min, x_max, y_min, y_max, z_min, z_max = bounds
+#    dx, dy, dz = x_max - x_min, y_max - y_min, z_max - z_min
+#
+#    axis = {"X": 0, "Y": 1, "Z": 2}.get(Slice_direction)
+#    if axis is None:
+#        raise ValueError("Slice_direction must be 'X','Y','Z'.")
+#
+#    # image size: plane orthogonal to the slice axis
+#    if axis == 0:   # X → YZ
+#        w_raw, h_raw = dy / pixel_spacing, dz / pixel_spacing
+#    elif axis == 1: # Y → XZ
+#        w_raw, h_raw = dx / pixel_spacing, dz / pixel_spacing
+#    else:           # Z → XY
+#        w_raw, h_raw = dx / pixel_spacing, dy / pixel_spacing
+#
+#    image_width  = int(np.clip(np.ceil(w_raw), 64, 4096))
+#    image_height = int(np.clip(np.ceil(h_raw), 64, 4096))
+#    window_size = (image_width, image_height)
+#
+#    # camera position along the slice axis at max+margin
+#    cam_pos = list(center)
+#    cam_pos[axis] = [x_max, y_max, z_max][axis] + margin
+#
+#    # view-up: keep Z-up for X,Y views; use Y-up for Z view
+#    view_up = (0.0, 0.0, 1.0) if axis in (0, 1) else (0.0, 1.0, 0.0)
+#
+#    cam_position = [
+#        tuple(cam_pos),               # camera
+#        (center[0], center[1], center[2]),  # focal point
+#        view_up,                      # view up
+#    ]
+#
+#    return window_size, cam_position
+
+
+def slice_at(mesh: pv.DataSet, Slice_direction: str, s: float) -> pv.PolyData:
+    # ensure polygonal surface
+    if not isinstance(mesh, pv.PolyData):
+        mesh = mesh.extract_surface()
+
+    c = mesh.center  # (cx, cy, cz)
+
+    axis = {
+        "X": ( (1.0, 0.0, 0.0), lambda s: (float(s), c[1], c[2]) ),
+        "Y": ( (0.0, 1.0, 0.0), lambda s: (c[0], float(s), c[2]) ),
+        "Z": ( (0.0, 0.0, 1.0), lambda s: (c[0], c[1], float(s)) ),
+    }.get(Slice_direction)
+
+    if axis is None:
+        raise ValueError("Slice_direction must be 'X','Y','Z'.")
+
+    normal, origin_fn = axis
+    origin = origin_fn(s)
+    return mesh.slice(normal=normal, origin=origin)
+
+def make_scale_cube(Slice_direction: str, cube_len: float, offset: float = 50.0) -> pv.PolyData:
+    # choose thin axis and translation vector
+    if Slice_direction == "X":
+        cube = pv.Cube(x_length=0.01, y_length=cube_len, z_length=cube_len)
+        cube.translate((offset, 0, offset), inplace=True)
+    elif Slice_direction == "Y":
+        cube = pv.Cube(x_length=cube_len, y_length=0.01, z_length=cube_len)
+        cube.translate((0, offset, offset), inplace=True)
+    elif Slice_direction == "Z":
+        cube = pv.Cube(x_length=cube_len, y_length=cube_len, z_length=0.01)
+        cube.translate((offset, offset, 0), inplace=True)
+    else:
+        raise ValueError("Slice_direction must be 'X','Y','Z'.")
+
+    return cube
+
