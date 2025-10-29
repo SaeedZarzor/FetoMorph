@@ -15,8 +15,7 @@ def compute_vtk_allmarks(
     min_contour_area: float = 20.0,
     kernel_size: int = 5,
     Slice_direction: Literal["X", "Y", "Z"] = "Y",
-    Pysical_dim: Sequence[int] | None = None,
-    pixel_size: float = 0.01,
+    Physical_dim: Sequence[int] | None = None,
     unit: str = "mm",
     slice_thickness: float = 0.5):
     # --- Load mesh
@@ -37,11 +36,9 @@ def compute_vtk_allmarks(
 
     # --- Bounds / dims (mm)
     x_min, x_max, y_min, y_max, z_min, z_max = mesh.bounds
-    brain_dim = [x_max - x_min, y_max - y_min, z_max - z_min]
-    brain_dim_output = [dim * pixel_size for dim in brain_dim]
-    brain_dim_output = sorted(brain_dim_output, reverse=True)
-    print(f"[VTK All Hallmarks] mesh dimensions {unit}: {brain_dim_output}")
-    
+    mesh_dim = [x_max - x_min, y_max - y_min, z_max - z_min]
+    mesh_dim_scaled = np.array(Physical_dim) / np.array(mesh_dim)
+
     axis_bounds = {
         "X": (x_min, x_max),
         "Y": (y_min, y_max),
@@ -62,7 +59,8 @@ def compute_vtk_allmarks(
 
     # Effective thickness to exactly span Y-extent
     axis_index = {"X": 0, "Y": 1, "Z": 2}.get(Slice_direction)
-    slice_thickness_eff = brain_dim[axis_index] / N
+    slice_thickness_eff = mesh_dim[axis_index] / N
+    slice_thickness_eff *= mesh_dim_scaled[axis_index]
     print(f"[VTK All Hallmarks] Effective slice thickness: {slice_thickness_eff} {unit}")
 
     # --- Outputs
@@ -94,8 +92,8 @@ def compute_vtk_allmarks(
             continue
 
         # Red cube reference (10% of X extent)
-        cube_len = max(1e-6, brain_dim[axis_index] / 10.0)
-        scale_cube = make_scale_cube(Slice_direction, cube_len, brain_dim[axis_index]*1.5)
+        cube_len = max(1e-6, mesh_dim[axis_index] / 10.0)
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh_dim[axis_index]*1.5)
         # Render: section + scale cube
         p.clear()
         p.add_mesh(scale_cube, color="red")
@@ -107,7 +105,7 @@ def compute_vtk_allmarks(
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_orgin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = clac_scale(img_rgb, cube_len*pixel_size)
+        mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[axis_index])
 
 
         # Prepare masks / contours (pixel space)
@@ -157,11 +155,9 @@ def compute_vtk_allmarks(
                             far = tuple(cnt[f][0])
                             bgr = cv2.line(bgr, start, end, [255, 0, 0], 1)
                             if d>256:
-                                mm_per_fixed = mm_per_px/256
-                                depth_mm = d *mm_per_fixed
-                                if depth_mm < (0.25* (brain_dim[axis_index]*pixel_size)) and depth_mm > (0.005* (brain_dim[axis_index]*pixel_size)):
-                                    bgr = cv2.circle(bgr, far, 2, [255, 255, 0], -1)
-                                    depth.append(depth_mm)
+                                depth_mm = d * mm_per_px/256
+                                bgr = cv2.circle(bgr, far, 2, [255, 255, 0], -1)
+                                depth.append(depth_mm)
                 
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
@@ -213,7 +209,7 @@ def compute_vtk_allmarks(
 
 
     # Always return a 3-tuple
-    return brain_dim_output, Area, Volume, GI_total, total_depth ,saved_pngs, valid_slices
+    return Area, Volume, GI_total, total_depth ,saved_pngs, valid_slices
 
 
 def compute_stl_lGI(

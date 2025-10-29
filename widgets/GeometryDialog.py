@@ -1,15 +1,18 @@
 # add to imports
 from deps import *
+from pyvistaqt import QtInteractor
+import pyvista as pv
 
 class GeometryDialogWithAspect(QDialog):
     UNIT_FACTORS = {"mm": 1.0, "µm": 1e-3, "um": 1e-3, "cm": 10.0, "m": 1000.0}
 
-    def __init__(self, parent=None, Lx=1.0, Ly=1.0, Lz=1.0, unit="mm", slice_dir="Y"):
+    def __init__(self, parent=None, mesh =  pv.DataSet, Lx=1.0, Ly=1.0, Lz=1.0, unit="mm", slice_dir="Y"):
         super().__init__(parent)
+         
         self.setWindowTitle("Mesh Geometry")
         self.setWindowModality(Qt.ApplicationModal)
+        self.mesh = mesh
 
-        # originals stored in mm
         f = self.UNIT_FACTORS.get(unit, 1.0)
         self._Lx0_mm = max(Lx * f, 1e-9)
         self._Ly0_mm = max(Ly * f, 1e-9)
@@ -17,7 +20,13 @@ class GeometryDialogWithAspect(QDialog):
         self._unit_mm_factor = f
         self._blocking = False
 
-        # spin boxes
+        # --- left panel: controls
+        left = QWidget(self)
+        vleft = QVBoxLayout()          # no parent here
+        left.setLayout(vleft)          # single layout for 'left'
+        form = QFormLayout()           # no parent here
+
+        
         self.x_sb = QDoubleSpinBox(self); self._setup_len_box(self.x_sb, Lx, unit)
         self.y_sb = QDoubleSpinBox(self); self._setup_len_box(self.y_sb, Ly, unit)
         self.z_sb = QDoubleSpinBox(self); self._setup_len_box(self.z_sb, Lz, unit)
@@ -25,38 +34,93 @@ class GeometryDialogWithAspect(QDialog):
         self.y_sb.valueChanged.connect(lambda v: self._scaled_update('y', v))
         self.z_sb.valueChanged.connect(lambda v: self._scaled_update('z', v))
 
-        # slice dir
         self.dir_cb = QComboBox(self); self.dir_cb.addItems(["X", "Y", "Z"])
         self.dir_cb.setCurrentText(slice_dir.upper() if slice_dir in ("X","Y","Z") else "Y")
+        self.dir_cb.currentTextChanged.connect(self._highlight_axis)
 
-        # unit
         self.unit_cb = QComboBox(self)
         self.unit_cb.setEditable(True)
         self.unit_cb.addItems(["mm", "µm", "cm", "m"])
         self.unit_cb.setCurrentText(unit if unit else "mm")
         self.unit_cb.currentTextChanged.connect(self._unit_changed)
 
-        # layout
-        form = QFormLayout()
         form.addRow("X length:", self.x_sb)
         form.addRow("Y length:", self.y_sb)
         form.addRow("Z length:", self.z_sb)
         form.addRow("Slice direction:", self.dir_cb)
         form.addRow("Unit:", self.unit_cb)
 
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
-        # Original button
-        self.orig_btn = QPushButton("Original")
-        btns.addButton(self.orig_btn, QDialogButtonBox.ActionRole)
+        self.orig_btn = QPushButton("Original", self)
+        ok_btn = QPushButton("OK", self)
+        cancel_btn = QPushButton("Cancel", self)
         self.orig_btn.clicked.connect(self._reset_to_original)
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn.clicked.connect(self.reject)
+        
+        # bottom row (right-aligned)
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        button_row.addWidget(self.orig_btn)
+        button_row.addSpacing(10)
+        button_row.addWidget(ok_btn)
+        button_row.addWidget(cancel_btn)
+        
+        # assemble
+        vleft.addLayout(form)          # add child layout to the ONLY parent layout
+        vleft.addStretch(1)
+        vleft.addLayout(button_row)
 
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
+        # --- right panel: 3D view
+        self.plot = QtInteractor(self)
+        self._init_view()
 
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addWidget(btns)
+        # --- layout
+        root = QHBoxLayout(self)
+        root.addWidget(left, 0)       # auto-size to form
+        root.addWidget(self.plot, 1)  # take remaining space
 
+        
+    def _init_view(self):
+        self.plot.clear()
+        self.plot.add_mesh(self.mesh, style="surface", color='blue', show_edges=True, opacity=1.0)
+        self.plot.add_axes(interactive=False)  # XYZ triad in corner
+        self.plot.show_bounds(
+            grid="back",
+            location="outer",
+            all_edges=True,
+            xtitle="X",
+            ytitle="Y",
+            ztitle="Z",
+        )
+        self.plot.add_bounding_box(color="black", line_width=1)
+        if hasattr(self.plot, "toolbar"):
+            self.plot.toolbar.setVisible(False)
+        if hasattr(self.plot, "statusBar"):
+            self.plot.statusBar().setVisible(False)
+            
+        self._add_axis_arrows()
+        self._highlight_axis(self.dir_cb.currentText())
+        self.plot.camera_position = "iso"
+        self.plot.reset_camera()
+
+    def _add_axis_arrows(self):
+            cx, cy, cz = self.mesh.center
+            s = max(self._Lx0_mm, self._Ly0_mm, self._Lz0_mm) / self._unit_mm_factor * 0.2
+            self.plot.add_mesh(pv.Arrow((cx, cy, cz), (1, 0, 0), scale=s), color="red", name="axis_x")
+            self.plot.add_mesh(pv.Arrow((cx, cy, cz), (0, 1, 0), scale=s), color="green", name="axis_y")
+            self.plot.add_mesh(pv.Arrow((cx, cy, cz), (0, 0, 1), scale=s), color="blue", name="axis_z")
+
+    def _highlight_axis(self, axis: str):
+        # brighten selected axis, dim others
+        axis = axis.upper()
+        for k in ("X", "Y", "Z"):
+            actor = self.plot.renderer._actors.get(f"axis_{k}")
+            if not actor:
+                continue
+            opacity = 1.0 if k == axis else 0.25
+            actor.GetProperty().SetOpacity(opacity)
+        self.plot.render()
+        
     def _setup_len_box(self, sb: QDoubleSpinBox, val: float, unit: str):
         sb.setDecimals(4)
         sb.setRange(1e-9, 1e12)

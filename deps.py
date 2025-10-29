@@ -26,7 +26,7 @@ from vtkmodules.vtkRenderingVolumeOpenGL2 import vtkSmartVolumeMapper
 # -------------- VTK IO --------------
 from vtkmodules.vtkIOImage import vtkNIFTIImageReader, vtkPNGWriter, vtkJPEGWriter
 from vtkmodules.vtkIOXML import vtkXMLImageDataReader, vtkXMLPolyDataReader
-from vtkmodules.vtkIOLegacy import vtkGenericDataObjectReader, vtkDataSetReader
+from vtkmodules.vtkIOLegacy import vtkGenericDataObjectReader, vtkDataSetReader, vtkPolyDataReader
 from vtkmodules.vtkIOGeometry import vtkSTLReader
 
 # -------------- VTK data models --------------
@@ -97,7 +97,7 @@ __all__ = [
     # VTK
     "QVTKRenderWindowInteractor","vtkRenderer","vtkPolyDataMapper","vtkActor",
     "vtkImageSliceMapper","vtkImageSlice","vtkVolume","vtkVolumeProperty","vtkWindowToImageFilter",
-    "vtkSmartVolumeMapper","vtkNIFTIImageReader","vtkPNGWriter","vtkJPEGWriter",
+    "vtkSmartVolumeMapper","vtkNIFTIImageReader","vtkPNGWriter","vtkJPEGWriter", "vtkPolyDataReader",
     "vtkXMLImageDataReader","vtkXMLPolyDataReader","vtkGenericDataObjectReader","vtkDataSetReader",
     "vtkSTLReader","vtkImageData","vtkPolyData","vtkDataSetSurfaceFilter","vtkOutputWindow",
     # Sci/IO

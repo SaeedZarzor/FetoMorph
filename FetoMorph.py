@@ -218,11 +218,12 @@ class MainWindow(QMainWindow):
         self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Setting_menu.addAction(self.act_annotate_square)
         self.act_choose_regions = QAction("ROI extraction…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
+        self.act_set_physical_dim = QAction("Mesh dimensions…", self);self.act_set_physical_dim.setToolTip("Define the physical dimensions of the VTK mesh."); self.act_set_physical_dim.triggered.connect(self.load_mesh_and_ask_geometry);Setting_menu.addAction(self.act_set_physical_dim)
 
 
 
         # Disable initially
-        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False); self.act_nitfi2png.setEnabled(False); self.act_slice_thickness.setEnabled(False); self.act_meas_curvature.setEnabled(False)
+        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False); self.act_nitfi2png.setEnabled(False); self.act_slice_thickness.setEnabled(False); self.act_meas_curvature.setEnabled(False); self.act_set_physical_dim.setEnabled(False)
   # will enable for STL/polydata
         for a in (self.act_meas_allmarks, self.act_meas_volumes, self.act_meas_area, self.act_meas_perimeter, self.act_meas_lgi, self.act_meas_sulci, self.act_optimization):
             a.setEnabled(False)
@@ -296,9 +297,7 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Adjustments", self.act_cnt_threshold)
         self.ribbon.add_action("Adjustments", self.act_annotate_square)
         self.ribbon.add_action("Adjustments", self.act_choose_regions)
-
-
-
+        self.ribbon.add_action("Adjustments", self.act_set_physical_dim)
 
 
         self.addToolBarBreak(Qt.TopToolBarArea)
@@ -573,6 +572,7 @@ class MainWindow(QMainWindow):
         label: Optional[str] = None,
         annotation:Optional[str] = None,
         source: Optional[str] = None,
+        direction: Optional[str] = None,
         *,
         pixel_size: Optional[float] = None,
         pixel_size_units: Optional[str] = None,
@@ -634,6 +634,7 @@ class MainWindow(QMainWindow):
                 "Label": label,
                 "Annotation": annotation,
                 "Source": source,
+                "SliceDirection": direction,
                 "Area": None,
                 "PixelSize":       pixel_size if pixel_size is not None else (last.get("PixelSize") if last else None),
                 "PixelSizeUnits":  pixel_size_units if pixel_size_units is not None else (last.get("PixelSizeUnits") if last else None),
@@ -674,7 +675,7 @@ class MainWindow(QMainWindow):
         return last
 
         
-    def _record_metric_for(self, path: str, annotation: Optional[str] = None, source: Optional[str] = None, **vals):
+    def _record_metric_for(self, path: str, annotation: Optional[str] = None, source: Optional[str] = None, direction: Optional[str] = None  ,**vals):
         if not path:
             return
         kind = getattr(self, "current_kind", None)
@@ -687,7 +688,7 @@ class MainWindow(QMainWindow):
         thicsl = vals.pop("slice_thickness", None)
         uni = vals.pop("unite", None)
         row = self._ensure_metric_row(
-            path, kind, label, annotation, source,
+            path, kind, label, annotation, source, direction,
             pixel_size=psize,
             pixel_size_units=punit,
             kernel_size=ksize,
@@ -805,14 +806,14 @@ class MainWindow(QMainWindow):
             gr = vtkGenericDataObjectReader(); gr.SetFileName(path); gr.Update(); ds = gr.GetOutput()
         if isinstance(ds, vtkImageData):
             self.vtk_view.show_image2d(ds); self._show_widget(self.vtk_view); self._sync_slice_controls()
-            print(f"Legacy VTK image loaded. Extent={ds.GetExtent()}  Range={ds.GetScalarRange()}"); self._set_current("vtk_image", path); return
+            print(f"Legacy VTK image loaded. Extent={ds.GetExtent()}  Range={ds.GetScalarRange()}"); self._set_current("vtk", path); return
         if isinstance(ds, vtkPolyData) and ds.GetNumberOfPoints()>0:
             self.vtk_view.show_polydata(ds); self._show_widget(self.vtk_view); self._set_slice_controls(False)
-            print(f"Legacy VTK polydata loaded. Points={ds.GetNumberOfPoints()}  Polys={ds.GetNumberOfPolys()}"); self._set_current("vtk_poly", path); return
+            print(f"Legacy VTK polydata loaded. Points={ds.GetNumberOfPoints()}  Polys={ds.GetNumberOfPolys()}"); self._set_current("vtk", path); return
         surf = vtkDataSetSurfaceFilter(); surf.SetInputData(ds); surf.Update(); poly = surf.GetOutput()
         if poly and poly.GetNumberOfPoints()>0:
             self.vtk_view.show_polydata(poly); self._show_widget(self.vtk_view); self._set_slice_controls(False)
-            print(f"Legacy VTK dataset surfaced. Points={poly.GetNumberOfPoints()}  Polys={poly.GetNumberOfPolys()}"); self._set_current("vtk_surface", path); return
+            print(f"Legacy VTK dataset surfaced. Points={poly.GetNumberOfPoints()}  Polys={poly.GetNumberOfPolys()}"); self._set_current("vtk", path); return
         QMessageBox.critical(self, "Open Failed", "Unsupported or empty .vtk dataset (no points after surface extraction).")
         
         
@@ -838,7 +839,7 @@ class MainWindow(QMainWindow):
         # Define columns in the order you want them in Excel
         base_cols = ["File", "Kind"]
         metric_cols = [
-            "Label", "Annotation", "Source",
+            "Label", "Annotation", "Source", "SliceDirection",
             "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit", "SliceThickness",
             "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
@@ -893,7 +894,7 @@ class MainWindow(QMainWindow):
             return
 
         # Drop metric columns that are entirely empty across remaining rows
-        drop_all_null = [c for c in real_metric_cols + ["Label", "Annotation", "Source","LengthUnit","PixelSizeUnits"] if c in df.columns and df[c].isna().all()]
+        drop_all_null = [c for c in real_metric_cols + ["Label", "Annotation", "Source", "SliceDirection","LengthUnit","PixelSizeUnits"] if c in df.columns and df[c].isna().all()]
         if drop_all_null:
             df.drop(columns=drop_all_null, inplace=True)
 
@@ -992,7 +993,7 @@ class MainWindow(QMainWindow):
                 self._set_current("image", self.current_path)
                 self._record_metric_for(
                     self.current_path,
-                    label = label_text,
+                    annotation = label_text,
                     pixel_size_units = f"{self.units_length}/pixel",
                     unite = self.units_length,
                     pixel_size = self.pixel_size,
@@ -1103,7 +1104,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "STL hallmarks Failed", f"{type(ex).__name__}: {ex}")
                 return
         
-        elif self.current_kind == "vtk_surface":
+        elif self.current_kind == "vtk":
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -1112,23 +1113,21 @@ class MainWindow(QMainWindow):
                 
                 self.current_output_dir = out_dir
                 
-                ok = self.load_mesh_and_ask_geometry()
-                 
-                if ok:
-                    area, volume, gi, depth, saved_pngs, valid_slices = compute_vtk_allmarks(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,
-                    kernel_size = self.kernel_size, Slice_direction = self.slice_direction, Pysical_dim= self.Pysical_dim, pixel_size=self.pixel_size, unit =  self.units_length, slice_thickness=self.slice_thickness)
-            
-                else:
-                    return
+                if all(v == 0 for v in self.physical_dim):
+                    self.load_mesh_and_ask_geometry()
 
+                u = self.units_length
+                area, volume, gi, depth, saved_pngs, valid_slices = compute_vtk_allmarks(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,
+                    kernel_size = self.kernel_size, Slice_direction = self.slice_direction, Physical_dim= self.physical_dim, unit = u, slice_thickness=self.slice_thickness)
+            
+       
                 # record metrics (consistent with your global export; units in mm unless noted)
                 self._record_metric_for(
                     self.current_path,
-                    label = self.slice_direction,
+                    direction = self.slice_direction,
                     kernel_size = self.kernel_size,
-                    unite = self.units_length,
-                    pixel_size = self.pixel_size,
-                    dimensions = self.Pysical_dim,
+                    unite = u,
+                    dimensions = self.physical_dim,
                     slice_thickness= self.slice_thickness,
                     volume=volume,
                     area=area,
@@ -1290,10 +1289,10 @@ class MainWindow(QMainWindow):
                 # Ensure File/Process actions stay enabled
                 self._set_current("image", self.current_path)
                 self._record_metric_for(self.current_path,label=label_text,
-                pixel_size_units = f"{self.units_length}/pixel",
-                unite= self.units_length,
-                pixel_size = self.pixel_size,
-                perimeter=perimeter)
+                    pixel_size_units = f"{self.units_length}/pixel",
+                    unite= self.units_length,
+                    pixel_size = self.pixel_size,
+                    perimeter=perimeter)
 
             except Exception as ex:
                 print(f"[Perimeter] ERROR: {ex}")
@@ -1347,7 +1346,7 @@ class MainWindow(QMainWindow):
                 self._active_view = "image"
                 # Ensure File/Process actions stay enabled
                 self._set_current("image", self.current_path)
-                self._record_metric_for(self.current_path, label=label_text,
+                self._record_metric_for(self.current_path, annotation=label_text,
                 pixel_size_units = f"{self.units_length}/pixel",
                 unite = self.units_length,
                 pixel_size = self.pixel_size,
@@ -1554,7 +1553,7 @@ class MainWindow(QMainWindow):
                 self._active_view = "image"
                 # Ensure File/Process actions stay enabled
                 self._set_current("image", self.current_path)
-                self._record_metric_for(self.current_path, label=label_text,
+                self._record_metric_for(self.current_path, annotation=label_text,
                     pixel_size_units = f"{self.units_length}/pixel",
                     unite = self.units_length,
                     pixel_size = self.pixel_size,
@@ -1686,7 +1685,7 @@ class MainWindow(QMainWindow):
                 self._active_view = "image"
                 # Ensure File/Process actions stay enabled
                 self._set_current("image", self.current_path)
-                self._record_metric_for(self.current_path, label=label_text ,
+                self._record_metric_for(self.current_path, annotation=label_text ,
                 pixel_size_units = f"{self.units_length}/pixel",
                 pixel_size = self.pixel_size,
                 unite = self.units_length,
@@ -2082,7 +2081,10 @@ class MainWindow(QMainWindow):
             text="mm",
         )
         if not ok or not val.strip():
-            # if user cancels, keep default
+            QMessageBox.information(
+                    self,
+                    "No Input",
+                    "You closed the window without entering any values. Default unit will be used.")
             val = "mm"
         self.units_length = val.strip()
 
@@ -2096,28 +2098,35 @@ class MainWindow(QMainWindow):
         dimensions with aspect lock and live unit conversion.
         Returns (physical_dim, slice_direction, unit).
         """
-        if self.current_kind == "vtk_surface":
+        if self.current_kind == "vtk":
             mesh = pv.read(str(self.current_path))
             xmin, xmax, ymin, ymax, zmin, zmax = mesh.bounds
-            Lx0, Ly0, Lz0 = xmax - xmin, ymax - ymin, zmax - zmin
-            Lx0, Ly0, Lz0 = max(Lx0, 1e-9), max(Ly0, 1e-9), max(Lz0, 1e-9)
+            if all(abs(v) > 1e-9 for v in self.physical_dim):
+                Lx0, Ly0, Lz0 = self.physical_dim
+            else:
+                Lx0, Ly0, Lz0 = xmax - xmin, ymax - ymin, zmax - zmin
+                Lx0, Ly0, Lz0 = max(Lx0, 1e-9), max(Ly0, 1e-9), max(Lz0, 1e-9)
 
             
             unit = self.ensure_units()
             slice_dir = getattr(self, "slice_direction", "Y").upper()
 
 
-            dlg = GeometryDialogWithAspect(self, Lx=Lx0, Ly=Ly0, Lz=Lz0, unit=unit, slice_dir=slice_dir)
+            dlg = GeometryDialogWithAspect(self, mesh = mesh, Lx=Lx0, Ly=Ly0, Lz=Lz0, unit=unit, slice_dir=slice_dir)
             if dlg.exec() == QDialog.Accepted:
                 (Lx, Ly, Lz), slice_dir, unit = dlg.values()
             else:
+                QMessageBox.information(
+                    self,
+                    "No Input",
+                    "You closed the window without entering any values. Default dimensions will be used.")
                 (Lx, Ly, Lz) = (Lx0, Ly0, Lz0)
 
             self.physical_dim = (Lx, Ly, Lz)
             self.slice_direction = slice_dir
             self.units_length = unit
 
-            print(f"[Geometry] from mesh={file_path}")
+            print(f"[Geometry] from mesh={self.current_path}")
             print(f"  bounds=({xmin}, {xmax}, {ymin}, {ymax}, {zmin}, {zmax})")
             print(f"  physical_dim={self.physical_dim} {unit}, slice_direction={slice_dir}")
 
@@ -2423,7 +2432,7 @@ class MainWindow(QMainWindow):
         elif eext == ".vti":
             rdr = vtkXMLImageDataReader(); rdr.SetFileName(local); rdr.Update(); img = rdr.GetOutput()
             self.vtk_view.show_image2d(img); self._show_widget(self.vtk_view); self._sync_slice_controls()
-            print(f"VTI loaded (drop). Extent={img.GetExtent()} Spacing={img.GetSpacing()} Range={img.GetScalarRange()}"); self._set_current("vtk_image", local)
+            print(f"VTI loaded (drop). Extent={img.GetExtent()} Spacing={img.GetSpacing()} Range={img.GetScalarRange()}"); self._set_current("vtk", local)
         else:
             QMessageBox.information(self, "Unsupported", f"Unsupported file: {local}")
 
@@ -2463,7 +2472,7 @@ class MainWindow(QMainWindow):
         self.act_pial_to_stl.setEnabled(True)
         self.act_pial_merge.setEnabled(True)
 
-        if kind in ("stl", "vtk_poly", "vtk_surface"):
+        if kind in ("stl", "vtk"):
             self.act_meas_area.setEnabled(True)
             self.act_meas_perimeter.setEnabled(False)
             self.act_meas_lgi.setEnabled(True)
@@ -2473,6 +2482,8 @@ class MainWindow(QMainWindow):
             self.act_nitfi2png.setEnabled(False)
             self.act_meas_curvature.setEnabled(False)
             self.act_slice_thickness.setEnabled(True)
+            self.act_set_image_scale.setEnabled(False)
+            self.act_set_scale.setEnabled(False)
             self.nav_tb.hide()
 
             
@@ -2487,7 +2498,8 @@ class MainWindow(QMainWindow):
             self.label_overlay_enabled = True
             self.act_nitfi2png.setEnabled(True)
             self.act_meas_curvature.setEnabled(False)
-            
+            self.act_set_image_scale.setEnabled(False)
+            self.act_set_scale.setEnabled(False)
             self.act_slice_thickness.setEnabled(False)
             self.nav_tb.show()
 
@@ -2503,11 +2515,14 @@ class MainWindow(QMainWindow):
             self.act_nitfi2png.setEnabled(False)
             self.act_hausdorf.setEnabled(True)
             self.act_meas_curvature.setEnabled(True)
-            
             self.act_slice_thickness.setEnabled(False)
             self.nav_tb.hide()
 
-
+        if kind == "vtk":
+            self.act_set_physical_dim.setEnabled(True)
+        else:
+            self.act_set_physical_dim.setEnabled(False)
+            
 
     def enable_png_navigation(self, png_paths: list[str], slice_indices: list[int] | None = None, start_index: int | None = None):
         """Switch the slice slider to browse a list of PNG previews."""
@@ -2560,33 +2575,63 @@ class MainWindow(QMainWindow):
                 return True
         return False
         
+        
+    def disable_png_navigation(self):
+        """Exit PNG navigation mode and reset slice controls."""
+        if getattr(self, "slice_nav_mode", None) != "png":
+            return
+        self.slice_nav_mode = None
+        self.slice_nav_items = []
+        self.slice_nav_index_map = []
+        if hasattr(self, "slice_slider"):
+            self.slice_slider.setEnabled(False)
+        if hasattr(self, "slice_value_label"):
+            self.slice_value_label.clear()
+        if hasattr(self, "image_label"):
+            self.image_label.clear()
+            
     def reset_view(self):
-        """Clear on-screen annotations and reload the current item from disk."""
-#        import os
-#        from PySide6.QtWidgets import QMessageBox
-#        from PySide6.QtGui import QPixmap
+        for meth in ("cancel_square_selection", "cancel_scalebar_measure", "clear_annotations"):
+            if hasattr(self.image_label, meth):
+                getattr(self.image_label, meth)()
 
-        # 1) cancel active modes
-        if hasattr(self.image_label, "cancel_square_selection"):
-            self.image_label.cancel_square_selection()
-        if hasattr(self.image_label, "cancel_scalebar_measure"):
-            self.image_label.cancel_scalebar_measure()
-
-        # 2) clear overlays (data stays in memory for export)
-        if hasattr(self.image_label, "clear_annotations"):
-            self.image_label.clear_annotations()
-
-        # 3) reload from disk depending on kind
+        # 2) path check
         kind = self.current_kind
         path = self.current_path
         self.last_annotated_path = None
-
         if not path or not os.path.exists(path):
-            # nothing to reload; just reset camera/labels if possible
-#            if kind in ("stl", "vtk", "vtk_poly", "vtk_surface") and hasattr(self, "_vtk_view_isometric"):
-#                self._vtk_view_isometric()
             self.statusBar().showMessage("No file path to reload.", 3000)
             return
+
+        # helpers
+        def _hide_image_widgets():
+            for w in (getattr(self, "orient_combo", None),
+                      getattr(self, "slice_caption", None),
+                      getattr(self, "slice_slider", None),
+                      getattr(self, "slice_value_label", None)):
+                if w: w.setVisible(False)
+
+        def _read_mesh(p: str):
+            ext = os.path.splitext(p)[1].lower()
+            if ext == ".stl":
+                r = vtkSTLReader(); r.SetFileName(p); r.Update(); return r.GetOutput()
+            if ext == ".vtp":
+                r = vtkXMLPolyDataReader(); r.SetFileName(p); r.Update(); return r.GetOutput()
+            if ext == ".obj":
+                r = vtkOBJReader(); r.SetFileName(p); r.Update(); return r.GetOutput()
+            if ext == ".vtk":
+                # try polydata first
+                r1 = vtkPolyDataReader(); r1.SetFileName(p); r1.Update()
+                poly = r1.GetOutput()
+                if poly and poly.GetNumberOfPoints() > 0:
+                    return poly
+                # fallback: legacy dataset -> extract surface
+                r2 = vtkDataSetReader(); r2.SetFileName(p); r2.Update()
+                ds = r2.GetOutput()
+                f = vtkDataSetSurfaceFilter(); f.SetInputData(ds); f.Update()
+                return f.GetOutput()
+            # last resort
+            raise ValueError(f"Unsupported mesh format: {ext}")
 
         try:
             if kind == "image":
@@ -2594,50 +2639,34 @@ class MainWindow(QMainWindow):
                 if pm.isNull():
                     QMessageBox.warning(self, "Reset View", f"Failed to open image:\n{path}")
                     return
+                self._show_widget(self.image_label)
                 self.image_label.setImage(pm)
                 self._active_view = "image"
-                # hide NIfTI nav UI if it was visible
-                for w in (getattr(self, "orient_combo", None),
-                          getattr(self, "slice_caption", None),
-                          getattr(self, "slice_slider", None),
-                          getattr(self, "slice_value_label", None)):
-                    if w: w.setVisible(False)
+                _hide_image_widgets()  # hides slider etc., label shown above via _show_widget
 
             elif kind == "nifti":
+                # reuse your existing loader to reset orientation/slider
                 self._set_current("nifti", path)
                 self._on_view_changed(self.view_mode.currentText())
-#                rdr = vtkNIFTIImageReader(); rdr.SetFileName(path); rdr.Update(); img = rdr.GetOutput()
-#                self.vtk_view.show_image2d(img); self._show_widget(self.vtk_view); self._sync_slice_controls()
 
-#                # reinitialize from file (reloads header/data and resets slider/orientation)
-#                if hasattr(self, "_init_nifti"):
-#                    self._init_nifti(path)
-#                elif hasattr(self, "_nifti_set_orientation"):
-#                    # fallback if you don’t have _init_nifti; keep current axis
-#                    axis_name = {0: "sagittal", 1: "coronal", 2: "axial"}.get(getattr(self, "nifti_axis", 1), "coronal")
-#                    self._nifti_set_orientation(axis_name)
+            elif kind in ("stl", "vtk"):
+                poly = _read_mesh(path)
+                # show in your VTK view
+                self._show_widget(self.vtk_view)
+                self.vtk_view.show_polydata(poly)
+                # hide image UI
+                _hide_image_widgets()
+                self._active_view = "vtk"
 
-            elif kind in ("stl", "vtk_image", "vtk_poly", "vtk_surface"):
-            
-                # You usually don't need to re-read the mesh to "reset view".
-                # Just reset the camera. If you do want to re-read, call your existing loader here.
-                r = vtkSTLReader(); r.SetFileName(path); r.Update(); poly = r.GetOutput()
-                self.vtk_view.show_polydata(poly); self._show_widget(self.vtk_view); self._set_slice_controls(False)
-#                if hasattr(self, "_vtk_view_isometric"):
-#                    self._vtk_view_isometric()
-#                elif hasattr(self, "_vtk_set_view"):
-#                    self._vtk_set_view("coronal", flip=False, ortho=True)
-
-            # If any PNG navigation mode is on, turn it off
+            # turn off any PNG navigation
             if hasattr(self, "disable_png_navigation"):
                 self.disable_png_navigation()
 
-            self._append_progress("\n [View] Reloaded from disk and cleared on-screen annotations. \n")
-            self.statusBar().showMessage("\n Reloaded from path; annotations cleared (data kept).", 3000)
+            self._append_progress("\n[View] Reloaded and cleared annotations.\n")
+            self.statusBar().showMessage("Reloaded; annotations cleared.", 3000)
 
         except Exception as ex:
             QMessageBox.warning(self, "Reset View", f"Could not reload:\n{ex}")
-
 
         
 # ---------------- annotate square ----------
@@ -2987,7 +3016,7 @@ class MainWindow(QMainWindow):
     def _metrics_headers(self):
         # Adjust/extend columns as you like; keys should match your records
         return [
-            "File", "Kind", "Label", "Annotation", "Source",
+            "File", "Kind", "Label", "Annotation", "Source", "SliceDirection",
             "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit", "SliceThickness",
             "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
