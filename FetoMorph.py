@@ -223,10 +223,34 @@ class MainWindow(QMainWindow):
 
 
         # Disable initially
-        self.act_Reset.setEnabled(False); self.act_close.setEnabled(False); self.act_save.setEnabled(False); self.act_close.setEnabled(False); self.act_export_metrics.setEnabled(False);self.act_save_data.setEnabled(False); self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False); self.act_nitfi2png.setEnabled(False); self.act_slice_thickness.setEnabled(False); self.act_meas_curvature.setEnabled(False); self.act_set_physical_dim.setEnabled(False)
-  # will enable for STL/polydata
-        for a in (self.act_meas_allmarks, self.act_meas_volumes, self.act_meas_area, self.act_meas_perimeter, self.act_meas_lgi, self.act_meas_sulci, self.act_optimization):
-            a.setEnabled(False)
+        for action in [
+            self.act_Reset,
+            self.act_close,
+            self.act_save,
+            self.act_export_metrics,
+            self.act_save_data,
+            self.act_choose_regions,
+            self.act_annotate_square,
+            self.act_nitfi2png,
+            self.act_slice_thickness,
+            self.act_meas_curvature,
+            self.act_set_physical_dim,
+            self.act_show_results,
+            self.act_niftiextractor,
+            self.act_set_image_scale,
+            self.act_set_scale,
+            self.act_kernel_size,
+            self.act_cnt_threshold,
+            self.act_set_custom_label,
+            self.act_meas_allmarks,
+            self.act_meas_volumes,
+            self.act_meas_area,
+            self.act_meas_perimeter,
+            self.act_meas_lgi,
+            self.act_meas_sulci,
+            self.act_optimization,
+        ]:
+            action.setEnabled(False)
 
         # drag & drop
         self.setAcceptDrops(True)
@@ -238,7 +262,7 @@ class MainWindow(QMainWindow):
         vtk_output = QtVTKOutputWindow(self._qt_console); vtkOutputWindow.SetInstance(vtk_output)
         print("Application started. Progress output will appear here.")
 
-        self.all_actions = {self.act_show_results, self.act_Reset, self.act_close, self.act_quit, self.act_imp_img, self.act_imp_vtk, self.act_imp_stl, self.act_imp_nii, self.act_save, self.act_save_data, self.act_export_metrics, self.act_meas_allmarks, self.act_meas_perimeter, self.act_meas_area, self.act_meas_volumes, self.act_meas_lgi, self.act_meas_sulci, self.act_meas_curvature, self.act_hausdorf, self.act_set_custom_label,  self.act_set_image_scale, self.act_set_scale,  self.act_kernel_size, self.act_slice_thickness,  self.act_cnt_threshold, self.act_annotate_square, self.act_choose_regions, self.act_optimization, self.act_nitfi2png}
+        self.all_actions = {self.act_show_results, self.act_Reset, self.act_close, self.act_quit, self.act_imp_img, self.act_imp_vtk, self.act_imp_stl, self.act_imp_nii, self.act_save, self.act_save_data, self.act_export_metrics, self.act_meas_allmarks, self.act_meas_perimeter, self.act_meas_area, self.act_meas_volumes, self.act_meas_lgi, self.act_meas_sulci, self.act_meas_curvature, self.act_hausdorf, self.act_set_custom_label,  self.act_set_image_scale, self.act_set_scale,  self.act_kernel_size, self.act_slice_thickness,  self.act_cnt_threshold, self.act_annotate_square, self.act_choose_regions, self.act_optimization, self.act_nitfi2png, self.act_niftiextractor, self.act_pial_to_stl, self.act_pial_merge, self.act_img_batch, self.act_set_physical_dim}
         self._update_process_actions()
     
 
@@ -287,6 +311,13 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Analysis", self.act_meas_lgi)
         self.ribbon.add_action("Analysis", self.act_meas_curvature)
         self.ribbon.add_action("Analysis", self.act_hausdorf)
+        
+        self.ribbon.add_action("Process", self.act_img_batch)
+        self.ribbon.add_action("Process", self.act_optimization)
+        self.ribbon.add_action("Process", self.act_pial_to_stl)
+        self.ribbon.add_action("Process", self.act_pial_merge)
+        self.ribbon.add_action("Process", self.act_nitfi2png)
+        self.ribbon.add_action("Process", self.act_niftiextractor)
 
 
         self.ribbon.add_action("Adjustments", self.act_set_custom_label)
@@ -2441,36 +2472,36 @@ class MainWindow(QMainWindow):
         self.current_kind = kind
         self.current_path = path
         has_file = kind is not None
-        self.act_save.setEnabled(has_file)
-        self.act_save_data.setEnabled(has_file)
-        self.act_close.setEnabled(has_file)
-        self.act_export_metrics.setEnabled(has_file)
-        self._update_process_actions()
-        self.act_close.setEnabled(has_file)
-        self.act_Reset.setEnabled(has_file)
-        self.reset_png_navigation()
-#        self._metrics_rebuild_for_current()
+        
+        for action in [
+            self.act_save,
+            self.act_save_data,
+            self.act_close,
+            self.act_export_metrics,
+            self.act_show_results,
+            self.act_Reset,
+            self.act_kernel_size,
+            self.act_cnt_threshold,
+            self.act_set_custom_label,
+            self.act_set_image_scale,
+            self.act_set_scale,
+            self.act_meas_allmarks,
+            self.act_meas_volumes,
+            self.act_meas_area,
+            self.act_meas_perimeter,
+            self.act_meas_lgi,
+            self.act_meas_sulci,
+            self.act_optimization,
+        ]:
+            action.setEnabled(has_file)
 
-#        if path and kind:
-#            self._ensure_metric_row(path, kind)
-        if kind == "nifti": #"stl", "vtk_poly", "vtk_surface",
-            self.slice_slider.setEnabled(True)
-            self.orient_combo.setEnabled(True)
-            self.view_mode.setEnabled(True)
-        else:
-            self.slice_slider.setEnabled(False)
-            self.orient_combo.setEnabled(False)
-            self.view_mode.setEnabled(False)
+        self.reset_png_navigation()
+        self._update_process_actions()
 
 
     def _update_process_actions(self):
-        for a in (self.act_meas_allmarks, self.act_meas_volumes, self.act_meas_area, self.act_meas_perimeter, self.act_meas_lgi, self.act_meas_sulci, self.act_optimization):
-            a.setEnabled(False)
 
         kind = self.current_kind
-        
-        self.act_pial_to_stl.setEnabled(True)
-        self.act_pial_merge.setEnabled(True)
 
         if kind in ("stl", "vtk"):
             self.act_meas_area.setEnabled(True)
@@ -2482,6 +2513,12 @@ class MainWindow(QMainWindow):
             self.act_nitfi2png.setEnabled(False)
             self.act_meas_curvature.setEnabled(False)
             self.act_slice_thickness.setEnabled(True)
+            self.act_set_image_scale.setEnabled(False)
+            self.act_niftiextractor.setEnabled(False)
+            self.act_set_scale.setEnabled(False)
+            self.slice_slider.setEnabled(False)
+            self.orient_combo.setEnabled(False)
+            self.view_mode.setEnabled(False)
             self.act_set_image_scale.setEnabled(False)
             self.act_set_scale.setEnabled(False)
             self.nav_tb.hide()
@@ -2501,6 +2538,12 @@ class MainWindow(QMainWindow):
             self.act_set_image_scale.setEnabled(False)
             self.act_set_scale.setEnabled(False)
             self.act_slice_thickness.setEnabled(False)
+            self.act_niftiextractor.setEnabled(True)
+            self.slice_slider.setEnabled(True)
+            self.orient_combo.setEnabled(True)
+            self.view_mode.setEnabled(True)
+            self.act_set_image_scale.setEnabled(False)
+            self.act_set_scale.setEnabled(False)
             self.nav_tb.show()
 
         elif kind == "image":
@@ -2516,6 +2559,12 @@ class MainWindow(QMainWindow):
             self.act_hausdorf.setEnabled(True)
             self.act_meas_curvature.setEnabled(True)
             self.act_slice_thickness.setEnabled(False)
+            self.act_niftiextractor.setEnabled(False)
+            self.slice_slider.setEnabled(False)
+            self.orient_combo.setEnabled(False)
+            self.view_mode.setEnabled(False)
+            self.act_set_image_scale.setEnabled(True)
+            self.act_set_scale.setEnabled(True)
             self.nav_tb.hide()
 
         if kind == "vtk":
