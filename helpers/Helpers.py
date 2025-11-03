@@ -1,8 +1,7 @@
 # helpers.py
 from deps import *
 import pyvista as pv
-from pyvista import _vtk as vtk
-
+import math
 
 
 def text_thickness(H, style="regular", cap=10):
@@ -231,7 +230,7 @@ def get_max_slice_thinckness(path: str):
 #    return window_size, cam_position
 
 
-def slice_at(mesh: pv.DataSet, Slice_direction: str, s: float) -> pv.PolyData:
+def slice_at(mesh: pv.DataSet, Slice_direction: str, s: float):
     # ensure polygonal surface
     if not isinstance(mesh, pv.PolyData):
         mesh = mesh.extract_surface()
@@ -249,19 +248,23 @@ def slice_at(mesh: pv.DataSet, Slice_direction: str, s: float) -> pv.PolyData:
 
     normal, origin_fn = axis
     origin = origin_fn(s)
-    return mesh.slice(normal=normal, origin=origin)
+    return normal, origin
 
-def make_scale_cube(Slice_direction: str, cube_len: float, offset: float = 50.0) -> pv.PolyData:
-    # choose thin axis and translation vector
+def make_scale_cube(Slice_direction: str, cube_len: float, origin, s: float, offset: float = 50.0) -> pv.PolyData:
+
+    # choose thin axis and translation vect
     if Slice_direction == "X":
-        cube = pv.Cube(x_length=0.01, y_length=cube_len, z_length=cube_len)
-        cube.translate((offset, 0, offset), inplace=True)
+        c = (s, origin[1], origin[2])
+        cube = pv.Cube(center = c, x_length=0.01, y_length=cube_len, z_length=cube_len)
+        cube.translate((-0.05, offset, offset), inplace=True)
     elif Slice_direction == "Y":
-        cube = pv.Cube(x_length=cube_len, y_length=0.01, z_length=cube_len)
-        cube.translate((0, offset, offset), inplace=True)
+        c = (origin[0],s, origin[2])
+        cube = pv.Cube(center = c, x_length=cube_len, y_length=0.01, z_length=cube_len)
+        cube.translate((offset,-0.05 , offset), inplace=True)
     elif Slice_direction == "Z":
-        cube = pv.Cube(x_length=cube_len, y_length=cube_len, z_length=0.01)
-        cube.translate((offset, offset, 0), inplace=True)
+        c = (origin[0], origin[1], s)
+        cube = pv.Cube(center = c, x_length=cube_len, y_length=cube_len, z_length=0.01)
+        cube.translate((offset, offset, -0.05), inplace=True)
     else:
         raise ValueError("Slice_direction must be 'X','Y','Z'.")
 

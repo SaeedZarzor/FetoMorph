@@ -2,7 +2,7 @@ from deps import *
 
 class SilceThicknessDialog(QDialog):
     """Pick a slice thickness (float)"""
-    def __init__(self, parent=None, initial: float = 0.5, minimum: float = 0.01, maximum: float = 10.0, step: float = 0.01):
+    def __init__(self, parent=None, initial: float = 0.5, minimum: float = 0.001, maximum: float = 10.0, step: float = 0.005):
         super().__init__(parent)
         self.setWindowTitle("Set Slice Thickness")
         self.setModal(True)
@@ -39,6 +39,10 @@ class SilceThicknessDialog(QDialog):
         self.spin.setSingleStep(self._step)
         self.spin.setDecimals(max(0, min(6, self._decimals(self._step))))
         self.spin.setValue(initial)
+        font = self.spin.font()
+        font.setPointSize(14)  # increase number for larger text
+        self.spin.setFont(font)
+        self.spin.setMinimumWidth(100)  # optional, adjust width
 
         # sync both ways
         def _from_slider(i: int):

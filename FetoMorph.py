@@ -654,7 +654,7 @@ class MainWindow(QMainWindow):
                 differs("KernelSize",      kernel_size),
                 differs("SliceThickness",  slice_thickness),
                 differs("LengthUnit",      unite),
-                
+                differs("SliceDirection",  direction),
             ]))
         )
 
@@ -689,6 +689,7 @@ class MainWindow(QMainWindow):
 
         # Otherwise: refresh/update the latest row and return it
         last["File"] = os.path.basename(path)
+        
         if kind is not None:
             last["Kind"] = kind
         if label is not None:
@@ -703,10 +704,12 @@ class MainWindow(QMainWindow):
             last["LengthUnit"] = unite
         if slice_thickness is not None:
             last["SliceThickness"] = slice_thickness
+        if direction is not None:
+            last["SliceDirection"] = direction
         return last
 
         
-    def _record_metric_for(self, path: str, annotation: Optional[str] = None, source: Optional[str] = None, direction: Optional[str] = None  ,**vals):
+    def _record_metric_for(self, path: str, annotation: Optional[str] = None, source: Optional[str] = None ,**vals):
         if not path:
             return
         kind = getattr(self, "current_kind", None)
@@ -717,9 +720,11 @@ class MainWindow(QMainWindow):
         punit = vals.pop("pixel_size_units", None)
         ksize = vals.pop("kernel_size", None)
         thicsl = vals.pop("slice_thickness", None)
+        direction = vals.pop("direction", None)
         uni = vals.pop("unite", None)
         row = self._ensure_metric_row(
-            path, kind, label, annotation, source, direction,
+            path, kind, label, annotation,
+            source, direction,
             pixel_size=psize,
             pixel_size_units=punit,
             kernel_size=ksize,
@@ -1151,6 +1156,8 @@ class MainWindow(QMainWindow):
                 area, volume, gi, depth, saved_pngs, valid_slices = compute_vtk_allmarks(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,
                     kernel_size = self.kernel_size, Slice_direction = self.slice_direction, Physical_dim= self.physical_dim, unit = u, slice_thickness=self.slice_thickness)
             
+                if area is None:
+                    return
        
                 # record metrics (consistent with your global export; units in mm unless noted)
                 self._record_metric_for(
@@ -1187,7 +1194,10 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "VTK hallmarks Failed", f"{type(ex).__name__}: {ex}")
                 return
             
-            
+        else:
+            print("[All hallmarks] Unsupported current kind.")
+
+
     def on_measure_volumes(self):
         if not self.current_path or not os.path.isfile(self.current_path):
             print("[Volume] No file is loaded."); return
@@ -1269,7 +1279,51 @@ class MainWindow(QMainWindow):
                 print(f"[STL Volume] ERROR: {ex}")
                 QMessageBox.critical(self, "STL Volume Failed", f"{type(ex).__name__}: {ex}")
             return
-        
+            
+        elif self.current_kind == "vtk":
+            t0 = time.time()
+            try:
+                uid = uuid.uuid4().hex[:8]
+                out_dir = os.path.join(self.temp_dir, f"VTL_volume_{uid}")
+                os.makedirs(out_dir, exist_ok=True)
+                
+                self.current_output_dir = out_dir
+                
+                if all(v == 0 for v in self.physical_dim):
+                    self.load_mesh_and_ask_geometry()
+
+                u = self.units_length
+                volume, saved_pngs, valid_slices = compute_vtk_volume(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,
+                    Slice_direction = self.slice_direction, Physical_dim= self.physical_dim, unit = u, slice_thickness=self.slice_thickness)
+            
+                if volume is None:
+                    return
+       
+                # record metrics (consistent with your global export; units in mm unless noted)
+                self._record_metric_for(
+                    self.current_path,
+                    direction = self.slice_direction,
+                    unite = u,
+                    dimensions = self.physical_dim,
+                    slice_thickness= self.slice_thickness,
+                    volume=volume)
+                    
+                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+
+                mid = len(saved_pngs) // 2
+                self.on_slice_slider_changed(mid)
+                
+                print(f"VTK mesh Volume Result = {volume:.2f} {u}^3.")
+
+                dt = time.time() - t0
+                print(f"[VTK hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
+                      f"Use File → Save Data As… to copy outputs you want to keep.")
+                      
+            except Exception as ex:
+                print(f"[VTK Volume] ERROR: {ex}")
+                QMessageBox.critical(self, "VTK hallmarks Failed", f"{type(ex).__name__}: {ex}")
+                return
+                
         else:
             print("[Volume] Unsupported current kind. Open an image, NIfTI or STL file.")
 
@@ -1531,8 +1585,54 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
             return
             
+        elif self.current_kind == "vtk":
+            t0 = time.time()
+            try:
+                uid = uuid.uuid4().hex[:8]
+                out_dir = os.path.join(self.temp_dir, f"VTL_lGI_{uid}")
+                os.makedirs(out_dir, exist_ok=True)
+                
+                self.current_output_dir = out_dir
+                
+                if all(v == 0 for v in self.physical_dim):
+                    self.load_mesh_and_ask_geometry()
+
+                u = self.units_length
+                gi, saved_pngs, valid_slices = compute_vtk_lGI(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,
+                    kernel_size = self.kernel_size, Slice_direction = self.slice_direction, Physical_dim= self.physical_dim, unit = u, slice_thickness=self.slice_thickness)
+            
+                if gi is None:
+                    return
+       
+                # record metrics (consistent with your global export; units in mm unless noted)
+                self._record_metric_for(
+                    self.current_path,
+                    direction = self.slice_direction,
+                    kernel_size = self.kernel_size,
+                    unite = u,
+                    dimensions = self.physical_dim,
+                    slice_thickness= self.slice_thickness,
+                    lgi=gi)
+                    
+                
+                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+
+                mid = len(saved_pngs) // 2
+                self.on_slice_slider_changed(mid)
+                
+                print(f"VTK mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
+
+                dt = time.time() - t0
+                print(f"[VTK lGI] Done in {dt:.2f}s. Results live in TEMP.\n"
+                      f"Use File → Save Data As… to copy outputs you want to keep.")
+                      
+            except Exception as ex:
+                print(f"[VTK lGI] ERROR: {ex}")
+                QMessageBox.critical(self, "VTK lGI Failed", f"{type(ex).__name__}: {ex}")
+                return
+            
         else:
-            print("[lGI] Unsupported current kind. Open an image, NIfTI or STL file.")
+            print("[lGI] Unsupported current kind.")
 
             
         
@@ -1665,8 +1765,55 @@ class MainWindow(QMainWindow):
                 print(f"[STL Sulci depth] ERROR: {ex}")
                 QMessageBox.critical(self, "STL Sulci depth Failed", f"{type(ex).__name__}: {ex}")
             return
+            
+        elif self.current_kind == "vtk":
+            t0 = time.time()
+            try:
+                uid = uuid.uuid4().hex[:8]
+                out_dir = os.path.join(self.temp_dir, f"VTL_sulic_depth_{uid}")
+                os.makedirs(out_dir, exist_ok=True)
+                
+                self.current_output_dir = out_dir
+                
+                if all(v == 0 for v in self.physical_dim):
+                    self.load_mesh_and_ask_geometry()
+
+                u = self.units_length
+                depth, saved_pngs, valid_slices = compute_vtk_sulci_depth(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,
+                Slice_direction = self.slice_direction, Physical_dim= self.physical_dim, unit = u, slice_thickness=self.slice_thickness)
+            
+                if depth is None:
+                    return
+       
+                # record metrics (consistent with your global export; units in mm unless noted)
+                self._record_metric_for(
+                    self.current_path,
+                    direction = self.slice_direction,
+                    unite = u,
+                    dimensions = self.physical_dim,
+                    slice_thickness= self.slice_thickness,
+                    sulci_depth = depth)
+                    
+                
+                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+
+                mid = len(saved_pngs) // 2
+                self.on_slice_slider_changed(mid)
+                
+                if len(depth)>=3:
+                    print("[VTK Sulci depth]")
+                    print(f"The Maximum Grooves Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} {u}.")
+
+                dt = time.time() - t0
+                print(f"[VTK Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
+                      f"Use File → Save Data As… to copy outputs you want to keep.")
+                      
+            except Exception as ex:
+                print(f"[VTK Sulci depth] ERROR: {ex}")
+                QMessageBox.critical(self, "VTK Sulci depth Failed", f"{type(ex).__name__}: {ex}")
+                return
         else:
-            print("[Sulci depth] Unsupported current kind. Open an image or NIfTI first.")
+            print("[Sulci depth] Unsupported current kind.")
 
             
             
@@ -1802,7 +1949,52 @@ class MainWindow(QMainWindow):
                 print(f"[STL Area] ERROR: {ex}")
                 QMessageBox.critical(self, "STL Area Failed", f"{type(ex).__name__}: {ex}")
             return
+        
+        elif self.current_kind == "vtk":
+            t0 = time.time()
+            try:
+                uid = uuid.uuid4().hex[:8]
+                out_dir = os.path.join(self.temp_dir, f"VTL_area_{uid}")
+                os.makedirs(out_dir, exist_ok=True)
+                
+                self.current_output_dir = out_dir
+                
+                if all(v == 0 for v in self.physical_dim):
+                    self.load_mesh_and_ask_geometry()
 
+                u = self.units_length
+                area, saved_pngs, valid_slices = compute_vtk_area(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold, Slice_direction = self.slice_direction, Physical_dim= self.physical_dim, unit = u, slice_thickness=self.slice_thickness)
+            
+                if area is None:
+                    return
+       
+                # record metrics (consistent with your global export; units in mm unless noted)
+                self._record_metric_for(
+                    self.current_path,
+                    direction = self.slice_direction,
+                    unite = u,
+                    dimensions = self.physical_dim,
+                    slice_thickness= self.slice_thickness,
+                    area=area)
+                    
+                
+                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+
+                mid = len(saved_pngs) // 2
+                self.on_slice_slider_changed(mid)
+                
+                print(f"VTK mesh Outer Surface Area Result = {area:.2f} {u}^2.")
+
+
+                dt = time.time() - t0
+                print(f" Done in {dt:.2f}s. Results live in TEMP.\n"
+                      f"Use File → Save Data As… to copy outputs you want to keep.")
+                      
+            except Exception as ex:
+                print(f"[VTK Area] ERROR: {ex}")
+                QMessageBox.critical(self, "VTK area Failed", f"{type(ex).__name__}: {ex}")
+                return
+    
         else:
             print("[Area] Unsupported current kind. Open an image, NIfTI, or STL file.")
 
@@ -2492,6 +2684,7 @@ class MainWindow(QMainWindow):
             self.act_meas_lgi,
             self.act_meas_sulci,
             self.act_optimization,
+            self.act_slice_thickness,
         ]:
             action.setEnabled(has_file)
 

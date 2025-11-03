@@ -1,7 +1,7 @@
 # measurements_stl.py
 from deps import *
 import pyvista as pv
-from helpers.Helpers import compute_kernel_convex, contours_exclude, clac_scale, get_red_rect_offset
+from helpers.Helpers import compute_kernel_convex, contours_exclude, clac_scale, get_red_rect_offset, make_scale_cube
 from helpers.check_mesh import check_brain
 
 # ----------------- main API -----------------
@@ -84,14 +84,16 @@ def compute_stl_allmarks(
 
     for idx, y in enumerate(slice_positions):
         # Cross-section slice
-        section = mesh.slice(normal=[0, 1, 0], origin=[0.0, float(y), 0.0])
+        origin =  mesh.center
+        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[1]])
         if section.n_points == 0:
             continue
 
         # Red cube reference (10% of X extent)
         cube_len = max(1e-6, brain_dim[1] / 10.0)
-        scale_cube = pv.Cube(x_length=cube_len, y_length=0.01, z_length=cube_len)
-        scale_cube.translate((50, 0, 50), inplace=True)
+        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
+#        scale_cube = pv.Cube(x_length=cube_len, y_length=0.01, z_length=cube_len)
+#        scale_cube.translate((50, 0, 50), inplace=True)
 
         # Render: section + scale cube
         p.clear()
@@ -194,14 +196,15 @@ def compute_stl_allmarks(
 
     # Save per-slice + total to Excel
     try:
-        df = pd.DataFrame(rows, columns=["Slice", "Inner_area_mm^2", "Inner_Perimeter_mm", "Outer_Perimeter_mm" ,"Sulci_count",
-            "min_depth_mm", "max_dpeth_mm", "mean_depth_mm"])
-        
+    
         rows.append(["Volume cm^3",round(brain_volume,2), "Surface Area cm^2",round(Area,2)])
         rows.append(["GI",round(GI_total,2)])
         rows.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices_cm",(round(mean_total, 2) if mean_total is not None else None)])
         rows.append(["Max_sulci_across_slices_cm",(round(max(total_depth),2) if total_depth else None),
         "Min_sulci_across_slices_cm",(round(min(total_depth),2) if total_depth else None)])
+        df = pd.DataFrame(rows, columns=["Slice", "Inner_area_mm^2", "Inner_Perimeter_mm", "Outer_Perimeter_mm" ,"Sulci_count",
+            "min_depth_mm", "max_dpeth_mm", "mean_depth_mm"])
+    
         
         xlsx_path = os.path.join(out_dir, "Mesh_Allmarks.xlsx")
         df.to_excel(xlsx_path, index=False)
@@ -303,14 +306,14 @@ def compute_stl_lGI(
 
     for idx, y in enumerate(slice_positions):
         # Cross-section slice
-        section = mesh.slice(normal=[0, 1, 0], origin=[0.0, float(y), 0.0])
+        origin =  mesh.center
+        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[1]])
         if section.n_points == 0:
             continue
 
         # Red cube reference (10% of X extent)
-        cube_len = max(1e-6, brain_dim[0] / 10.0)
-        scale_cube = pv.Cube(x_length=cube_len, y_length=0.01, z_length=cube_len)
-        scale_cube.translate((50, 0, 50), inplace=True)
+        cube_len = max(1e-6, brain_dim[1] / 10.0)
+        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
 
         # Render: section + scale cube
         p.clear()
@@ -501,14 +504,14 @@ def compute_stl_volume(
 
     for idx, y in enumerate(slice_positions):
         # Cross-section slice
-        section = mesh.slice(normal=[0, 1, 0], origin=[0.0, float(y), 0.0])
+        origin =  mesh.center
+        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[1]])
         if section.n_points == 0:
             continue
 
         # Red cube reference (10% of X extent)
         cube_len = max(1e-6, brain_dim[1] / 10.0)
-        scale_cube = pv.Cube(x_length=cube_len, y_length=0.01, z_length=cube_len)
-        scale_cube.translate((50, 0, 50), inplace=True)
+        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
 
         # Render: section + scale cube
         p.clear()
@@ -562,9 +565,9 @@ def compute_stl_volume(
 
     # Save per-slice + total to Excel
     try:
-        df = pd.DataFrame(rows, columns=["Slice", "Inner_area_mm^2"])
-        
         rows.append(["Volume cm^3",round(brain_volume,2)])
+
+        df = pd.DataFrame(rows, columns=["Slice", "Inner_area_mm^2"])
 
         
         xlsx_path = os.path.join(out_dir, "Mesh_Volume.xlsx")
@@ -655,14 +658,15 @@ def compute_stl_area(
 
     for idx, y in enumerate(slice_positions):
         # Cross-section slice
-        section = mesh.slice(normal=[0, 1, 0], origin=[0.0, float(y), 0.0])
+        origin =  mesh.center
+
+        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[1]])
         if section.n_points == 0:
             continue
 
         # Red cube reference (10% of X extent)
         cube_len = max(1e-6, brain_dim[1] / 10.0)
-        scale_cube = pv.Cube(x_length=cube_len, y_length=0.01, z_length=cube_len)
-        scale_cube.translate((50, 0, 50), inplace=True)
+        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
 
         # Render: section + scale cube
         p.clear()
@@ -718,11 +722,9 @@ def compute_stl_area(
 
     # Save per-slice + total to Excel
     try:
-        df = pd.DataFrame(rows, columns=["Slice" "Inner_Perimeter_mm"])
-        
         rows.append(["Surface Area cm^2",round(Area,2)])
-
-    
+        df = pd.DataFrame(rows, columns=["Slice" "Inner_Perimeter_mm"])
+            
         xlsx_path = os.path.join(out_dir, "Mesh_Area.xlsx")
         df.to_excel(xlsx_path, index=False)
         print(f"[STL Area] Saved Excel → {xlsx_path}")
@@ -812,14 +814,14 @@ def compute_stl_sulci_depth(
 
     for idx, y in enumerate(slice_positions):
         # Cross-section slice
-        section = mesh.slice(normal=[0, 1, 0], origin=[0.0, float(y), 0.0])
+        origin =  mesh.center
+        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[1]])
         if section.n_points == 0:
             continue
 
         # Red cube reference (10% of X extent)
         cube_len = max(1e-6, brain_dim[1] / 10.0)
-        scale_cube = pv.Cube(x_length=cube_len, y_length=0.01, z_length=cube_len)
-        scale_cube.translate((50, 0, 50), inplace=True)
+        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
 
         # Render: section + scale cube
         p.clear()
@@ -895,11 +897,11 @@ def compute_stl_sulci_depth(
 
     # Save per-slice + total to Excel
     try:
-        df = pd.DataFrame(rows, columns=["Slice","Sulci_count", "min_depth_mm", "max_dpeth_mm", "mean_depth_mm"])
-        
         rows.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices_mm",(round(mean_total, 2) if mean_total is not None else None)])
         rows.append(["Max_sulci_across_slices_mm",(round(max(total_depth),2) if total_depth else None),
         "Min_sulci_across_slices_mm",(round(min(total_depth),2) if total_depth else None)])
+        df = pd.DataFrame(rows, columns=["Slice","Sulci_count", "min_depth_mm", "max_dpeth_mm", "mean_depth_mm"])
+    
         
         xlsx_path = os.path.join(out_dir, "Mesh_Sulci_depth.xlsx")
         df.to_excel(xlsx_path, index=False)

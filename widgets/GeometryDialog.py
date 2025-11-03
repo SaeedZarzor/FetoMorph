@@ -98,17 +98,17 @@ class GeometryDialogWithAspect(QDialog):
         if hasattr(self.plot, "statusBar"):
             self.plot.statusBar().setVisible(False)
             
-        self._add_axis_arrows()
+#        self._add_axis_arrows()
         self._highlight_axis(self.dir_cb.currentText())
         self.plot.camera_position = "iso"
         self.plot.reset_camera()
 
-    def _add_axis_arrows(self):
-            cx, cy, cz = self.mesh.center
-            s = max(self._Lx0_mm, self._Ly0_mm, self._Lz0_mm) / self._unit_mm_factor * 0.2
-            self.plot.add_mesh(pv.Arrow((cx, cy, cz), (1, 0, 0), scale=s), color="red", name="axis_x")
-            self.plot.add_mesh(pv.Arrow((cx, cy, cz), (0, 1, 0), scale=s), color="green", name="axis_y")
-            self.plot.add_mesh(pv.Arrow((cx, cy, cz), (0, 0, 1), scale=s), color="blue", name="axis_z")
+#    def _add_axis_arrows(self):
+#            cx, cy, cz = self.mesh.center
+#            s = max(self._Lx0_mm, self._Ly0_mm, self._Lz0_mm) / self._unit_mm_factor * 0.2
+#            self.plot.add_mesh(pv.Arrow((cx, cy, cz), (1, 0, 0), scale=s), color="red", name="axis_x")
+#            self.plot.add_mesh(pv.Arrow((cx, cy, cz), (0, 1, 0), scale=s), color="green", name="axis_y")
+#            self.plot.add_mesh(pv.Arrow((cx, cy, cz), (0, 0, 1), scale=s), color="blue", name="axis_z")
 
     def _highlight_axis(self, axis: str):
         # brighten selected axis, dim others
@@ -168,7 +168,9 @@ class GeometryDialogWithAspect(QDialog):
     def _reset_to_original(self):
         """Reset displayed lengths to original mesh bounds, in current unit."""
         s = self.UNIT_FACTORS.get(self.unit_cb.currentText(), 1.0)
-        self._apply(self._Lx0_mm / s, self._Ly0_mm / s, self._Lz0_mm / s)
+        xmin, xmax, ymin, ymax, zmin, zmax = self.mesh.bounds
+        Lx_ori, Ly_ori, Lz_ori = max(xmax - xmin, 1e-9), max(ymax - ymin, 1e-9), max(zmax - zmin, 1e-9)
+        self._apply(Lx_ori / s, Ly_ori / s, Lz_ori / s)
 
     def values(self) -> tuple[tuple[float, float, float], str, str]:
         return (
