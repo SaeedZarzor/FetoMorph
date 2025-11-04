@@ -72,6 +72,7 @@ def compute_stl_allmarks(
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
     rows = []
+    sections_list: list[pv.PolyData] = []
     total_depth = []
     sum_inner_mm = 0.0
     sum_outer_mm = 0.0
@@ -85,7 +86,7 @@ def compute_stl_allmarks(
     for idx, y in enumerate(slice_positions):
         # Cross-section slice
         origin =  mesh.center
-        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[1]])
+        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[2]])
         if section.n_points == 0:
             continue
 
@@ -180,7 +181,8 @@ def compute_stl_allmarks(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
-
+        section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        sections_list.append(section)
       
     # ---- end with: plotter is fully and safely closed here ----
 
@@ -192,7 +194,13 @@ def compute_stl_allmarks(
     total_depth = [x/10 for x in total_depth]
 
     mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
-
+    if sections_list:
+        all_slices_mesh = pv.merge(sections_list)
+#        all_slices_mesh.active_scalars_name = "RGB"
+        slice_mesh_path = os.path.join(out_dir, "all_slices_mesh.vtk")
+        all_slices_mesh.save(slice_mesh_path)
+    else:
+        all_slices_mesh = pv.PolyData()
 
     # Save per-slice + total to Excel
     try:
@@ -296,6 +304,7 @@ def compute_stl_lGI(
     valid_slices: list[int] = []
     rows = []
     all_3d_contours = []
+    sections_list: list[pv.PolyData] = []
     sum_inner_mm = 0.0
     sum_outer_mm = 0.0
 
@@ -307,7 +316,7 @@ def compute_stl_lGI(
     for idx, y in enumerate(slice_positions):
         # Cross-section slice
         origin =  mesh.center
-        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[1]])
+        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[2]])
         if section.n_points == 0:
             continue
 
@@ -369,6 +378,8 @@ def compute_stl_lGI(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
+        section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        sections_list.append(section)
 
             # Store 3D outer contours in mm coords for optional solid build
         if build_solid and outer_filtered:
@@ -391,7 +402,14 @@ def compute_stl_lGI(
     # Totals
     GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
     print(f"[STL lGI] GI_total = {GI_total:.6f}")
-
+    if sections_list:
+        all_slices_mesh = pv.merge(sections_list)
+#        all_slices_mesh.active_scalars_name = "RGB"
+        slice_mesh_path = os.path.join(out_dir, "all_slices_mesh.vtk")
+        all_slices_mesh.save(slice_mesh_path)
+    else:
+        all_slices_mesh = pv.PolyData()
+        
     # Save per-slice + total to Excel
     try:
         df = pd.DataFrame(rows, columns=["Slice", "Inner_Perimeter_mm", "Outer_Perimeter_mm", "GI"])
@@ -495,6 +513,7 @@ def compute_stl_volume(
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
     rows = []
+    sections_list: list[pv.PolyData] = []
     sum_area = 0.0
 
     # --- Use a context manager so the plotter is *guaranteed* to be closed safely
@@ -505,7 +524,7 @@ def compute_stl_volume(
     for idx, y in enumerate(slice_positions):
         # Cross-section slice
         origin =  mesh.center
-        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[1]])
+        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[2]])
         if section.n_points == 0:
             continue
 
@@ -556,13 +575,22 @@ def compute_stl_volume(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
+        section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        sections_list.append(section)
 
       
     # ---- end with: plotter is fully and safely closed here ----
 
     # Totals
     brain_volume = (sum_area * slice_thickness_eff)/1000
-
+    if sections_list:
+        all_slices_mesh = pv.merge(sections_list)
+#        all_slices_mesh.active_scalars_name = "RGB"
+        slice_mesh_path = os.path.join(out_dir, "all_slices_mesh.vtk")
+        all_slices_mesh.save(slice_mesh_path)
+    else:
+        all_slices_mesh = pv.PolyData()
+        
     # Save per-slice + total to Excel
     try:
         rows.append(["Volume cm^3",round(brain_volume,2)])
@@ -649,6 +677,7 @@ def compute_stl_area(
     valid_slices: list[int] = []
     rows = []
     sum_inner_mm = 0.0
+    sections_list: list[pv.PolyData] = []
 
 
     # --- Use a context manager so the plotter is *guaranteed* to be closed safely
@@ -660,7 +689,7 @@ def compute_stl_area(
         # Cross-section slice
         origin =  mesh.center
 
-        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[1]])
+        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[2]])
         if section.n_points == 0:
             continue
 
@@ -713,13 +742,22 @@ def compute_stl_area(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
+        section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        sections_list.append(section)
 
       
     # ---- end with: plotter is fully and safely closed here ----
 
     # Totals
     Area = sum_inner_mm * slice_thickness_eff /100
-
+    if sections_list:
+        all_slices_mesh = pv.merge(sections_list)
+#        all_slices_mesh.active_scalars_name = "RGB"
+        slice_mesh_path = os.path.join(out_dir, "all_slices_mesh.vtk")
+        all_slices_mesh.save(slice_mesh_path)
+    else:
+        all_slices_mesh = pv.PolyData()
+        
     # Save per-slice + total to Excel
     try:
         rows.append(["Surface Area cm^2",round(Area,2)])
@@ -805,6 +843,7 @@ def compute_stl_sulci_depth(
     valid_slices: list[int] = []
     rows = []
     total_depth = []
+    sections_list: list[pv.PolyData] = []
 
 
     # --- Use a context manager so the plotter is *guaranteed* to be closed safely
@@ -815,10 +854,10 @@ def compute_stl_sulci_depth(
     for idx, y in enumerate(slice_positions):
         # Cross-section slice
         origin =  mesh.center
-        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[1]])
+        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[2]])
         if section.n_points == 0:
             continue
-
+            
         # Red cube reference (10% of X extent)
         cube_len = max(1e-6, brain_dim[1] / 10.0)
         scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
@@ -887,14 +926,21 @@ def compute_stl_sulci_depth(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
-
+        section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        sections_list.append(section)
       
     # ---- end with: plotter is fully and safely closed here ----
 
-    
     mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
-
-
+    
+    if sections_list:
+        all_slices_mesh = pv.merge(sections_list)
+#        all_slices_mesh.active_scalars_name = "RGB"
+        slice_mesh_path = os.path.join(out_dir, "all_slices_mesh.vtk")
+        all_slices_mesh.save(slice_mesh_path)
+    else:
+        all_slices_mesh = pv.PolyData()
+        
     # Save per-slice + total to Excel
     try:
         rows.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices_mm",(round(mean_total, 2) if mean_total is not None else None)])

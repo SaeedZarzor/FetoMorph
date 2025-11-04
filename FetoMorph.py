@@ -91,6 +91,7 @@ class MainWindow(QMainWindow):
         # store metics
         self.metrics: dict[str, list[dict]] = {}  # per-path grouping {path: {"File":..., "Kind":..., "Area":..., "Volume":..., "SulciDepth_P1":..., "SulciDepth_P2":..., "SulciDepth_P3":..., "LGI":...}}
         self.current_output_dir = None
+        self.curret_output_3D_slices = None
         self.last_annotated_path: str | None = None
         self.annotation_records: list[dict] = []          # flat list of all annotations
         self.annotations_by_source: dict[str, list[dict]] = {}  # per-image grouping
@@ -351,7 +352,7 @@ class MainWindow(QMainWindow):
         
         self.view_mode = QComboBox()
         self.view_mode.addItems(["2D", "3D"])
-        self.view_mode.setCurrentText("3D")
+        self.view_mode.setCurrentText("2D")
         self.view_mode.currentTextChanged.connect(self._on_view_changed)
         self.nav_tb.addWidget(self.view_mode)
 #        self.view_mode.setVisible(False)
@@ -1120,10 +1121,9 @@ class MainWindow(QMainWindow):
                     area=area,
                     sulci_depth = depth,
                     lgi=gi)
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
 
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
+                self.two_mode_view(out_dir, saved_pngs, valid_slices)
+
                 
                 print(f"[STL hallmarks]:")
                 print("STL mesh Volume Result = {volume:.2f} cm^3.")
@@ -1263,10 +1263,9 @@ class MainWindow(QMainWindow):
                     dimensions = dims,
                     unite = "cm",
                     volume=volume)
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
 
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
+                self.two_mode_view(out_dir, saved_pngs, valid_slices)
+
                 
                 print("STL mesh Volume Result = {volume:.2f} cm^3.")
 
@@ -1526,8 +1525,6 @@ class MainWindow(QMainWindow):
                         lgi=gi)
                         
                     self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-
-                    self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                     
                     mid = len(saved_pngs) // 2
                     self.on_slice_slider_changed(mid)
@@ -1569,10 +1566,9 @@ class MainWindow(QMainWindow):
                     unite = "cm",
                     slice_thickness= self.slice_thickness,
                     lgi=gi)
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
 
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
+                self.two_mode_view(out_dir, saved_pngs, valid_slices)
+
                 
                 print(f"STL mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
 
@@ -1751,10 +1747,7 @@ class MainWindow(QMainWindow):
                 self._record_metric_for(self.current_path, source = source_label,
                     dimensions = dims,unite ="mm", sulci_depth = depth)
 
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-                
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
+                self.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
                 print(f"[STL Sulci depth] The max Brain Sulci depth across slices = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f}. mm")
                 dt = time.time() - t0
@@ -1933,10 +1926,9 @@ class MainWindow(QMainWindow):
                     dimensions = dims,
                     unite = "cm",
                     area=area)
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+  
+                self.two_mode_view(out_dir, saved_pngs, valid_slices)
 
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
                 
                 print("STL mesh Area Result = {area:.2f} cm^2.")
 
@@ -2565,10 +2557,14 @@ class MainWindow(QMainWindow):
             self.show_nifti_slice(v)
             self._active_view = "image"
             self._update_slice_readout()
-        else:
+        elif self.slice_nav_mode == "vtk":
             self._active_view = "vtk"
+            idx = max(0, min(v, len(self.slice_nav_items) - 1))
             self._show_widget(self.vtk_view)
-            self.vtk_view.set_slice(v)
+            self.vtk_view.delete_slice_section()
+            self.vtk_view.show_slice_with_mesh (mesh_file=self.current_path,
+                slice_file= self.curret_output_3D_slices,
+                slice_value=idx)
             self._update_slice_readout()
 
                 
@@ -2585,14 +2581,26 @@ class MainWindow(QMainWindow):
             self._update_slice_readout()
                     
     def _on_view_changed(self, text: str, path: Optional[str] = None):
-        if text == "3D":
-            self.slice_nav_mode = None
-            rdr = vtkNIFTIImageReader(); rdr.SetFileName(self.current_path if path is None else path); rdr.Update(); img = rdr.GetOutput()
-            self.vtk_view.show_image2d(img);  self._show_widget(self.vtk_view); self._sync_slice_controls()
-            self._on_orientation_changed(self.orient_combo.currentText())
-        elif text == "2D":
-            self.slice_nav_mode = "nifti"
-            self._nifti_set_orientation(self.orient_combo.currentText(), path);
+        if self.current_kind == "nifiti":
+            if text == "3D":
+                self.slice_nav_mode = None
+                rdr = vtkNIFTIImageReader(); rdr.SetFileName(self.current_path if path is None else path); rdr.Update(); img = rdr.GetOutput()
+                self.vtk_view.show_image2d(img);  self._show_widget(self.vtk_view); self._sync_slice_controls()
+                self._on_orientation_changed(self.orient_combo.currentText())
+            elif text == "2D":
+                self.slice_nav_mode = "nifti"
+                self._nifti_set_orientation(self.orient_combo.currentText(), path);
+        elif self.current_kind in ["vtk", "stl"]:
+            if text == "3D":
+                self._show_widget(self.vtk_view)
+                self.slice_nav_mode = "vtk"
+                self.vtk_view.show_slice_with_mesh(mesh_file=self.current_path, slice_file= self.curret_output_3D_slices, slice_value= self.slice_slider.value())
+            elif text == "2D":
+                self.vtk_view.delete_slice_section()
+                self._show_widget(self.image_label)
+                self.slice_nav_mode = "png"
+                self.on_slice_slider_changed(self.slice_slider.value())
+                
             
             
     def _show_png_on_image_label(self, png_path: str):
@@ -2777,23 +2785,24 @@ class MainWindow(QMainWindow):
         self.nav_tb.show()
         self.slice_slider.setEnabled(True)
         
-        
         self.slice_slider.blockSignals(True)
-        self.slice_slider.setMinimum(0)
-        self.slice_slider.setMaximum(len(self.slice_nav_items) - 1)
+        self.slice_slider.setMinimum(slice_indices[0])
+        self.slice_slider.setMaximum(slice_indices[-1])
         self.slice_slider.setSingleStep(1)
         self.slice_slider.setPageStep(5)
         init = start_index if isinstance(start_index, int) else len(self.slice_nav_items) // 2
         init = max(0, min(init, len(self.slice_nav_items) - 1))
         self.slice_slider.setValue(init)
         self.slice_slider.blockSignals(False)
-
-        # Show initial PNG
-        self.on_slice_slider_changed(init)
-        # Make sure the image pane is visible
-        self._show_widget(self.image_label)
-        self.view_mode.setEnabled(False)
         self.orient_combo.setEnabled(False)
+        
+        if self.current_kind != "stl":
+            # Show initial PNG
+            self.on_slice_slider_changed(init)
+            # Make sure the image pane is visible
+            self._show_widget(self.image_label)
+            self.view_mode.setEnabled(False)
+
 
     def reset_png_navigation(self):
         """Return the slider to normal NIfTI navigation."""
@@ -2831,7 +2840,25 @@ class MainWindow(QMainWindow):
             self.slice_value_label.clear()
         if hasattr(self, "image_label"):
             self.image_label.clear()
-            
+      
+      
+    def two_mode_view(self, out_dir, saved_pngs, valid_slices):
+        self.curret_output_3D_slices = os.path.join(out_dir, "all_slices_mesh.vtk")
+        self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
+        self.nav_tb.show()
+        self.slice_slider.setEnabled(True)
+        self.view_mode.setEnabled(True)
+        self.view_mode.setCurrentText("2D")
+        mid = len(saved_pngs) // 2
+        if self.view_mode.currentText() ==  "2D":
+            self.on_slice_slider_changed(mid)
+        elif self.view_mode.currentText() ==  "3D":
+            self.vtk_view.show_slice_with_mesh(
+            mesh_file=self.current_path,
+            slice_file= self.curret_output_3D_slices,
+                    slice_value=mid)
+        
+    
     def reset_view(self):
         for meth in ("cancel_square_selection", "cancel_scalebar_measure", "clear_annotations"):
             if hasattr(self.image_label, meth):
@@ -2841,6 +2868,8 @@ class MainWindow(QMainWindow):
         kind = self.current_kind
         path = self.current_path
         self.last_annotated_path = None
+        self.nav_tb.hide()
+        self.vtk_view.delete_slice_section()
         if not path or not os.path.exists(path):
             self.statusBar().showMessage("No file path to reload.", 3000)
             return
@@ -3442,7 +3471,10 @@ class MainWindow(QMainWindow):
         if b is btn_lr:   return "left"
         if b is btn_ud:   return "up"
         if b is btn_none: return "none"
-        return None  # Cancel
+        return None  # Cance
+        
+
+    
 # ---------------------------
 # Entry point
 # ---------------------------
