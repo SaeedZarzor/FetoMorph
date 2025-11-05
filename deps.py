@@ -19,10 +19,11 @@ from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from vtkmodules.vtkRenderingCore import (
     vtkRenderer, vtkPolyDataMapper, vtkActor,
     vtkImageSliceMapper, vtkImageSlice, vtkVolume, vtkVolumeProperty,
-    vtkWindowToImageFilter
+    vtkWindowToImageFilter,
 )
 from vtkmodules.vtkRenderingVolumeOpenGL2 import vtkSmartVolumeMapper
-
+from vtkmodules.vtkRenderingAnnotation import vtkAxesActor
+from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
 # -------------- VTK IO --------------
 from vtkmodules.vtkIOImage import vtkNIFTIImageReader, vtkPNGWriter, vtkJPEGWriter
 from vtkmodules.vtkIOXML import vtkXMLImageDataReader, vtkXMLPolyDataReader
@@ -99,7 +100,8 @@ __all__ = [
     "vtkImageSliceMapper","vtkImageSlice","vtkVolume","vtkVolumeProperty","vtkWindowToImageFilter",
     "vtkSmartVolumeMapper","vtkNIFTIImageReader","vtkPNGWriter","vtkJPEGWriter", "vtkPolyDataReader",
     "vtkXMLImageDataReader","vtkXMLPolyDataReader","vtkGenericDataObjectReader","vtkDataSetReader",
-    "vtkSTLReader","vtkImageData","vtkPolyData","vtkDataSetSurfaceFilter","vtkOutputWindow",
+    "vtkSTLReader","vtkImageData","vtkPolyData","vtkDataSetSurfaceFilter","vtkOutputWindow","vtkAxesActor",
+    "vtkOrientationMarkerWidget",
     # Sci/IO
     "np","cv2","pd","os","sys","math","tempfile","shutil","pathlib","datetime","Optional","Tuple","Path","re", "List",
     "trimesh", "plt",

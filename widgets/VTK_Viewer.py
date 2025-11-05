@@ -11,15 +11,17 @@ class VTKViewer(QWidget):
         self.renderer = vtkRenderer(); self.vtkWidget.GetRenderWindow().AddRenderer(self.renderer)
         self.renderer.SetBackground(0.07, 0.07, 0.07)
         self._mode = None; self._img = None; self._axis = 2; self._slice = 0; self._slice_min = 0; self._slice_max = 0
-        self._slice_mapper = None; self._slice_node = None
+        self._slice_mapper = None; self._slice_node = None; self._axes_widget = None   # store widget reference
         self.vtkWidget.Initialize()
-
+        self._init_axes_widget()   # enable orthogonal axes
+        
     def show_polydata(self, poly: vtkPolyData):
         self._clear_scene()
         mapper = vtkPolyDataMapper(); mapper.SetInputData(poly)
         actor = vtkActor(); actor.SetMapper(mapper); actor.GetProperty().SetColor(0.69, 0.77, 0.87)
         self.renderer.AddActor(actor); self.renderer.ResetCamera()
         self._mode = "polydata"; self.vtkWidget.GetRenderWindow().Render()
+        self.show_axes(True)
 
     def show_image2d(self, img: vtkImageData):
         self._clear_scene(); self._img = img
@@ -43,6 +45,7 @@ class VTKViewer(QWidget):
         volume = vtkVolume(); volume.SetMapper(mapper); volume.SetProperty(prop)
         self.renderer.AddVolume(volume); self.renderer.ResetCamera()
         self._mode = "volume"; self.vtkWidget.GetRenderWindow().Render()
+        self.show_axes(True)
 
     def has_slice(self) -> bool: return self._mode == "image2d" and self._img is not None
     def slice_range(self): return (self._slice_min, self._slice_max) if self.has_slice() else (0,0)
@@ -68,9 +71,19 @@ class VTKViewer(QWidget):
         return origin[self._axis] + index * spacing[self._axis]
     def _clear_scene(self):
         rw = self.vtkWidget.GetRenderWindow()
-        for r in list(rw.GetRenderers()): rw.RemoveRenderer(r)
-        self.renderer = vtkRenderer(); rw.AddRenderer(self.renderer); self.renderer.SetBackground(0.07, 0.07, 0.07)
-        self._slice_mapper = None; self._slice_node = None; self._img = None
+
+        if not hasattr(self, "renderer") or self.renderer is None:
+            from vtkmodules.vtkRenderingCore import vtkRenderer
+            self.renderer = vtkRenderer()
+            rw.AddRenderer(self.renderer)
+            self.renderer.SetBackground(0.07, 0.07, 0.07)
+        else:
+            # just clear existing actors, keep renderer and axes widget
+            self.renderer.RemoveAllViewProps()
+
+        self._slice_mapper = None
+        self._slice_node = None
+        self._img = None
     @staticmethod
     def _axis_minmax(extent, axis): return (extent[0],extent[1]) if axis==0 else (extent[2],extent[3]) if axis==1 else (extent[4],extent[5])
     def _apply_orientation_to_mapper(self, axis):
@@ -78,6 +91,28 @@ class VTKViewer(QWidget):
         elif axis==1: self._slice_mapper.SetOrientationToY()
         else: self._slice_mapper.SetOrientationToX()
 
+
+    def _init_axes_widget(self):
+        axes = vtkAxesActor()
+
+        w = vtkOrientationMarkerWidget()
+        w.SetOrientationMarker(axes)
+
+        # use the interactor of the render window
+        interactor = self.vtkWidget.GetRenderWindow().GetInteractor()
+        w.SetInteractor(interactor)
+
+        w.SetViewport(0.0, 0.0, 0.2, 0.2)  # bottom-left
+        w.SetEnabled(1)
+        w.InteractiveOff()
+
+        self._axes_widget = w
+        
+    def show_axes(self, visible: bool):
+        if self._axes_widget is not None:
+            self._axes_widget.SetEnabled(1 if visible else 0)
+            self.vtkWidget.GetRenderWindow().Render()
+        
     def show_slice_with_mesh(self, mesh_file: str, slice_file: str, slice_value: int):
         """Merge original mesh and the selected slice, then show using show_polydata()."""
         # Load data
