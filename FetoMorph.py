@@ -1173,10 +1173,7 @@ class MainWindow(QMainWindow):
                     lgi=gi)
                     
                 
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
+                self.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
                 print(f"[VTK hallmarks]:")
                 print(f"VTK mesh Volume Result = {volume:.2f} {u}^3.")
@@ -1307,10 +1304,7 @@ class MainWindow(QMainWindow):
                     slice_thickness= self.slice_thickness,
                     volume=volume)
                     
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
+                self.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
                 print(f"VTK mesh Volume Result = {volume:.2f} {u}^3.")
 
@@ -1611,10 +1605,7 @@ class MainWindow(QMainWindow):
                     lgi=gi)
                     
                 
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
+                self.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
                 print(f"VTK mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
 
@@ -1788,10 +1779,7 @@ class MainWindow(QMainWindow):
                     sulci_depth = depth)
                     
                 
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
+                self.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
                 if len(depth)>=3:
                     print("[VTK Sulci depth]")
@@ -1970,10 +1958,7 @@ class MainWindow(QMainWindow):
                     area=area)
                     
                 
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
+                self.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
                 print(f"VTK mesh Outer Surface Area Result = {area:.2f} {u}^2.")
 

@@ -122,7 +122,7 @@ class VTKViewer(QWidget):
         prop.SetColor(1.0, 0.2, 0.2)                           # strong red
         prop.SetOpacity(1.0)
         prop.SetRepresentationToWireframe()                    # only edges
-        prop.SetLineWidth(4.0)
+        prop.SetLineWidth(4)
         prop.EdgeVisibilityOn()
         prop.SetEdgeColor(1.0, 1.0, 0.0)                       # yellow edges
 

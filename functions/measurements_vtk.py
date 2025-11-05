@@ -74,6 +74,7 @@ def compute_vtk_allmarks(
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
     rows = []
+    sections_list: list[pv.PolyData] = []
     total_depth = []
     sum_inner_mm = 0.0
     sum_outer_mm = 0.0
@@ -83,7 +84,8 @@ def compute_vtk_allmarks(
     p = pv.Plotter(off_screen=True)
     p.set_background("black")
     
-    ref_axis = (axis_index + 1) % 3
+    pre_axis = (axis_index - 1) % 3
+    next_axis = (axis_index + 1) % 3
     cube_len = max(1e-6, mesh_dim[0] / 10.0)
 
     for idx, k in enumerate(slice_positions):
@@ -95,8 +97,12 @@ def compute_vtk_allmarks(
             continue
 
         # Red cube reference (10% of X extent)
-        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[ref_axis])
-        # Render: section + scale cube
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
+        
+        plane = pv.Plane(center=origin,
+                 direction=normal,  # plane normal
+                 i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,  # side lengths
+                 i_resolution=1, j_resolution=1)        # Render: section + scale cube
         p.clear()
         p.add_mesh(section, color="#ffffff", opacity=1)
         p.add_mesh(scale_cube, color="red")
@@ -178,8 +184,10 @@ def compute_vtk_allmarks(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
-
-      
+        section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
+        sections_list.append(section)
+        sections_list.append(plane)
     # ---- end with: plotter is fully and safely closed here ----
 
     # Totals
@@ -188,7 +196,13 @@ def compute_vtk_allmarks(
     GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
     
     mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
-
+    if sections_list:
+        all_slices_mesh = pv.merge(sections_list)
+#        all_slices_mesh.active_scalars_name = "RGB"
+        slice_mesh_path = os.path.join(out_dir, "all_slices_mesh.vtk")
+        all_slices_mesh.save(slice_mesh_path)
+    else:
+        all_slices_mesh = pv.PolyData()
 
     # Save per-slice + total to Excel
     try:
@@ -268,6 +282,7 @@ def compute_vtk_lGI(
 
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
+    sections_list: list[pv.PolyData] = []
     rows = []
     sum_inner_mm = 0.0
     sum_outer_mm = 0.0
@@ -276,7 +291,8 @@ def compute_vtk_lGI(
     p = pv.Plotter(off_screen=True)
     p.set_background("black")
     
-    ref_axis = (axis_index + 1) % 3
+    pre_axis = (axis_index - 1) % 3
+    next_axis = (axis_index + 1) % 3
     cube_len = max(1e-6, mesh_dim[0] / 10.0)
 
     for idx, k in enumerate(slice_positions):
@@ -288,8 +304,12 @@ def compute_vtk_lGI(
             continue
 
         # Red cube reference (10% of X extent)
-        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[ref_axis])
-        # Render: section + scale cube
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
+        
+        plane = pv.Plane(center=origin,
+                 direction=normal,  # plane normal
+                 i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,  # side lengths
+                 i_resolution=1, j_resolution=1)        # Render: section + scale cube
         p.clear()
         p.add_mesh(section, color="#ffffff", opacity=1)
         p.add_mesh(scale_cube, color="red")
@@ -342,13 +362,21 @@ def compute_vtk_lGI(
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
         rows.append([idx, GI_slice])
-
-
+        section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
+        sections_list.append(section)
+        sections_list.append(plane)
       
     # ---- end with: plotter is fully and safely closed here ----
 
     GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
-
+    if sections_list:
+        all_slices_mesh = pv.merge(sections_list)
+#        all_slices_mesh.active_scalars_name = "RGB"
+        slice_mesh_path = os.path.join(out_dir, "all_slices_mesh.vtk")
+        all_slices_mesh.save(slice_mesh_path)
+    else:
+        all_slices_mesh = pv.PolyData()
     # Save per-slice + total to Excel
     try:
         rows.append(["GI",round(GI_total,2)])
@@ -386,10 +414,10 @@ def compute_vtk_volume(
     mesh_dim = [x_max - x_min, y_max - y_min, z_max - z_min]
     mesh_dim_scaled = np.array(Physical_dim) / np.array(mesh_dim)
     p = mesh.center
-    mesh_scaled = mesh.copy()
-    mesh_scaled.translate(-p, inplace=True)
-    mesh_scaled.scale(mesh_dim_scaled, inplace=True)  # about origin
-    mesh_scaled.translate(p, inplace=True)
+#    mesh_scaled = mesh.copy()
+#    mesh_scaled.translate(-p, inplace=True)
+#    mesh_scaled.scale(mesh_dim_scaled, inplace=True)  # about origin
+#    mesh_scaled.translate(p, inplace=True)
 #    Volume = mesh_scaled.volume
 
     axis_bounds = {
@@ -428,6 +456,7 @@ def compute_vtk_volume(
 
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
+    sections_list: list[pv.PolyData] = []
     rows = []
     sum_area = 0.0
     
@@ -435,7 +464,8 @@ def compute_vtk_volume(
     p = pv.Plotter(off_screen=True)
     p.set_background("black")
     
-    ref_axis = (axis_index + 1) % 3
+    pre_axis = (axis_index - 1) % 3
+    next_axis = (axis_index + 1) % 3
     cube_len = max(1e-6, mesh_dim[0] / 10.0)
 
     for idx, k in enumerate(slice_positions):
@@ -447,7 +477,12 @@ def compute_vtk_volume(
             continue
 
         # Red cube reference (10% of X extent)
-        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[ref_axis])
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
+        
+        plane = pv.Plane(center=origin,
+                 direction=normal,  # plane normal
+                 i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,  # side lengths
+                 i_resolution=1, j_resolution=1)
         # Render: section + scale cube
         p.clear()
         p.add_mesh(section, color="#ffffff", opacity=1)
@@ -490,13 +525,22 @@ def compute_vtk_volume(
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
         rows.append([idx, len(inner_filtered) ,area_perim_mm])
-
+        section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
+        sections_list.append(section)
+        sections_list.append(plane)
       
     # ---- end with: plotter is fully and safely closed here ----
 
     # Totals
     Volume = sum_area * slice_thickness_eff
-    
+    if sections_list:
+        all_slices_mesh = pv.merge(sections_list)
+#        all_slices_mesh.active_scalars_name = "RGB"
+        slice_mesh_path = os.path.join(out_dir, "all_slices_mesh.vtk")
+        all_slices_mesh.save(slice_mesh_path)
+    else:
+        all_slices_mesh = pv.PolyData()
 
     # Save per-slice + total to Excel
     try:
@@ -569,6 +613,7 @@ def compute_vtk_area(
 
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
+    sections_list: list[pv.PolyData] = []
     rows = []
     sum_inner_mm = 0.0
     
@@ -576,7 +621,8 @@ def compute_vtk_area(
     p = pv.Plotter(off_screen=True)
     p.set_background("black")
     
-    ref_axis = (axis_index + 1) % 3
+    pre_axis = (axis_index - 1) % 3
+    next_axis = (axis_index + 1) % 3
     cube_len = max(1e-6, mesh_dim[0] / 10.0)
 
     for idx, k in enumerate(slice_positions):
@@ -588,8 +634,12 @@ def compute_vtk_area(
             continue
 
         # Red cube reference (10% of X extent)
-        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[ref_axis])
-        # Render: section + scale cube
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
+        
+        plane = pv.Plane(center=origin,
+                 direction=normal,  # plane normal
+                 i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,  # side lengths
+                 i_resolution=1, j_resolution=1)        # Render: section + scale cube
         p.clear()
         p.add_mesh(section, color="#ffffff", opacity=1)
         p.add_mesh(scale_cube, color="red")
@@ -628,13 +678,21 @@ def compute_vtk_area(
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
         rows.append([idx, inner_perim_mm])
-
-      
+        section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
+        sections_list.append(section)
+        sections_list.append(plane)
     # ---- end with: plotter is fully and safely closed here ----
 
     # Totals
     Area = sum_inner_mm * slice_thickness_eff
-    
+    if sections_list:
+        all_slices_mesh = pv.merge(sections_list)
+#        all_slices_mesh.active_scalars_name = "RGB"
+        slice_mesh_path = os.path.join(out_dir, "all_slices_mesh.vtk")
+        all_slices_mesh.save(slice_mesh_path)
+    else:
+        all_slices_mesh = pv.PolyData()
     # Save per-slice + total to Excel
     try:
         rows.append([f"Surface Area {unit}^2", Area])
@@ -709,6 +767,7 @@ def compute_vtk_sulci_depth(
 
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
+    sections_list: list[pv.PolyData] = []
     rows = []
     total_depth = []
     
@@ -716,7 +775,8 @@ def compute_vtk_sulci_depth(
     p = pv.Plotter(off_screen=True)
     p.set_background("black")
     
-    ref_axis = (axis_index + 1) % 3
+    pre_axis = (axis_index - 1) % 3
+    next_axis = (axis_index + 1) % 3
     cube_len = max(1e-6, mesh_dim[0] / 10.0)
 
     for idx, k in enumerate(slice_positions):
@@ -728,8 +788,12 @@ def compute_vtk_sulci_depth(
             continue
 
         # Red cube reference (10% of X extent)
-        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[ref_axis])
-        # Render: section + scale cube
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
+        
+        plane = pv.Plane(center=origin,
+                 direction=normal,  # plane normal
+                 i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,  # side lengths
+                 i_resolution=1, j_resolution=1)        # Render: section + scale cube
         p.clear()
         p.add_mesh(section, color="#ffffff", opacity=1)
         p.add_mesh(scale_cube, color="red")
@@ -790,12 +854,20 @@ def compute_vtk_sulci_depth(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
-
-      
+        section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
+        sections_list.append(section)
+        sections_list.append(plane)
     # ---- end with: plotter is fully and safely closed here ----
     
     mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
-
+    if sections_list:
+        all_slices_mesh = pv.merge(sections_list)
+#        all_slices_mesh.active_scalars_name = "RGB"
+        slice_mesh_path = os.path.join(out_dir, "all_slices_mesh.vtk")
+        all_slices_mesh.save(slice_mesh_path)
+    else:
+        all_slices_mesh = pv.PolyData()
 
     # Save per-slice + total to Excel
     try:

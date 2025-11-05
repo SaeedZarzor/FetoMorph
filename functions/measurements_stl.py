@@ -96,6 +96,10 @@ def compute_stl_allmarks(
 #        scale_cube = pv.Cube(x_length=cube_len, y_length=0.01, z_length=cube_len)
 #        scale_cube.translate((50, 0, 50), inplace=True)
 
+        plane = pv.Plane(center=(0, float(y), 0),
+                         direction=(0, 1, 0),  # plane normal
+                         i_size=brain_dim[0]*1.5, j_size=brain_dim[2]*1.5,  # side lengths
+                         i_resolution=1, j_resolution=1)
         # Render: section + scale cube
         p.clear()
         p.add_mesh(scale_cube, color="red")
@@ -181,9 +185,11 @@ def compute_stl_allmarks(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
+        plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        sections_list.append(plane)
         sections_list.append(section)
-      
+
     # ---- end with: plotter is fully and safely closed here ----
 
     # Totals
@@ -324,6 +330,10 @@ def compute_stl_lGI(
         cube_len = max(1e-6, brain_dim[1] / 10.0)
         scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
 
+        plane = pv.Plane(center=(0, float(y), 0),
+                         direction=(0, 1, 0),  # plane normal
+                         i_size=brain_dim[0]*1.5, j_size=brain_dim[2]*1.5,  # side lengths
+                         i_resolution=1, j_resolution=1)
         # Render: section + scale cube
         p.clear()
         p.add_mesh(scale_cube, color="red")
@@ -378,8 +388,10 @@ def compute_stl_lGI(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
+        plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
         sections_list.append(section)
+        sections_list.append(plane)
 
             # Store 3D outer contours in mm coords for optional solid build
         if build_solid and outer_filtered:
@@ -531,7 +543,10 @@ def compute_stl_volume(
         # Red cube reference (10% of X extent)
         cube_len = max(1e-6, brain_dim[1] / 10.0)
         scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
-
+        plane = pv.Plane(center=(0, float(y), 0),
+                         direction=(0, 1, 0),  # plane normal
+                         i_size=brain_dim[0]*1.5, j_size=brain_dim[2]*1.5,  # side lengths
+                         i_resolution=1, j_resolution=1)
         # Render: section + scale cube
         p.clear()
         p.add_mesh(scale_cube, color="red")
@@ -575,8 +590,10 @@ def compute_stl_volume(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
+        plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
         sections_list.append(section)
+        sections_list.append(plane)
 
       
     # ---- end with: plotter is fully and safely closed here ----
@@ -696,7 +713,10 @@ def compute_stl_area(
         # Red cube reference (10% of X extent)
         cube_len = max(1e-6, brain_dim[1] / 10.0)
         scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
-
+        plane = pv.Plane(center=(0, float(y), 0),
+                         direction=(0, 1, 0),  # plane normal
+                         i_size=brain_dim[0]*1.5, j_size=brain_dim[2]*1.5,  # side lengths
+                         i_resolution=1, j_resolution=1)
         # Render: section + scale cube
         p.clear()
         p.add_mesh(scale_cube, color="red")
@@ -742,8 +762,10 @@ def compute_stl_area(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
+        plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
         sections_list.append(section)
+        sections_list.append(plane)
 
       
     # ---- end with: plotter is fully and safely closed here ----
@@ -861,7 +883,10 @@ def compute_stl_sulci_depth(
         # Red cube reference (10% of X extent)
         cube_len = max(1e-6, brain_dim[1] / 10.0)
         scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
-
+        plane = pv.Plane(center=(0, float(y), 0),
+                         direction=(0, 1, 0),  # plane normal
+                         i_size=brain_dim[0]*1.5, j_size=brain_dim[2]*1.5,  # side lengths
+                         i_resolution=1, j_resolution=1)
         # Render: section + scale cube
         p.clear()
         p.add_mesh(scale_cube, color="red")
@@ -927,7 +952,9 @@ def compute_stl_sulci_depth(
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         sections_list.append(section)
+        sections_list.append(plane)
       
     # ---- end with: plotter is fully and safely closed here ----
 
