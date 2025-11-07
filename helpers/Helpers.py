@@ -4,6 +4,8 @@ import pyvista as pv
 import math
 
 
+
+
 def text_thickness(H, style="regular", cap=10):
     base_div = {"thin": 380, "regular": 320, "bold": 260}[style]  # ↑ bigger divisors = thinner
     t = int(round(H / base_div))
