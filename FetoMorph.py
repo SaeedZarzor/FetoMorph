@@ -104,8 +104,9 @@ class MainWindow(QMainWindow):
         self.labels_available : set[int] ={}
         self.nifti_label_lut: dict[int, QColor] = {}   # label -> color
         self.nifti_selected_regions: set[int] = set()
+        self.Freesurfer_record: List[Dict[str, str]] = []
         self.label_overlay_enabled: bool = True
-        self.label_overlay_alpha: float = 0.5
+#        self.label_overlay_alpha: float = 0.5
         
         # Params for measurements
         self.units_length = None          # e.g., "mm" (set by user prompt)
@@ -167,13 +168,11 @@ class MainWindow(QMainWindow):
         self.act_imp_vtk = QAction(".vtk file…", self); self.act_imp_vtk.setShortcut(QKeySequence("Ctrl+Shift+V")); self.act_imp_vtk.triggered.connect(self.import_vtk); import_menu.addAction(self.act_imp_vtk)
         self.act_imp_stl = QAction(".stl file…", self); self.act_imp_stl.setShortcut(QKeySequence("Ctrl+Shift+L")); self.act_imp_stl.triggered.connect(self.import_stl); import_menu.addAction(self.act_imp_stl)
         self.act_imp_nii = QAction("NIfTI…", self); self.act_imp_nii.setShortcut(QKeySequence("Ctrl+Shift+N")); self.act_imp_nii.triggered.connect(self.import_nifti); import_menu.addAction(self.act_imp_nii)
-
         file_menu.addSeparator()
         
         self.recent = RecentPaths("YourOrg", "YourApp")
         self.menu_recent = file_menu.addMenu("Recent")
         populate_recent_menu(self.menu_recent, self.recent, self.open_path)
-
         self.act_show_results = QAction("Show Results…", self); self.act_show_results.triggered.connect(lambda:self.metricsDock.show()); file_menu.addAction(self.act_show_results)
         self.act_save = QAction("Save View As…", self); self.act_save.setShortcut(QKeySequence("Ctrl+V")); self.act_save.triggered.connect(self.save_view); file_menu.addAction(self.act_save)
         self.act_save_data = QAction("Save Data As…", self); self.act_save_data.setShortcut(QKeySequence.SaveAs); self.act_save_data.triggered.connect(self.save_data_as); file_menu.addAction(self.act_save_data)
@@ -203,8 +202,6 @@ class MainWindow(QMainWindow):
         self.act_img_batch = QAction("Process images batch", self); self.act_img_batch.triggered.connect(self.on_process_batch); process_menu.addAction(self.act_img_batch)
         self.act_optimization = QAction("Optimization", self); self.act_optimization.triggered.connect(self.on_optimization); process_menu.addAction(self.act_optimization)
         process_menu.addSeparator()
-        self.act_pial_to_stl = QAction("Pial → STL…", self); self.act_pial_to_stl.triggered.connect(self.on_pial_to_stl); process_menu.addAction(self.act_pial_to_stl)
-        self.act_pial_merge = QAction("Combined STL…", self); self.act_pial_merge.triggered.connect(self.on_combined_stl); process_menu.addAction(self.act_pial_merge)
         self.act_nitfi2png = QAction("Nifti masking…", self); self.act_nitfi2png.triggered.connect(self.Nifti_to_png); process_menu.addAction(self.act_nitfi2png)
         self.act_niftiextractor = QAction("Nifti extract regions…", self); self.act_niftiextractor.triggered.connect(self.Nifti_extractor); process_menu.addAction(self.act_niftiextractor)
 
@@ -218,10 +215,14 @@ class MainWindow(QMainWindow):
         self.act_slice_thickness = QAction("Set Slice Thikcness…", self); self.act_slice_thickness.triggered.connect(self.set_slice_thickness_dialog); Setting_menu.addAction(self.act_slice_thickness); self.act_slice_thickness.setToolTip("Set the distance between slices")
         self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Setting_menu.addAction(self.act_annotate_square)
-        self.act_choose_regions = QAction("ROI extraction…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
+        self.act_choose_regions = QAction("ROI selection…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
         self.act_set_physical_dim = QAction("Mesh dimensions…", self);self.act_set_physical_dim.setToolTip("Define the physical dimensions of the VTK mesh."); self.act_set_physical_dim.triggered.connect(self.load_mesh_and_ask_geometry);Setting_menu.addAction(self.act_set_physical_dim)
-
-
+    
+        Freesurfer_menu = self.menuBar().addMenu("Freesurfer Viewer")
+        self.act_view_surfacses = QAction("Surfaces…", self); self.act_view_surfacses.setToolTip("Display the brain surface reconstructed with FreeSurfer (e.g. pial, white)."); self.act_view_surfacses.triggered.connect(self.view_freesurfer_surfaces); Freesurfer_menu.addAction(self.act_view_surfacses)
+        self.act_view_morph_map = QAction("Morph maps…", self); self.act_view_morph_map.setToolTip("Display the morph map of a brain surface reconstructed with FreeSurfer (e.g. slucs, thickness, curve)."); self.act_view_morph_map.triggered.connect(self.view_morph_map); Freesurfer_menu.addAction(self.act_view_morph_map)
+        self.act_pial_to_stl = QAction("Pial → STL…", self); self.act_pial_to_stl.triggered.connect(self.on_pial_to_stl); Freesurfer_menu.addAction(self.act_pial_to_stl)
+        self.act_pial_merge = QAction("Combined STL…", self); self.act_pial_merge.triggered.connect(self.on_combined_stl); Freesurfer_menu.addAction(self.act_pial_merge)
 
         # Disable initially
         for action in [
@@ -315,8 +316,6 @@ class MainWindow(QMainWindow):
         
         self.ribbon.add_action("Process", self.act_img_batch)
         self.ribbon.add_action("Process", self.act_optimization)
-        self.ribbon.add_action("Process", self.act_pial_to_stl)
-        self.ribbon.add_action("Process", self.act_pial_merge)
         self.ribbon.add_action("Process", self.act_nitfi2png)
         self.ribbon.add_action("Process", self.act_niftiextractor)
 
@@ -330,7 +329,11 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Adjustments", self.act_annotate_square)
         self.ribbon.add_action("Adjustments", self.act_choose_regions)
         self.ribbon.add_action("Adjustments", self.act_set_physical_dim)
-
+        
+        self.ribbon.add_action("Freesurfer Viewer", self.act_view_surfacses)
+        self.ribbon.add_action("Freesurfer Viewer", self.act_view_morph_map)
+        self.ribbon.add_action("Freesurfer Viewer", self.act_pial_to_stl)
+        self.ribbon.add_action("Freesurfer Viewer", self.act_pial_merge)
 
         self.addToolBarBreak(Qt.TopToolBarArea)
 
@@ -2216,11 +2219,23 @@ class MainWindow(QMainWindow):
     
     def on_pial_to_stl(self):
         """Pick one .pial, convert to STL in TEMP, show it, and keep source in metrics."""
-        start = self.last_dir if os.path.isdir(self.last_dir) else ""
-        pial, _ = QFileDialog.getOpenFileName(self, "Select FreeSurfer Pial Surface",
-                                              start, "FreeSurfer Surface (*.pial);;All Files (*)")
-        if not pial:
+        pial = None
+        if not self.current_kind == "Freesurfer":
+            start = self.last_dir if os.path.isdir(self.last_dir) else ""
+            pial, _ = QFileDialog.getOpenFileName(self, "Select FreeSurfer Pial Surface",
+                                                  start, "FreeSurfer Surface (*.pial);;All Files (*)")
+            if not pial:
+                return
+        
+            self.last_dir = os.path.dirname(pial)
+            
+            
+        elif len(self.Freesurfer_record) == 2:
+            self.on_combined_stl()
             return
+        
+        else:
+            pial = self.Freesurfer_record[0]['path']
 
         # Save to TEMP (don’t pester user yet)
         uid = uuid.uuid4().hex[:8]
@@ -2240,15 +2255,54 @@ class MainWindow(QMainWindow):
         
     def on_combined_stl(self):
         """Pick rh & lh .pial, convert + merge in TEMP, show combined STL, record provenance."""
-        start = self.last_dir if os.path.isdir(self.last_dir) else ""
-        rh, _ = QFileDialog.getOpenFileName(self, "Select RIGHT hemisphere (rh.pial)",
-                                            start, "FreeSurfer Surface (*.pial);;All Files (*)")
-        if not rh:
-            return
-        lh, _ = QFileDialog.getOpenFileName(self, "Select LEFT hemisphere (lh.pial)",
-                                            os.path.dirname(rh), "FreeSurfer Surface (*.pial);;All Files (*)")
-        if not lh:
-            return
+        rh, lh = None, None
+        if self.current_kind != "Freesurfer" or  len(self.Freesurfer_record) == 1:
+            start = self.last_dir if os.path.isdir(self.last_dir) else ""
+            while True:
+                files, _ = QFileDialog.getOpenFileNames(self, "Select Both hemisphere (e.g. rh.pial, lh.pial)",
+                                                    start, "FreeSurfer Surface (*.pial *.white *.inflated);;All Files (*)")
+                                                    
+                if not files:
+                    return
+                
+                self.last_dir = os.path.dirname(files[0])
+                if len(files) != 2:
+                    QMessageBox.warning(self, "Invalid selection", "You must select exactly two files.")
+                    continue
+                
+                names=set()
+                exts=set()
+                for f in files:
+                    base = os.path.basename(f)
+                    name, ext = os.path.splitext(base)
+                    names.add(name)
+                    exts.add(ext)
+                if not {"lh", "rh"}.issubset(names):
+                    QMessageBox.warning(
+                        self,
+                        "Invalid selection",
+                        "You must select both 'lh' and 'rh' files (e.g., lh.pial and rh.pial)."
+                    )
+                    continue
+                
+                if len(exts) != 1:
+                    reply = QMessageBox.question(
+                    self,
+                    "Confirm",
+                    "You have selected two different file types. Would you like to proceed?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                   )
+                    if reply == QMessageBox.Yes:
+                        break
+                    else:
+                        continue
+                
+                rh = files[0]; lh = files[1]
+                break
+        else:
+            rh = self.Freesurfer_record[0]['path']
+            lh = self.Freesurfer_record[1]['path']
 
         # TEMP output
         uid = uuid.uuid4().hex[:8]
@@ -2658,28 +2712,30 @@ class MainWindow(QMainWindow):
         self.current_path = path
         has_file = kind is not None
         
-        for action in [
-            self.act_save,
-            self.act_save_data,
-            self.act_close,
-            self.act_export_metrics,
-            self.act_show_results,
-            self.act_Reset,
-            self.act_kernel_size,
-            self.act_cnt_threshold,
-            self.act_set_custom_label,
-            self.act_set_image_scale,
-            self.act_set_scale,
-            self.act_meas_allmarks,
-            self.act_meas_volumes,
-            self.act_meas_area,
-            self.act_meas_perimeter,
-            self.act_meas_lgi,
-            self.act_meas_sulci,
-            self.act_optimization,
-            self.act_slice_thickness,
-        ]:
-            action.setEnabled(has_file)
+        self.act_save.setEnabled(has_file)
+        self.act_close.setEnabled(has_file)
+        
+        if not self.current_kind == "Freesurfer":
+            for action in [
+                self.act_save_data,
+                self.act_export_metrics,
+                self.act_show_results,
+                self.act_Reset,
+                self.act_kernel_size,
+                self.act_cnt_threshold,
+                self.act_set_custom_label,
+                self.act_set_image_scale,
+                self.act_set_scale,
+                self.act_meas_allmarks,
+                self.act_meas_volumes,
+                self.act_meas_area,
+                self.act_meas_perimeter,
+                self.act_meas_lgi,
+                self.act_meas_sulci,
+                self.act_optimization,
+                self.act_slice_thickness,
+            ]:
+                action.setEnabled(has_file)
 
         self.reset_png_navigation()
         self._update_process_actions()
@@ -2755,6 +2811,7 @@ class MainWindow(QMainWindow):
 
         if kind == "vtk":
             self.act_set_physical_dim.setEnabled(True)
+        
         else:
             self.act_set_physical_dim.setEnabled(False)
             
@@ -3196,6 +3253,7 @@ class MainWindow(QMainWindow):
         uid = uuid.uuid4().hex[:8]
         folder = os.path.join(self.temp_dir, f"nifti_slice_{uid}")
         os.makedirs(folder, exist_ok=True)
+        
         path= os.path.join (folder, base + "_view.png")
         out_path = os.path.join(folder, base + "_section.png")
         self.current_output_dir = folder
@@ -3459,6 +3517,215 @@ class MainWindow(QMainWindow):
         return None  # Cance
         
 
+# ================= Freesurfer ============================
+
+    def view_freesurfer_surfaces(self):
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Number of files?")
+        msg.setText("Would you like to display one hemisphere or both?")
+
+        one_btn = msg.addButton("One", QMessageBox.ActionRole)
+        both_btn = msg.addButton("Both", QMessageBox.ActionRole)
+
+        msg.exec_()
+        
+        self.Freesurfer_record =[]
+        start = self.last_dir if os.path.isdir(self.last_dir) else ""
+        if msg.clickedButton() == one_btn:
+            surf_path, _ = QFileDialog.getOpenFileName(
+                    self,
+                    "Select FreeSurfer surface (lh.pial / rh.pial)",
+                    start,
+                    "FreeSurfer surface (*.pial *.white *.inflated);;All files (*)",
+                )
+            if not surf_path:
+                return
+            
+            name, ext = os.path.splitext(os.path.basename(surf_path))
+            print (f"[Load Freesurfer file] the {ext} map of {os.path.dirname(surf_path)} imported successfully" )
+            File_info = {'name': name, 'ext': ext  ,'path': surf_path}
+            self.Freesurfer_record.append(File_info)
+            self._show_widget(self.vtk_view)
+            self.vtk_view.show_pial_surface(surf_path)
+            self.last_dir = os.path.dirname(surf_path)
+            
+        elif msg.clickedButton() == both_btn:
+            while True:
+                surf_paths, _ = QFileDialog.getOpenFileNames(
+                    self,
+                    "Select FreeSurfer surfaces (lh.pial / rh.pial)",
+                    start,
+                    "FreeSurfer surface (*.pial *.white *.inflated);;All files (*)",
+                )
+
+                if not surf_paths:  # user canceled
+                    return
+                
+                self.last_dir = os.path.dirname(surf_paths[0])
+                if len(surf_paths) != 2:
+                    QMessageBox.warning(self, "Invalid selection", "You must select exactly two files.")
+                    continue
+
+                files = []
+                exts = set()
+                lh_file, rh_file = None, None
+                
+                for path in surf_paths:
+                    base = os.path.basename(path)
+                    name, ext = os.path.splitext(base)
+                    ext = ext.lstrip(".").lower()
+                    exts.add(ext)
+                    files.append({'name': name, 'ext': ext, 'path': path})
+                    if name == "lh":
+                        lh_file = path
+                    elif name == "rh":
+                        rh_file = path
+                # both must share same extension
+                if len(exts) != 1:
+                    QMessageBox.warning(
+                        self,
+                        "Invalid selection",
+                        "Both files must have the same extension (e.g., both .pial)."
+                    )
+                    continue
+
+                # must include both hemispheres
+                if not rh_file or not lh_file:
+                    QMessageBox.warning(
+                        self,
+                        "Invalid selection",
+                        "You must select both 'lh' and 'rh' files (e.g., lh.pial and rh.pial)."
+                    )
+                    continue
+
+                print(f"[Load FreeSurfer file] Both {exts.pop()} surfaces imported successfully from {os.path.dirname(surf_paths[0])}")
+
+                self.Freesurfer_record.extend(files)
+                break
+            self._show_widget(self.vtk_view)
+            self.vtk_view.show_pial_both(lh_file, rh_file)
+
+        self._set_current("Freesurfer", self.Freesurfer_record[0]['path'])
+        
+        
+    def view_morph_map(self):
+        if self.current_kind != "Freesurfer" or len(self.Freesurfer_record) == 0:
+            QMessageBox.warning(
+                        self,
+                        "Invalid selection",
+                        "This function supports only FreeSurfer files. Please load FreeSurfer surfaces first."
+                    )
+            return
+            
+        start = self.last_dir if os.path.isdir(self.last_dir) else ""
+        if len(self.Freesurfer_record) == 1:
+            name1 = self.Freesurfer_record[0]['name']
+            path = self.Freesurfer_record[0]['path']
+            while True:
+                # ask for sulc/thickness file
+                morph_path, _ = QFileDialog.getOpenFileName(
+                    self,
+                    "Select FreeSurfer morph file (sulc / thickness)",
+                    start,
+                    "FreeSurfer morph (*.sulc *.thickness *.curv);;All files (*)",
+                )
+                if not morph_path:
+                    return
+                
+                self.last_dir = os.path.dirname(morph_path)
+                name2 = os.path.splitext(os.path.basename(morph_path))[0].lower()
+                ext = os.path.splitext(morph_path)[1].lstrip(".").lower()
+
+                if not name1 == name2:
+                    QMessageBox.warning(
+                        self,
+                        "Invalid selection",
+                        "Both files must belong to the same hemisphere."
+                    )
+                    continue
+                
+                if not os.path.dirname(morph_path) == os.path.dirname(path):
+                    QMessageBox.warning(
+                        self,
+                        "Invalid selection",
+                        "The selected morph belongs to a different brain or gestational week."
+                    )
+                    continue
+                print (f"[Load Freesurfer file] the {ext} map of {os.path.dirname(morph_path)} imported successfully" )
+                break
+
+            # call the viewer function
+            self._show_widget(self.vtk_view)
+            self.vtk_view.show_freesurfer_morph(path, morph_path)
+            
+        elif len(self.Freesurfer_record) == 2:
+            for f in self.Freesurfer_record:
+                if f['name'] == "lh":
+                    lh_file = f['path']
+                elif  f['name'] == "rh":
+                    rh_file = f['path']
+
+            while True:
+                morph_paths, _ = QFileDialog.getOpenFileNames(
+                    self,
+                    "Select FreeSurfer morph file (sulc / thickness)",
+                    start,
+                    "FreeSurfer morph (*.sulc *.thickness *.curv);;All files (*)",
+                )
+
+                # if user cancels, abort cleanly
+                if not morph_paths:
+                    return
+                    
+                self.last_dir = os.path.dirname(morph_paths[0])
+                if len(morph_paths) != 2:
+                    QMessageBox.warning(self, "Invalid selection", "You must select exactly two files.")
+                    continue  # re-open dialog
+
+                lh_morph, rh_morph = None, None
+                exts = []
+
+                for f in morph_paths:
+                    name = os.path.basename(f).lower()
+                    ext = os.path.splitext(name)[1].lstrip(".").lower()
+                    exts.append(ext)
+                    if name.startswith("lh"):
+                        lh_morph = f
+                    elif name.startswith("rh"):
+                        rh_morph = f
+                        
+                if len(set(exts)) != 1:
+                    QMessageBox.warning(
+                        self,
+                        "Invalid selection",
+                        "Both files must have the same extension (e.g., both .sulcs)."
+                    )
+                    continue
+                    
+                if not lh_morph or not rh_morph:
+                    QMessageBox.warning(
+                        self,
+                        "Invalid selection",
+                        "Both 'lh' and 'rh' files must be selected (e.g., lh.sulcs and rh.sulcs)."
+                    )
+                    continue  # re-open dialog
+                
+                if not os.path.dirname(lh_morph) == os.path.dirname(rh_file):
+                    QMessageBox.warning(
+                        self,
+                        "Invalid selection",
+                        "The selected morph belongs to a different brain or gestational week."
+                    )
+                    continue
+                print (f"[Load Freesurfer file] both {exts[0]} map of {os.path.dirname(lh_morph)} imported successfully" )
+                # valid selection → exit loop
+                break
+                
+            self._show_widget(self.vtk_view)
+            self.vtk_view.show_freesurfer_morph_both(lh_file,lh_morph, rh_file,rh_morph)
+
+        else:
+            return
     
 # ---------------------------
 # Entry point

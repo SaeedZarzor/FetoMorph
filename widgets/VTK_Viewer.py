@@ -1,6 +1,6 @@
 from deps import *
 import pyvista as pv
-
+import nibabel as nib
 
 class VTKViewer(QWidget):
     def __init__(self, parent=None):
@@ -173,3 +173,246 @@ class VTKViewer(QWidget):
             self.renderer.RemoveActor(self._slice_actor)
             self._slice_actor = None
             self.vtkWidget.GetRenderWindow().Render()
+            
+    def show_pial_surface(self, surf_path: str):
+        """Load and display a single FreeSurfer pial surface (e.g. lh.pial or rh.pial)."""
+        # 1) load FreeSurfer surface
+        verts, faces = nib.freesurfer.read_geometry(surf_path)  # verts: (N,3), faces: (M,3)
+
+        # 2) build vtkPolyData
+        points = vtkPoints()
+        points.SetNumberOfPoints(verts.shape[0])
+        for i, (x, y, z) in enumerate(verts.astype(float)):
+            points.SetPoint(i, float(x), float(y), float(z))
+
+        polys = vtkCellArray()
+        for tri in faces.astype(np.int64):
+            polys.InsertNextCell(3)
+            polys.InsertCellPoint(int(tri[0]))
+            polys.InsertCellPoint(int(tri[1]))
+            polys.InsertCellPoint(int(tri[2]))
+
+        poly = vtkPolyData()
+        poly.SetPoints(points)
+        poly.SetPolys(polys)
+
+        # 3) show using your existing pipeline
+        self.show_polydata(poly)
+
+    def _fs_surface_to_poly(self, surf_path: str) -> vtkPolyData:
+        """Helper: FreeSurfer surface → vtkPolyData."""
+        verts, faces = nib.freesurfer.read_geometry(surf_path)  # verts: (N,3), faces: (M,3)
+
+        points = vtkPoints()
+        points.SetNumberOfPoints(verts.shape[0])
+        for i, (x, y, z) in enumerate(verts.astype(float)):
+            points.SetPoint(i, float(x), float(y), float(z))
+
+        polys = vtkCellArray()
+        for tri in faces.astype(np.int64):
+            polys.InsertNextCell(3)
+            polys.InsertCellPoint(int(tri[0]))
+            polys.InsertCellPoint(int(tri[1]))
+            polys.InsertCellPoint(int(tri[2]))
+
+        poly = vtkPolyData()
+        poly.SetPoints(points)
+        poly.SetPolys(polys)
+        return poly
+
+    def show_pial_both(self, lh_surf_path: str, rh_surf_path: str):
+        """Load and display both pial surfaces (lh + rh) in one view."""
+        lh_poly = self._fs_surface_to_poly(lh_surf_path)
+        rh_poly = self._fs_surface_to_poly(rh_surf_path)
+
+        app = vtkAppendPolyData()
+        app.AddInputData(lh_poly)
+        app.AddInputData(rh_poly)
+        app.Update()
+        both_poly = app.GetOutput()
+
+        self.show_polydata(both_poly)
+
+
+
+    def show_freesurfer_morph(self, surf_path: str, morph_path: str):
+               # --- 1. load surface + morph ---
+        verts, faces = nib.freesurfer.read_geometry(surf_path)
+        morph = nib.freesurfer.read_morph_data(morph_path)
+
+        if verts.shape[0] != morph.shape[0]:
+            print("vertex count mismatch surface vs morph data")
+            return
+
+        # --- 2. decide label from extension ---
+        ext = os.path.splitext(os.path.basename(morph_path))[1].lstrip(".").lower()
+
+        if ext in ("thickness", "thick"):
+            array_name = "thickness"
+            title = "Cortical thickness"
+        elif ext in ("sulc", "sulcus"):
+            array_name = "sulc"
+            title = "Sulcal depth"
+        elif ext in ("curv", "curve"):
+            array_name = "curv"
+            title = "Curvature"
+        else:
+            array_name = "morph"
+            title = ext if ext else "Morph"
+
+
+        points = vtkPoints()
+        points.SetNumberOfPoints(verts.shape[0])
+        for i, (x, y, z) in enumerate(verts.astype(float)):
+            points.SetPoint(i, float(x), float(y), float(z))
+
+        polys = vtkCellArray()
+        for tri in faces.astype(np.int64):
+            polys.InsertNextCell(3)
+            polys.InsertCellPoint(int(tri[0]))
+            polys.InsertCellPoint(int(tri[1]))
+            polys.InsertCellPoint(int(tri[2]))
+
+        poly = vtkPolyData()
+        poly.SetPoints(points)
+        poly.SetPolys(polys)
+
+        # --- 4. attach morph data with dynamic name ---
+        arr = vtkFloatArray()
+        arr.SetName(array_name)
+        arr.SetNumberOfValues(morph.shape[0])
+        for i, v in enumerate(morph.astype(float)):
+            arr.SetValue(i, float(v))
+
+        poly.GetPointData().AddArray(arr)
+        poly.GetPointData().SetActiveScalars(array_name)
+
+        # --- 5. map + scalar bar ---
+        self._clear_scene()
+
+        mapper = vtkPolyDataMapper()
+        mapper.SetInputData(poly)
+        mapper.SetScalarModeToUsePointFieldData()
+        mapper.SelectColorArray(array_name)
+        mapper.SetScalarRange(float(morph.min()), float(morph.max()))
+        mapper.ScalarVisibilityOn()
+
+        actor = vtkActor()
+        actor.SetMapper(mapper)
+        self.renderer.AddActor(actor)
+
+        scalar_bar = vtkScalarBarActor()
+        scalar_bar.SetLookupTable(mapper.GetLookupTable())
+        scalar_bar.SetTitle(title)
+        scalar_bar.GetTitleTextProperty().SetFontSize(12)
+        scalar_bar.GetLabelTextProperty().SetFontSize(8)
+        self.renderer.AddActor2D(scalar_bar)
+
+        self.renderer.ResetCamera()
+        self._mode = "polydata"
+        self.vtkWidget.GetRenderWindow().Render()
+
+
+    def show_freesurfer_morph_both(
+        self,
+        lh_surf_path: str,
+        lh_morph_path: str,
+        rh_surf_path: str,
+        rh_morph_path: str,
+    ):
+        """Show FreeSurfer morph (sulc/thickness/curv/…) for both hemispheres."""
+        # --- load surfaces + morphs ---
+        lh_verts, lh_faces = nib.freesurfer.read_geometry(lh_surf_path)
+        rh_verts, rh_faces = nib.freesurfer.read_geometry(rh_surf_path)
+
+        lh_morph = nib.freesurfer.read_morph_data(lh_morph_path)
+        rh_morph = nib.freesurfer.read_morph_data(rh_morph_path)
+
+        if lh_verts.shape[0] != lh_morph.shape[0]:
+            print("LH: vertex count mismatch surface vs morph data")
+            return
+        if rh_verts.shape[0] != rh_morph.shape[0]:
+            print("RH: vertex count mismatch surface vs morph data")
+            return
+
+        # --- decide label / array name from extension (use LH morph) ---
+        ext = os.path.splitext(os.path.basename(lh_morph_path))[1].lstrip(".").lower()
+        if ext in ("thickness", "thick"):
+            array_name = "thickness"
+            title = "Cortical thickness"
+        elif ext in ("sulc", "sulcus"):
+            array_name = "sulc"
+            title = "Sulcal depth"
+        elif ext in ("curv", "curve"):
+            array_name = "curv"
+            title = "Curvature"
+        else:
+            array_name = "morph"
+            title = ext if ext else "Morph"
+
+        # helper: build vtkPolyData from verts, faces, morph array
+        def build_poly(verts, faces, morph, name: str) -> vtkPolyData:
+            points = vtkPoints()
+            points.SetNumberOfPoints(verts.shape[0])
+            for i, (x, y, z) in enumerate(verts.astype(float)):
+                points.SetPoint(i, float(x), float(y), float(z))
+
+            polys = vtkCellArray()
+            for tri in faces.astype(np.int64):
+                polys.InsertNextCell(3)
+                polys.InsertCellPoint(int(tri[0]))
+                polys.InsertCellPoint(int(tri[1]))
+                polys.InsertCellPoint(int(tri[2]))
+
+            poly = vtkPolyData()
+            poly.SetPoints(points)
+            poly.SetPolys(polys)
+
+            arr = vtkFloatArray()
+            arr.SetName(name)
+            arr.SetNumberOfValues(morph.shape[0])
+            for i, v in enumerate(morph.astype(float)):
+                arr.SetValue(i, float(v))
+
+            poly.GetPointData().AddArray(arr)
+            poly.GetPointData().SetActiveScalars(name)
+            return poly
+
+        poly_lh = build_poly(lh_verts, lh_faces, lh_morph, array_name)
+        poly_rh = build_poly(rh_verts, rh_faces, rh_morph, array_name)
+
+        # --- append both hemis into a single mesh ---
+        app = vtkAppendPolyData()
+        app.AddInputData(poly_lh)
+        app.AddInputData(poly_rh)
+        app.Update()
+        poly_both = app.GetOutput()
+
+        morph_min = float(min(lh_morph.min(), rh_morph.min()))
+        morph_max = float(max(lh_morph.max(), rh_morph.max()))
+
+        # --- clear scene, map, and show ---
+        self._clear_scene()
+
+        mapper = vtkPolyDataMapper()
+        mapper.SetInputData(poly_both)
+        mapper.SetScalarModeToUsePointFieldData()
+        mapper.SelectColorArray(array_name)
+        mapper.SetScalarRange(morph_min, morph_max)
+        mapper.ScalarVisibilityOn()
+
+        actor = vtkActor()
+        actor.SetMapper(mapper)
+        self.renderer.AddActor(actor)
+
+        # scalar bar
+        scalar_bar = vtkScalarBarActor()
+        scalar_bar.SetLookupTable(mapper.GetLookupTable())
+        scalar_bar.SetTitle(title)
+        scalar_bar.GetTitleTextProperty().SetFontSize(12)
+        scalar_bar.GetLabelTextProperty().SetFontSize(8)
+        self.renderer.AddActor2D(scalar_bar)
+
+        self.renderer.ResetCamera()
+        self._mode = "polydata"
+        self.vtkWidget.GetRenderWindow().Render()

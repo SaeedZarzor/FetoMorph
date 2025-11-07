@@ -22,23 +22,24 @@ from vtkmodules.vtkRenderingCore import (
     vtkWindowToImageFilter,
 )
 from vtkmodules.vtkRenderingVolumeOpenGL2 import vtkSmartVolumeMapper
-from vtkmodules.vtkRenderingAnnotation import vtkAxesActor
+from vtkmodules.vtkRenderingAnnotation import vtkAxesActor, vtkScalarBarActor
 from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
 # -------------- VTK IO --------------
 from vtkmodules.vtkIOImage import vtkNIFTIImageReader, vtkPNGWriter, vtkJPEGWriter
 from vtkmodules.vtkIOXML import vtkXMLImageDataReader, vtkXMLPolyDataReader
 from vtkmodules.vtkIOLegacy import vtkGenericDataObjectReader, vtkDataSetReader, vtkPolyDataReader
 from vtkmodules.vtkIOGeometry import vtkSTLReader
+from vtkmodules.vtkFiltersCore import vtkAppendPolyData
 
 # -------------- VTK data models --------------
-from vtkmodules.vtkCommonDataModel import vtkImageData, vtkPolyData
+from vtkmodules.vtkCommonDataModel import vtkImageData, vtkPolyData, vtkCellArray
 
 # -------------- VTK filters & logging --------------
 try:
     from vtkmodules.vtkFiltersGeometry import vtkDataSetSurfaceFilter
 except ImportError:
     from vtkmodules.vtkFiltersGeometry import vtkGeometryFilter as vtkDataSetSurfaceFilter
-from vtkmodules.vtkCommonCore import vtkOutputWindow
+from vtkmodules.vtkCommonCore import vtkOutputWindow, vtkPoints, vtkFloatArray
 
 import vtkmodules.vtkInteractionStyle  # noqa: F401
 import vtkmodules.vtkRenderingOpenGL2  # noqa: F401
@@ -101,7 +102,8 @@ __all__ = [
     "vtkSmartVolumeMapper","vtkNIFTIImageReader","vtkPNGWriter","vtkJPEGWriter", "vtkPolyDataReader",
     "vtkXMLImageDataReader","vtkXMLPolyDataReader","vtkGenericDataObjectReader","vtkDataSetReader",
     "vtkSTLReader","vtkImageData","vtkPolyData","vtkDataSetSurfaceFilter","vtkOutputWindow","vtkAxesActor",
-    "vtkOrientationMarkerWidget",
+    "vtkOrientationMarkerWidget", "vtkPoints", "vtkCellArray", "vtkFloatArray","vtkScalarBarActor",
+    "vtkAppendPolyData",
     # Sci/IO
     "np","cv2","pd","os","sys","math","tempfile","shutil","pathlib","datetime","Optional","Tuple","Path","re", "List",
     "trimesh", "plt",

@@ -39,6 +39,8 @@ def set_icons(ui, assets: Path):
         "act_pial_merge":       "icons/combine.png",
         "act_nitfi2png":        "icons/mask.png",
         "act_pial_to_stl":      "icons/convert.png",
+        "act_view_surfacses":   "icons/Freesurfer.png",
+        "act_view_morph_map":   "icons/morph_map.png",
     }
 
     for attr, rel in icons.items():
