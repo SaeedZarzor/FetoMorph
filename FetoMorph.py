@@ -2605,6 +2605,9 @@ class MainWindow(QMainWindow):
                 slice_file= self.curret_output_3D_slices,
                 slice_value=idx)
             self._update_slice_readout()
+        else:
+            self.vtk_view.set_slice(v)
+            self._update_slice_readout()
 
                 
     def _on_orientation_changed(self, text: str):
@@ -2620,7 +2623,7 @@ class MainWindow(QMainWindow):
             self._update_slice_readout()
                     
     def _on_view_changed(self, text: str, path: Optional[str] = None):
-        if self.current_kind == "nifiti":
+        if self.current_kind == "nifti":
             if text == "3D":
                 self.slice_nav_mode = None
                 rdr = vtkNIFTIImageReader(); rdr.SetFileName(self.current_path if path is None else path); rdr.Update(); img = rdr.GetOutput()
@@ -3229,8 +3232,8 @@ class MainWindow(QMainWindow):
         qimg, self.mm_per_px_bar , self.bar_mm = add_scalebar(qimg, zooms, ax)
         self.image_label.setImage(QPixmap.fromImage(qimg))
         self._show_widget(self.image_label)
-        if hasattr(self, "_update_slice_label"):
-            self._update_slice_label(i, depth, mode="nifti")
+#        if hasattr(self, "_update_slice_label"):
+#            self._update_slice_label(i, depth, mode="nifti")
 
     def ask_processing_options(self):
         dlg = ProcessingOptionsDialog(self)
