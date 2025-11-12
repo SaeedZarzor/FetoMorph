@@ -167,7 +167,7 @@ def compute_vtk_allmarks(
                 
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
-        rows.append([idx, area_perim_mm, inner_perim_mm, outer_perim_mm,
+        rows.append([idx, len(inner_filtered), area_perim_mm, inner_perim_mm, outer_perim_mm,
             len(depth),                         # n_defects
             (min(depth) if depth else None),    # min_depth_mm
             (max(depth) if depth else None),    # max_depth_mm
@@ -212,7 +212,7 @@ def compute_vtk_allmarks(
         rows.append([f"Max_sulci_across_slices_{unit}",(round(max(total_depth),2) if total_depth else None),
         f"Min_sulci_across_slices_{unit}",(round(min(total_depth),2) if total_depth else None)])
         
-        df = pd.DataFrame(rows, columns=["Slice", f"Inner_area_{unit}^2", f"Inner_Perimeter_{unit}", f"Outer_Perimeter_{unit}" ,"Sulci_count",
+        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.",f"Inner_area_{unit}^2", f"Inner_Perimeter_{unit}", f"Outer_Perimeter_{unit}" ,"Sulci_count",
             f"min_depth_{unit}", f"max_dpeth_{unit}", f"mean_depth_{unit}"])
         
         xlsx_path = os.path.join(out_dir, f"Mesh_Allmarks_{Slice_direction}.xlsx")
@@ -361,7 +361,7 @@ def compute_vtk_lGI(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
-        rows.append([idx, GI_slice])
+        rows.append([idx, len(inner_filtered), GI_slice])
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
         plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         sections_list.append(section)
@@ -380,7 +380,7 @@ def compute_vtk_lGI(
     # Save per-slice + total to Excel
     try:
         rows.append(["GI",round(GI_total,2)])
-        df = pd.DataFrame(rows, columns=["Slice", f"Inner_Perimeter_{unit}", f"Outer_Perimeter_{unit}" ,"Sulci_lGI"])
+        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", f"Inner_Perimeter_{unit}", f"Outer_Perimeter_{unit}" ,"Sulci_lGI"])
         
        
         
@@ -677,7 +677,7 @@ def compute_vtk_area(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
-        rows.append([idx, inner_perim_mm])
+        rows.append([idx, len(inner_filtered), inner_perim_mm])
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
         plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         sections_list.append(section)
@@ -697,7 +697,7 @@ def compute_vtk_area(
     try:
         rows.append([f"Surface Area {unit}^2", Area])
 
-        df = pd.DataFrame(rows, columns=["Slice",f"Inner_Perimeter_{unit}"])
+        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", f"Inner_Perimeter_{unit}"])
             
         xlsx_path = os.path.join(out_dir, f"Mesh_Area_{Slice_direction}.xlsx")
         df.to_excel(xlsx_path, index=False)
@@ -841,7 +841,7 @@ def compute_vtk_sulci_depth(
                 
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
-        rows.append([idx,
+        rows.append([idx, len(inner_filtered),
             len(depth),                         # n_defects
             (min(depth) if depth else None),    # min_depth_mm
             (max(depth) if depth else None),    # max_depth_mm

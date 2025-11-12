@@ -82,7 +82,8 @@ def compute_stl_allmarks(
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
     p.camera_position = cam_position
-
+    cube_len = max(1e-6, brain_dim[1] / 10.0)
+    max_dim =  max(brain_dim[0],brain_dim[2])
     for idx, y in enumerate(slice_positions):
         # Cross-section slice
         origin =  mesh.center
@@ -91,8 +92,7 @@ def compute_stl_allmarks(
             continue
 
         # Red cube reference (10% of X extent)
-        cube_len = max(1e-6, brain_dim[1] / 10.0)
-        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
+        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max_dim)
 #        scale_cube = pv.Cube(x_length=cube_len, y_length=0.01, z_length=cube_len)
 #        scale_cube.translate((50, 0, 50), inplace=True)
 
@@ -160,15 +160,14 @@ def compute_stl_allmarks(
                             far = tuple(cnt[f][0])
                             bgr = cv2.line(bgr, start, end, [255, 0, 0], 1)
                             if d>256:
-                                mm_per_fixed = mm_per_px/256
-                                depth_mm = d *mm_per_fixed
-                                if depth_mm < (0.25* brain_dim[1]) and depth_mm > (0.005* brain_dim[1]):
+                                depth_mm = d * mm_per_px/256
+                                if depth_mm < (0.25 * max_dim) and depth_mm > (0.005* max_dim):
                                     bgr = cv2.circle(bgr, far, 2, [255, 255, 0], -1)
                                     depth.append(depth_mm)
                 
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
-        rows.append([idx, area_perim_mm, inner_perim_mm, outer_perim_mm,
+        rows.append([idx, len(inner_filtered), area_perim_mm, inner_perim_mm, outer_perim_mm,
             len(depth),                         # n_defects
             (min(depth) if depth else None),    # min_depth_mm
             (max(depth) if depth else None),    # max_depth_mm
@@ -216,7 +215,7 @@ def compute_stl_allmarks(
         rows.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices_cm",(round(mean_total, 2) if mean_total is not None else None)])
         rows.append(["Max_sulci_across_slices_cm",(round(max(total_depth),2) if total_depth else None),
         "Min_sulci_across_slices_cm",(round(min(total_depth),2) if total_depth else None)])
-        df = pd.DataFrame(rows, columns=["Slice", "Inner_area_mm^2", "Inner_Perimeter_mm", "Outer_Perimeter_mm" ,"Sulci_count",
+        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.","Inner_area_mm^2", "Inner_Perimeter_mm", "Outer_Perimeter_mm" ,"Sulci_count",
             "min_depth_mm", "max_dpeth_mm", "mean_depth_mm"])
     
         
@@ -381,7 +380,7 @@ def compute_stl_lGI(
         sum_inner_mm += inner_perim_mm
         sum_outer_mm += outer_perim_mm
         GI_slice = (inner_perim_mm / outer_perim_mm) if outer_perim_mm > 0 else 0.0
-        rows.append([idx, inner_perim_mm, outer_perim_mm, GI_slice])
+        rows.append([idx, len(inner_filtered), inner_perim_mm, outer_perim_mm, GI_slice])
 
         # Save annotated slice
         slice_path = os.path.join(out_dir_slices, f"slice_{idx:03d}.png")
@@ -581,7 +580,7 @@ def compute_stl_volume(
         area_perim_mm  = area_perim_px * (mm_per_px ** 2)
 
 
-        rows.append([idx, area_perim_mm])
+        rows.append([idx, len(inner_filtered), area_perim_mm])
         # Accumulate
         sum_area     += area_perim_mm
 
@@ -612,7 +611,7 @@ def compute_stl_volume(
     try:
         rows.append(["Volume cm^3",round(brain_volume,2)])
 
-        df = pd.DataFrame(rows, columns=["Slice", "Inner_area_mm^2"])
+        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", "Inner_area_mm^2"])
 
         
         xlsx_path = os.path.join(out_dir, "Mesh_Volume.xlsx")
@@ -701,6 +700,7 @@ def compute_stl_area(
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
     p.camera_position = cam_position
+    cube_len = max(1e-6, brain_dim[1] / 10.0)
 
     for idx, y in enumerate(slice_positions):
         # Cross-section slice
@@ -711,7 +711,6 @@ def compute_stl_area(
             continue
 
         # Red cube reference (10% of X extent)
-        cube_len = max(1e-6, brain_dim[1] / 10.0)
         scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
         plane = pv.Plane(center=(0, float(y), 0),
                          direction=(0, 1, 0),  # plane normal
@@ -752,7 +751,7 @@ def compute_stl_area(
         inner_perim_mm = inner_perim_px * mm_per_px
 
 
-        rows.append([idx, inner_perim_mm])
+        rows.append([idx, len(inner_filtered), inner_perim_mm])
         # Accumulate
         sum_inner_mm += inner_perim_mm
 
@@ -783,7 +782,7 @@ def compute_stl_area(
     # Save per-slice + total to Excel
     try:
         rows.append(["Surface Area cm^2",round(Area,2)])
-        df = pd.DataFrame(rows, columns=["Slice" "Inner_Perimeter_mm"])
+        df = pd.DataFrame(rows, columns=["Slice","Count_of_cont.", "Inner_Perimeter_mm"])
             
         xlsx_path = os.path.join(out_dir, "Mesh_Area.xlsx")
         df.to_excel(xlsx_path, index=False)
@@ -872,7 +871,8 @@ def compute_stl_sulci_depth(
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
     p.camera_position = cam_position
-
+    cube_len = max(1e-6, brain_dim[1] / 10.0)
+    max_dim =  max(brain_dim[0],brain_dim[2])
     for idx, y in enumerate(slice_positions):
         # Cross-section slice
         origin =  mesh.center
@@ -881,8 +881,7 @@ def compute_stl_sulci_depth(
             continue
             
         # Red cube reference (10% of X extent)
-        cube_len = max(1e-6, brain_dim[1] / 10.0)
-        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
+        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max_dim)
         plane = pv.Plane(center=(0, float(y), 0),
                          direction=(0, 1, 0),  # plane normal
                          i_size=brain_dim[0]*1.5, j_size=brain_dim[2]*1.5,  # side lengths
@@ -932,13 +931,13 @@ def compute_stl_sulci_depth(
                             if d>256:
                                 mm_per_fixed = mm_per_px/256
                                 depth_mm = d *mm_per_fixed
-                                if depth_mm < (0.25* brain_dim[1]) and depth_mm > (0.005* brain_dim[1]):
+                                if depth_mm < (0.25* max_dim) and depth_mm > (0.005* max_dim):
                                     bgr = cv2.circle(bgr, far, 2, [255, 255, 0], -1)
                                     depth.append(depth_mm)
                 
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
-        rows.append([idx,
+        rows.append([idx,len(inner_filtered),
             len(depth),                         # n_defects
             (min(depth) if depth else None),    # min_depth_mm
             (max(depth) if depth else None),    # max_depth_mm
