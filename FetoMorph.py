@@ -723,7 +723,7 @@ class MainWindow(QMainWindow):
         psize = vals.pop("pixel_size", None)
         punit = vals.pop("pixel_size_units", None)
         ksize = vals.pop("kernel_size", None)
-        thicsl = vals.pop("slice_thickness", None)
+        thicsl = vals.pop("slice_thickness", None) 
         direction = vals.pop("direction", None)
         uni = vals.pop("unite", None)
         row = self._ensure_metric_row(
@@ -1129,7 +1129,7 @@ class MainWindow(QMainWindow):
 
                 
                 print(f"[STL hallmarks]:")
-                print("STL mesh Volume Result = {volume:.2f} cm^3.")
+                print(f"STL mesh Volume Result = {volume:.2f} cm^3.")
                 print(f"STL mesh Outer Surface Area Result = {area:.2f} cm^2.")
                 print(f"STL mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
                 print(f"The Maximum Grooves Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} cm.")
@@ -1260,6 +1260,7 @@ class MainWindow(QMainWindow):
                 self._record_metric_for(
                     self.current_path,
                     source = source_label,
+                    slice_thickness= self.slice_thickness,
                     dimensions = dims,
                     unite = "cm",
                     volume=volume)
@@ -1267,7 +1268,7 @@ class MainWindow(QMainWindow):
                 self.two_mode_view(out_dir, saved_pngs, valid_slices)
 
                 
-                print("STL mesh Volume Result = {volume:.2f} cm^3.")
+                print(f"STL mesh Volume Result = {volume:.2f} cm^3.")
 
 
                 dt = time.time() - t0
@@ -1428,11 +1429,11 @@ class MainWindow(QMainWindow):
                 # Ensure File/Process actions stay enabled
                 self._set_current("image", self.current_path)
                 self._record_metric_for(self.current_path, annotation=label_text,
-                pixel_size_units = f"{self.units_length}/pixel",
-                unite = self.units_length,
-                pixel_size = self.pixel_size,
-                kernel_size = self.kernel_size,
-                perimeter=perimeter, perimeter_convex=perimeter_convex, lgi=lGI)
+                    pixel_size_units = f"{self.units_length}/pixel",
+                    unite = self.units_length,
+                    pixel_size = self.pixel_size,
+                    kernel_size = self.kernel_size,
+                    perimeter=perimeter, perimeter_convex=perimeter_convex, lgi=lGI)
 
             except Exception as ex:
                 print(f"[lGI] ERROR: {ex}")
@@ -1738,7 +1739,7 @@ class MainWindow(QMainWindow):
                     return
 
                 # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path, source = source_label,
+                self._record_metric_for(self.current_path, source = source_label, slice_thickness= self.slice_thickness,
                     dimensions = dims,unite ="mm", sulci_depth = depth)
 
                 self.two_mode_view(out_dir, saved_pngs, valid_slices)
@@ -1914,6 +1915,7 @@ class MainWindow(QMainWindow):
                 self._record_metric_for(
                     self.current_path,
                     source = source_label,
+                    slice_thickness= self.slice_thickness,
                     dimensions = dims,
                     unite = "cm",
                     area=area)
@@ -1921,7 +1923,7 @@ class MainWindow(QMainWindow):
                 self.two_mode_view(out_dir, saved_pngs, valid_slices)
 
                 
-                print("STL mesh Area Result = {area:.2f} cm^2.")
+                print(f"STL mesh Area Result = {area:.2f} cm^2.")
 
 
                 dt = time.time() - t0
