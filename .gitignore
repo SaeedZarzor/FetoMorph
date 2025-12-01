@@ -1,0 +1,6 @@
+*.log
+venv/
+
+assets/not_used/*.png
+
+
