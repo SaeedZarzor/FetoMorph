@@ -1,6 +1,21 @@
 *.log
+
+# Virtual environments
 venv/
+.venv/
 
+# Platform cruft
+.DS_Store
+
+# Python cache/bytecode
+__pycache__/
+*.py[cod]
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Project assets
 assets/not_used/*.png
-
 
