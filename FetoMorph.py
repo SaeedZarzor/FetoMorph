@@ -9,6 +9,8 @@ from functions.Nifti2image import nifti_slice_to_image
 from functions.curvature import compute_curvature_profile, save_curvature_plot
 from functions.hausdorff import calculate_hausdorff_distance, convert_image
 from functions.nii_extractor import nifti_extractor
+from functions.optimization import optimization
+from helpers.Read_Excel import conver_excel
 from helpers.Helpers import get_nifti_present_labels, add_scalebar, get_max_slice_thinckness
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.Contour_threshold import ContourThresholdDialog
@@ -16,6 +18,7 @@ from widgets.Scalebar_set_scale import ScalebarSetScaleDialog
 from widgets.Unit_scale import UnitScaleDialog
 from widgets.VTK_Viewer import VTKViewer
 from widgets.Kernel_size import KernelSizeDialog
+from widgets.optimization_widgets import OptimizationOptionsDialog
 from widgets.Slice_thickness import SilceThicknessDialog
 from widgets.OptionsDialog import ProcessingOptionsDialog
 from widgets.Recent_paths import RecentPaths, populate_recent_menu
@@ -122,7 +125,13 @@ class MainWindow(QMainWindow):
         self.physical_dim: tuple[int, int, int] = (0, 0, 0)
         self.slice_direction: Literal["X", "Y", "Z"] = "Y"
         
-
+        # Params for optimization
+        self.optimization_objectives: list[str] = []
+        self.optimization_constraints: dict[str, float] = {}
+        self.optimization_algorithms: str = "NSGA-III"
+        self.optimization_n_gen: int = 200
+        self.optimization_objective_directions: dict[str, str] = {}
+            
         # Slice navigation mode/state
         self.slice_nav_mode = None           # None | "nifti" | "png"
         self.slice_nav_items = []            # list[str] when mode=="png" (PNG paths)
@@ -173,7 +182,7 @@ class MainWindow(QMainWindow):
         self.recent = RecentPaths("YourOrg", "YourApp")
         self.menu_recent = file_menu.addMenu("Recent")
         populate_recent_menu(self.menu_recent, self.recent, self.open_path)
-        self.act_show_results = QAction("Show Results…", self); self.act_show_results.triggered.connect(lambda:self.metricsDock.show()); file_menu.addAction(self.act_show_results)
+        self.act_show_results = QAction("Show Results…", self); self.act_show_results.triggered.connect(self.show_results_dock); file_menu.addAction(self.act_show_results)
         self.act_save = QAction("Save View As…", self); self.act_save.setShortcut(QKeySequence("Ctrl+V")); self.act_save.triggered.connect(self.save_view); file_menu.addAction(self.act_save)
         self.act_save_data = QAction("Save Data As…", self); self.act_save_data.setShortcut(QKeySequence.SaveAs); self.act_save_data.triggered.connect(self.save_data_as); file_menu.addAction(self.act_save_data)
         self.act_export_metrics = QAction("Export Metrics to Excel…", self); self.act_export_metrics.setShortcut(QKeySequence("Ctrl+E")); self.act_export_metrics.triggered.connect(self.export_metrics_excel); file_menu.addAction(self.act_export_metrics)
@@ -250,7 +259,6 @@ class MainWindow(QMainWindow):
             self.act_meas_perimeter,
             self.act_meas_lgi,
             self.act_meas_sulci,
-            self.act_optimization,
         ]:
             action.setEnabled(False)
 
@@ -684,7 +692,7 @@ class MainWindow(QMainWindow):
                 "Perimeter_convex": None,
                 "SulciCount": None,
                 "MinDepth": None,
-                "MaxDpeth": None,
+                "MaxDepth": None,
                 "MeanDepth": None,
                 "LGI": None,
             }
@@ -743,11 +751,11 @@ class MainWindow(QMainWindow):
             if isinstance(sd, (list, tuple)):
                 n = len(sd)
                 if n == 0:
-                    row["SulciCount"] = row["MinDepth"] = row["MaxDpeth"] = row["MeanDepth"]= None
+                    row["SulciCount"] = row["MinDepth"] = row["MaxDepth"] = row["MeanDepth"]= None
                 else:
                     row["SulciCount"] = n
                     row["MinDepth"] = min(sd)
-                    row["MaxDpeth"] = max(sd)
+                    row["MaxDepth"] = max(sd)
                     row["MeanDepth"] = sum(sd)/n
                     
             else:
@@ -883,7 +891,7 @@ class MainWindow(QMainWindow):
             "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit", "SliceThickness",
             "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciCount", "MinDepth", "MaxDpeth","MeanDepth",
+            "SulciCount", "MinDepth", "MaxDepth","MeanDepth",
             "LGI",
         ]
         
@@ -923,7 +931,7 @@ class MainWindow(QMainWindow):
             "PixelSize", "KernelSize", "SliceThickness",
             "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciCount", "MinDepth", "MaxDpeth","MeanDepth",
+            "SulciCount", "MinDepth", "MaxDepth","MeanDepth",
             "LGI",
         ]
         has_any_metric = df[real_metric_cols].notna().any(axis=1)
@@ -1630,11 +1638,15 @@ class MainWindow(QMainWindow):
     
     def on_measure_sulci_depth(self):
         """Process → Measures → All hallmarks for 2D images: compute and show annotated result WITHOUT saving."""
+        def _depth_summary(vals, unit: str) -> str:
+            if not isinstance(vals, (list, tuple)) or len(vals) == 0:
+                return f"No sulci depth detected ({unit})."
+            return ", ".join(f"{float(v):.2f}" for v in vals[:3]) + f" {unit}"
+
         if not self.current_path or not os.path.isfile(self.current_path):
             print("[Sulci depth] No file is loaded."); return
             
         if self.current_kind == "image":
-
             try:
                 while True:
                     if not self.units_length or self.current_path not in self.image_scales:
@@ -1658,8 +1670,9 @@ class MainWindow(QMainWindow):
                     image_path,
                     pixel_size = px_size,
                     cnt_threshold=self.cnt_threshold,
+                    unit = u,
                 )
-                print(f"Sulci Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f}. {u}")
+                print(f"Sulci Depth = {_depth_summary(depth, u)}")
                 
                 label_text = self.get_label_for_cropped_path(image_path)
                 if label_text:
@@ -1712,7 +1725,7 @@ class MainWindow(QMainWindow):
                 mid = len(saved_pngs) // 2
                 self.on_slice_slider_changed(mid)
                 
-                print(f"[NIfTI Sulci depth] The max Brain Sulci depth across slices = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f}. mm")
+                print(f"[NIfTI Sulci depth] The max Brain Sulci depth across slices = {_depth_summary(depth, 'mm')}")
                 dt = time.time() - t0
                 print(f"[NIfTI Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
@@ -1744,7 +1757,7 @@ class MainWindow(QMainWindow):
 
                 self.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
-                print(f"[STL Sulci depth] The max Brain Sulci depth across slices = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f}. mm")
+                print(f"[STL Sulci depth] The max Brain Sulci depth across slices = {_depth_summary(depth, 'mm')}")
                 dt = time.time() - t0
                 print(f"[STL Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
@@ -1781,13 +1794,12 @@ class MainWindow(QMainWindow):
                     dimensions = self.physical_dim,
                     slice_thickness= self.slice_thickness,
                     sulci_depth = depth)
-                    
-                
+                                    
                 self.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
-                if len(depth)>=3:
+                if isinstance(depth, (list, tuple)) and len(depth) > 0:
                     print("[VTK Sulci depth]")
-                    print(f"The Maximum Grooves Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} {u}.")
+                    print(f"The Maximum Grooves Depth = {_depth_summary(depth, u)}")
 
                 dt = time.time() - t0
                 print(f"[VTK Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
@@ -2000,11 +2012,19 @@ class MainWindow(QMainWindow):
             return
 
         self.last_dir = dir_path
+        first_pm = QPixmap(imgs[0])
+        if first_pm.isNull():
+            QMessageBox.critical(
+                self,
+                "Process Batch Failed",
+                f"Could not open image file:\n{imgs[0]}",
+            )
+            return
         self.load_image(imgs[0])  # show first image
 
         self._enter_adjustment_mode()
-        self.statusBar().showMessage("Adjust now. Press Shift+Alt+E to continue.")
-        print("[Process Batch] Adjust now. Press Shift+Alt+E to continue.")
+        self.statusBar().showMessage("Adjust the image now and then press Shift+Alt+E to continue.")
+        print("[Process Batch] Adjust the image now and then press Shift+Alt+E to continue.")
         self.wait_for_resume()   # blocks here; resumes after key press
         self.statusBar().clearMessage()
         self._exit_adjustment_mode()
@@ -2037,6 +2057,11 @@ class MainWindow(QMainWindow):
 
 
         try:
+            # Fail fast: stop the whole batch if any image cannot be opened.
+            for img_path in imgs:
+                if cv2.imread(img_path) is None:
+                    raise ValueError(f"Could not read image: {img_path}")
+
             valid_slices, saved_pngs = process_on_images_batch(dir_path, out_dir, pixel_size=px_size, kernel_size= self.kernel_size,
                 cnt_threshold = self.cnt_threshold, unit = u)
                 
@@ -2086,7 +2111,137 @@ class MainWindow(QMainWindow):
         else:
             print("[Curvature] Unsupported current kind. Open an image first.")
 
-    def on_optimization(self): pass
+    def on_optimization(self): 
+        # TEMP output
+        uid = uuid.uuid4().hex[:8]
+        out_dir = os.path.join(self.temp_dir, f"Optimization_{uid}")
+        os.makedirs(out_dir, exist_ok=True)
+        self.current_output_dir = out_dir
+        print(f"[Optimization] TEMP output: {out_dir}")
+        
+        start = self.last_dir if os.path.isdir(self.last_dir) else ""
+        while True:
+            excel_files, _ = QFileDialog.getOpenFileNames(self, "Select one or multiple Excel files",
+                    start, "Excel Files (*.xlsx *.xls)")
+            if not excel_files:
+                reply = QMessageBox.question(self, "No files selected",
+                            "No Excel files were selected. Would you like to try again?",
+                            QMessageBox.Retry | QMessageBox.Cancel)
+                if reply == QMessageBox.Cancel:
+                    return
+                continue
+            break
+
+        try:
+            df1, max_sulci, max_cell_density = conver_excel(excel_files)
+            if df1 is None or df1.empty:
+                QMessageBox.warning(self, "Optimization Failed", "No valid rows were found in the selected Excel files.")
+                return
+
+            self.last_dir = os.path.dirname(excel_files[0]) or self.last_dir
+            opt_dialog = OptimizationOptionsDialog(
+                self,
+                max_sulci_count=max_sulci,
+                max_cell_density=max_cell_density,
+            )
+            if not opt_dialog.exec():
+                return
+
+            self.optimization_objectives = opt_dialog.get_selected_objectives()
+            self.optimization_objective_directions = opt_dialog.get_objective_directions()
+            self.optimization_constraints = opt_dialog.get_constraints()
+            self.optimization_algorithms = opt_dialog.get_selected_algorithms()
+            self.optimization_n_gen = opt_dialog.get_termination_criterion()
+
+            if max_sulci is not None:
+                print(f"[Optimization] Max SulciCount in selected files: {max_sulci}")
+            if max_cell_density is not None:
+                print(f"[Optimization] Max CellDensity in selected files: {max_cell_density}")
+
+            results, saved_pngs, n_optimal_results = optimization(
+                self,
+                df1,
+                out_dir,
+                objectives=self.optimization_objectives,
+                objective_directions=self.optimization_objective_directions,
+                constraints=self.optimization_constraints,
+                algorithms=self.optimization_algorithms,
+                n_gen=self.optimization_n_gen,
+            )
+            if results is not None:
+                print(f"[Optimization] Optimization completed. Results saved in {out_dir}.")
+                print(f"[Optimization] Number of optimal results: {n_optimal_results}")
+                print("Use File → Save Data As… to copy outputs you want to keep.")
+
+                if isinstance(results, pd.DataFrame) and not results.empty:
+                    obj_to_column = {
+                        "perimeter_rate": "LGI",
+                        "cell_density": "CellDensity",
+                        "min_d_value": "MinDepth",
+                        "max_min_d_value": "MinDepth",
+                        "mean_d_value": "MeanDepth",
+                        "max_d_value": "MaxDepth",
+                        "area": "area",
+                    }
+                    objective_cols = []
+                    for obj in self.optimization_objectives:
+                        col = obj_to_column.get(obj, obj)
+                        if col in results.columns and col not in objective_cols:
+                            objective_cols.append(col)
+                    cols_to_print = [c for c in ["File"] + objective_cols if c in results.columns]
+                    if cols_to_print:
+                        print("[Optimization] Pareto results:")
+                        print(results[cols_to_print].to_string(index=False))
+
+                    source_paths_seen = []
+                    for idx, r in results.reset_index(drop=True).iterrows():
+                        metric_path = r.get("__source_excel_path")
+                        if not metric_path or not isinstance(metric_path, str):
+                            metric_path = excel_files[0]
+                        source_paths_seen.append(metric_path)
+                        self._record_metric_for(
+                            path=metric_path,
+                            annotation=f"pareto_optimal_{idx + 1}",
+                            source=metric_path,
+                            area=r.get("area"),
+                            volume=r.get("Volume"),
+                            perimeter=r.get("Perimeter"),
+                            perimeter_convex=r.get("Perimeter_convex"),
+                            lgi=r.get("LGI"),
+                            File=r.get("File", f"index_{idx}"),
+                            SulciCount=r.get("SulciCount"),
+                            MinDepth=r.get("MinDepth"),
+                            MaxDepth=r.get("MaxDepth"),
+                            MeanDepth=r.get("MeanDepth"),
+                        )
+                    if source_paths_seen:
+                        self._set_current("image", source_paths_seen[0])
+                    self._metrics_rebuild_for_current()
+            else:
+                print(f"[Optimization] Optimization failed or was canceled.")
+                QMessageBox.warning(self, "Optimization Failed", "Optimization failed or was canceled.")
+
+            if len(saved_pngs) == 1:
+                img_array = cv2.imread(saved_pngs[0])
+                pm = self._np_bgr_to_qpixmap(img_array)
+                self.image_label.setImage(pm)
+                self._show_widget(self.image_label)
+                self._active_view = "image"
+
+            elif saved_pngs and len(saved_pngs) > 1:
+                # Provide a default list of indices if valid_slices is not available
+                indices = list(range(len(saved_pngs)))
+                self.enable_png_navigation(saved_pngs, slice_indices=indices)
+                mid = len(saved_pngs) // 2
+                self.on_slice_slider_changed(mid)
+
+
+    
+        except Exception as ex:
+            print(f"[Optimization] ERROR: {ex}")
+            QMessageBox.critical(self, "Optimization Failed", f"{type(ex).__name__}: {ex}")
+            return  
+        
 
     def on_measure_hausdorff(self):
         """Pick first & second images, convert and save in TEMP, compute hausdorff distance and show the plot."""
@@ -2720,6 +2875,8 @@ class MainWindow(QMainWindow):
         self.act_save.setEnabled(has_file)
         self.act_close.setEnabled(has_file)
         
+
+
         if not self.current_kind == "Freesurfer":
             for action in [
                 self.act_save_data,
@@ -2737,7 +2894,6 @@ class MainWindow(QMainWindow):
                 self.act_meas_perimeter,
                 self.act_meas_lgi,
                 self.act_meas_sulci,
-                self.act_optimization,
                 self.act_slice_thickness,
             ]:
                 action.setEnabled(has_file)
@@ -2799,7 +2955,6 @@ class MainWindow(QMainWindow):
             self.act_meas_lgi.setEnabled(True)
             self.act_meas_volumes.setEnabled(False)
             self.act_meas_sulci.setEnabled(True)
-            self.act_optimization.setEnabled(True)
             self.act_meas_allmarks.setEnabled(True)
             self.act_annotate_square.setEnabled(True)
             self.act_nitfi2png.setEnabled(False)
@@ -3339,9 +3494,14 @@ class MainWindow(QMainWindow):
             "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit", "SliceThickness",
             "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciCount", "MinDepth", "MaxDpeth","MeanDepth",
+            "SulciCount", "MinDepth", "MaxDepth","MeanDepth",
             "LGI"
         ]
+
+    def show_results_dock(self):
+        self._metrics_rebuild_for_current()
+        self.metricsDock.show()
+        self.metricsDock.raise_()
 
     def _metrics_rebuild_for_current(self):
         """Rebuild the table for the currently open file from self.metrics."""
