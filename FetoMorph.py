@@ -2875,8 +2875,6 @@ class MainWindow(QMainWindow):
         self.act_save.setEnabled(has_file)
         self.act_close.setEnabled(has_file)
         
-
-
         if not self.current_kind == "Freesurfer":
             for action in [
                 self.act_save_data,
@@ -2894,6 +2892,7 @@ class MainWindow(QMainWindow):
                 self.act_meas_perimeter,
                 self.act_meas_lgi,
                 self.act_meas_sulci,
+                self.act_optimization,
                 self.act_slice_thickness,
             ]:
                 action.setEnabled(has_file)
@@ -2955,6 +2954,7 @@ class MainWindow(QMainWindow):
             self.act_meas_lgi.setEnabled(True)
             self.act_meas_volumes.setEnabled(False)
             self.act_meas_sulci.setEnabled(True)
+            self.act_optimization.setEnabled(True)
             self.act_meas_allmarks.setEnabled(True)
             self.act_annotate_square.setEnabled(True)
             self.act_nitfi2png.setEnabled(False)
@@ -2974,6 +2974,7 @@ class MainWindow(QMainWindow):
         
         else:
             self.act_set_physical_dim.setEnabled(False)
+            
             
 
     def enable_png_navigation(self, png_paths: list[str], slice_indices: list[int] | None = None, start_index: int | None = None):
