@@ -2215,7 +2215,7 @@ class MainWindow(QMainWindow):
                             MeanDepth=r.get("MeanDepth"),
                         )
                     if source_paths_seen:
-                        self._set_current("image", source_paths_seen[0])
+                        self._set_current("Optimization", source_paths_seen[0])
                     self._metrics_rebuild_for_current()
             else:
                 print(f"[Optimization] Optimization failed or was canceled.")
@@ -2874,6 +2874,31 @@ class MainWindow(QMainWindow):
         
         self.act_save.setEnabled(has_file)
         self.act_close.setEnabled(has_file)
+
+        if self.current_kind == "Optimization":
+            allowed_actions = {
+                # Import actions
+                self.act_imp_img,
+                self.act_imp_vtk,
+                self.act_imp_stl,
+                self.act_imp_nii,
+                # Export actions
+                self.act_save,
+                self.act_save_data,
+                self.act_export_metrics,
+                # App-level
+                self.act_close,
+                self.act_quit,
+                self.act_show_results,
+            }
+            for action in self.all_actions:
+                action.setEnabled(action in allowed_actions)
+            self.menu_recent.setEnabled(False)
+            self.reset_png_navigation()
+            self._update_process_actions()
+            return
+
+        self.menu_recent.setEnabled(True)
         
         if not self.current_kind == "Freesurfer":
             for action in [
