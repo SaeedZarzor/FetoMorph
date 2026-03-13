@@ -3,6 +3,7 @@ from deps import *
 import pyvista as pv
 from helpers.Helpers import compute_kernel_convex, contours_exclude, clac_scale, get_red_rect_offset, make_scale_cube
 from helpers.check_mesh import check_brain
+from constants import BINARY_THRESHOLD_DEFAULT, RED_CHANNEL_MIN, GREEN_CHANNEL_MAX, DEFECT_FIXED_POINT
 
 # ----------------- main API -----------------
 def compute_stl_allmarks(
@@ -50,8 +51,8 @@ def compute_stl_allmarks(
     out_dir_slices = os.path.join(out_dir, "stl_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
     
-    out_dir_orgin = os.path.join(out_dir, "stl_orgin")
-    os.makedirs(out_dir_orgin, exist_ok=True)
+    out_dir_origin = os.path.join(out_dir, "stl_orgin")
+    os.makedirs(out_dir_origin, exist_ok=True)
     
     print(f"[STL All Hallmarks] Temp output dir: {out_dir}")
 
@@ -107,7 +108,7 @@ def compute_stl_allmarks(
         p.view_xz()  # no .show()!
 
         # Screenshot (array for processing, file for debugging)
-        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_orgin, f"image_{idx:03d}.png"))
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
         mm_per_px = clac_scale(img_rgb, cube_len)
@@ -116,10 +117,10 @@ def compute_stl_allmarks(
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > 150) & (img_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
+        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
         # Binary for contours
-        _, bw = cv2.threshold(gray, 200, 255, 1)
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -159,8 +160,8 @@ def compute_stl_allmarks(
                             end = tuple(cnt[e][0])
                             far = tuple(cnt[f][0])
                             bgr = cv2.line(bgr, start, end, [255, 0, 0], 1)
-                            if d>256:
-                                depth_mm = d * mm_per_px/256
+                            if d > DEFECT_FIXED_POINT:
+                                depth_mm = d * mm_per_px / DEFECT_FIXED_POINT
                                 if depth_mm < (0.25 * max_dim) and depth_mm > (0.005* max_dim):
                                     bgr = cv2.circle(bgr, far, 2, [255, 255, 0], -1)
                                     depth.append(depth_mm)
@@ -216,7 +217,7 @@ def compute_stl_allmarks(
         rows.append(["Max_sulci_across_slices_cm",(round(max(total_depth),2) if total_depth else None),
         "Min_sulci_across_slices_cm",(round(min(total_depth),2) if total_depth else None)])
         df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.","Inner_area_mm^2", "Inner_Perimeter_mm", "Outer_Perimeter_mm" ,"Sulci_count",
-            "min_depth_mm", "max_dpeth_mm", "mean_depth_mm"])
+            "min_depth_mm", "max_depth_mm", "mean_depth_mm"])
     
         
         xlsx_path = os.path.join(out_dir, "Mesh_Allmarks.xlsx")
@@ -286,8 +287,8 @@ def compute_stl_lGI(
     out_dir_slices = os.path.join(out_dir, "stl_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
     
-    out_dir_orgin = os.path.join(out_dir, "stl_orgin")
-    os.makedirs(out_dir_orgin, exist_ok=True)
+    out_dir_origin = os.path.join(out_dir, "stl_orgin")
+    os.makedirs(out_dir_origin, exist_ok=True)
 
     print(f"[STL lGI] Temp output dir: {out_dir}")
 
@@ -340,7 +341,7 @@ def compute_stl_lGI(
         p.view_xz()  # no .show()!
 
         # Screenshot (array for processing, file for debugging)
-        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_orgin, f"image_{idx:03d}.png"))
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
         mm_per_px = clac_scale(img_rgb, cube_len)
@@ -349,10 +350,10 @@ def compute_stl_lGI(
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > 150) & (img_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
+        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
         # Binary for contours
-        _, bw = cv2.threshold(gray, 200, 255, 1)
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -502,8 +503,8 @@ def compute_stl_volume(
     out_dir_slices = os.path.join(out_dir, "stl_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
     
-    out_dir_orgin = os.path.join(out_dir, "stl_orgin")
-    os.makedirs(out_dir_orgin, exist_ok=True)
+    out_dir_origin = os.path.join(out_dir, "stl_orgin")
+    os.makedirs(out_dir_origin, exist_ok=True)
     
     print(f"[STL Volume] Temp output dir: {out_dir}")
 
@@ -553,7 +554,7 @@ def compute_stl_volume(
         p.view_xz()  # no .show()!
 
         # Screenshot (array for processing, file for debugging)
-        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_orgin, f"image_{idx:03d}.png"))
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
         mm_per_px = clac_scale(img_rgb, cube_len)
@@ -562,10 +563,10 @@ def compute_stl_volume(
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > 150) & (img_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
+        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
         # Binary for contours
-        _, bw = cv2.threshold(gray, 200, 255, 1)
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -670,8 +671,8 @@ def compute_stl_area(
     out_dir_slices = os.path.join(out_dir, "stl_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
     
-    out_dir_orgin = os.path.join(out_dir, "stl_orgin")
-    os.makedirs(out_dir_orgin, exist_ok=True)
+    out_dir_origin = os.path.join(out_dir, "stl_orgin")
+    os.makedirs(out_dir_origin, exist_ok=True)
     
     print(f"[STL Area] Temp output dir: {out_dir}")
 
@@ -723,7 +724,7 @@ def compute_stl_area(
         p.view_xz()  # no .show()!
 
         # Screenshot (array for processing, file for debugging)
-        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_orgin, f"image_{idx:03d}.png"))
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
         mm_per_px = clac_scale(img_rgb, cube_len)
@@ -732,10 +733,10 @@ def compute_stl_area(
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > 150) & (img_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
+        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
         # Binary for contours
-        _, bw = cv2.threshold(gray, 200, 255, 1)
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -814,7 +815,7 @@ def compute_stl_sulci_depth(
             return dic["label"],[],[],[],[]
         
     mesh = pv.read(str(file_path))
-    print(f"[STL All Hallmarks] Loaded mesh: {mesh}")
+    print(f"[STL Sulci depth] Loaded mesh: {mesh}")
 
     # --- Bounds / dims (mm)
     x_min, x_max, y_min, y_max, z_min, z_max = mesh.bounds
@@ -841,10 +842,10 @@ def compute_stl_sulci_depth(
     out_dir_slices = os.path.join(out_dir, "stl_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
     
-    out_dir_orgin = os.path.join(out_dir, "stl_orgin")
-    os.makedirs(out_dir_orgin, exist_ok=True)
+    out_dir_origin = os.path.join(out_dir, "stl_orgin")
+    os.makedirs(out_dir_origin, exist_ok=True)
     
-    print(f"[STL All Hallmarks] Temp output dir: {out_dir}")
+    print(f"[STL Sulci depth] Temp output dir: {out_dir}")
 
     # --- Screenshot resolution via target mm/px spacing
     pixel_spacing = 0.1  # mm per pixel
@@ -893,7 +894,7 @@ def compute_stl_sulci_depth(
         p.view_xz()  # no .show()!
 
         # Screenshot (array for processing, file for debugging)
-        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_orgin, f"image_{idx:03d}.png"))
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
         mm_per_px = clac_scale(img_rgb, cube_len)
@@ -902,10 +903,10 @@ def compute_stl_sulci_depth(
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > 150) & (img_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
+        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
         # Binary for contours
-        _, bw = cv2.threshold(gray, 200, 255, 1)
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -928,8 +929,8 @@ def compute_stl_sulci_depth(
                             end = tuple(cnt[e][0])
                             far = tuple(cnt[f][0])
                             bgr = cv2.line(bgr, start, end, [255, 0, 0], 1)
-                            if d>256:
-                                mm_per_fixed = mm_per_px/256
+                            if d > DEFECT_FIXED_POINT:
+                                mm_per_fixed = mm_per_px / DEFECT_FIXED_POINT
                                 depth_mm = d *mm_per_fixed
                                 if depth_mm < (0.25* max_dim) and depth_mm > (0.005* max_dim):
                                     bgr = cv2.circle(bgr, far, 2, [255, 255, 0], -1)
@@ -972,7 +973,7 @@ def compute_stl_sulci_depth(
         rows.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices_mm",(round(mean_total, 2) if mean_total is not None else None)])
         rows.append(["Max_sulci_across_slices_mm",(round(max(total_depth),2) if total_depth else None),
         "Min_sulci_across_slices_mm",(round(min(total_depth),2) if total_depth else None)])
-        df = pd.DataFrame(rows, columns=["Slice","Sulci_count", "min_depth_mm", "max_dpeth_mm", "mean_depth_mm"])
+        df = pd.DataFrame(rows, columns=["Slice","Sulci_count", "min_depth_mm", "max_depth_mm", "mean_depth_mm"])
     
         
         xlsx_path = os.path.join(out_dir, "Mesh_Sulci_depth.xlsx")

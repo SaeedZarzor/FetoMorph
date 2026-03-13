@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from typing import Tuple, Union
 from helpers.Helpers import text_thickness, compute_kernel_convex
+from constants import BINARY_THRESHOLD_DEFAULT, DEFECT_FIXED_POINT
 
 
 def measure_image_allmarks(
@@ -24,7 +25,7 @@ def measure_image_allmarks(
 
     print(file_path + " is processing")
     im_bw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    (thresh, im_bw) = cv2.threshold(im_bw, 200, 255, 1)
+    (thresh, im_bw) = cv2.threshold(im_bw, BINARY_THRESHOLD_DEFAULT, 255, 1)
     contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > cnt_threshold]
@@ -48,54 +49,13 @@ def measure_image_allmarks(
     else:
         x1, y1 = 15, 40
 
-#    text_area = f"Area: {area:.2f} {unit}^2"
-#    (tw, th), baseline = cv2.getTextSize(text_area, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-#    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
-#    
-#    inside = (0 <= x1 <= max(0, W - bw)) and (0 <= y1 <= max(0, H - bh))
-#    x1 = min(max(0, x1), max(0, W - bw))
-#    y1 = min(max(0, y1), max(0, H - bh))
-    
-#    cv2.putText(
-#        annotated,
-#        text_area,
-#        (int(x1+ margin), int(y1 + margin + th)),
-#        cv2.FONT_HERSHEY_SIMPLEX,
-#        font_scale,
-#        (255, 0, 100),
-#        thickness,
-#        cv2.LINE_AA,
-#    )
-    
-#    text_Perimeter= f"Perimeter_unite:{perimeter:.2f} {unit}"
-#    (tw, th), baseline = cv2.getTextSize(text_Perimeter, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-#    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
-#    
-#    inside = (0 <= x1 <= max(0, W - bw)) and (0 <= y1 <= max(0, H - bh))
-#    x1 = min(max(0, x1), max(0, W - bw))
-#    y1 = min(max(0, y1), max(0, H - bh))
-#    
-#    cv2.putText(
-#        annotated,
-#        f"Perimeter_unite:{perimeter:.2f} {unit}",
-#        (int(x1+ margin), int(y1 + margin + th - 30)),
-#        cv2.FONT_HERSHEY_SIMPLEX,
-#        font_scale,
-#        (255, 0, 200),
-#        thickness,
-#        cv2.LINE_AA,
-#
-#    )
-
-        
-            
     closed_mask = cv2.morphologyEx(im_bw, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
     convex_Contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filtered_conv_contours = [cnt_conv for cnt_conv in convex_Contours if cv2.contourArea(cnt_conv) > cnt_threshold]
     
     if filtered_conv_contours:
         annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, (0, 255, 0), thickness)
-        perimeter_convex_sum= sum( cv2.arcLength(conxec_cnt, True) for conxec_cnt in filtered_conv_contours)
+        perimeter_convex_sum= sum( cv2.arcLength(convex_cnt, True) for convex_cnt in filtered_conv_contours)
     
     else:
         perimeter_convex_sum = 1
@@ -105,28 +65,20 @@ def measure_image_allmarks(
             
     depth = []
     for cnt in filtered_contours:
-        hull = cv2.convexHull(cnt, returnPoints=False)
-        defects = cv2.convexityDefects(cnt, hull)
+        hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
+        if hull is not None and len(hull) >= 3 and len(cnt) > 3 and np.all(np.diff(hull.ravel()) > 0):
+            defects = cv2.convexityDefects(cnt, hull)
 
-        if defects is not None:
-            for i in range(defects.shape[0]):
-                s, e, f, d = defects[i, 0]
-                start = tuple(cnt[s][0])
-                end = tuple(cnt[e][0])
-                far = tuple(cnt[f][0])
-                annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
-                if (d * pixel_size / 256) > 0.5:
-#                    cv2.putText(
-#                        annotated,
-#                        f" d:{d * pixel_size / 256:.2f} {unit}",
-#                        far,
-#                        cv2.FONT_HERSHEY_SIMPLEX,
-#                        font_scale,
-#                        (100, 0, 0),
-#                        thickness,
-#                    )
-                    annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
-                    depth.append(d * pixel_size / 256 )
+            if defects is not None:
+                for i in range(defects.shape[0]):
+                    s, e, f, d = defects[i, 0]
+                    start = tuple(cnt[s][0])
+                    end = tuple(cnt[e][0])
+                    far = tuple(cnt[f][0])
+                    annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
+                    if (d * pixel_size / DEFECT_FIXED_POINT) > 0.5:
+                        annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
+                        depth.append(d * pixel_size / DEFECT_FIXED_POINT )
 
             depth.sort(reverse=True)
     return area, perimeter, perimeter_convex ,perimeter_Rate, depth, annotated  # BGR ndarray
@@ -153,7 +105,7 @@ def measure_image_perimeter (file_path: str,
     
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, bw = cv2.threshold(gray, 200, 255, 1)
+    _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
 
     contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filtered = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
@@ -216,7 +168,7 @@ def measure_image_area(
     
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, bw = cv2.threshold(gray, 200, 255, 1)
+    _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
 
     contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filtered = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
@@ -271,7 +223,7 @@ def measure_image_lGI(    file_path: str,
 
     print(file_path + " is processing")
     im_bw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    (thresh, im_bw) = cv2.threshold(im_bw, 200, 255, 1)
+    (thresh, im_bw) = cv2.threshold(im_bw, BINARY_THRESHOLD_DEFAULT, 255, 1)
     contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > cnt_threshold]
@@ -293,7 +245,7 @@ def measure_image_lGI(    file_path: str,
     
     if filtered_conv_contours:
         annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, (0, 255, 0), thickness)
-        perimeter_convex= sum( cv2.arcLength(conxec_cnt, True) for conxec_cnt in filtered_conv_contours)
+        perimeter_convex= sum( cv2.arcLength(convex_cnt, True) for convex_cnt in filtered_conv_contours)
     
     else:
         perimeter_convex = 1
@@ -344,7 +296,7 @@ def measure_image_sulci_depth(    file_path: str,
 
     print(file_path + " is processing")
     im_bw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    (thresh, im_bw) = cv2.threshold(im_bw, 200, 255, 1)
+    (thresh, im_bw) = cv2.threshold(im_bw, BINARY_THRESHOLD_DEFAULT, 255, 1)
     contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > cnt_threshold]
@@ -359,28 +311,20 @@ def measure_image_sulci_depth(    file_path: str,
             
     depth = []
     for cnt in filtered_contours:
-        hull = cv2.convexHull(cnt, returnPoints=False)
-        defects = cv2.convexityDefects(cnt, hull)
+        hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
+        if hull is not None and len(hull) >= 3 and len(cnt) > 3 and np.all(np.diff(hull.ravel()) > 0):
+            defects = cv2.convexityDefects(cnt, hull)
 
-        if defects is not None:
-            for i in range(defects.shape[0]):
-                s, e, f, d = defects[i, 0]
-                start = tuple(cnt[s][0])
-                end = tuple(cnt[e][0])
-                far = tuple(cnt[f][0])
-                annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
-                if (d * pixel_size / 256) > 0.5:
-#                    cv2.putText(
-#                        annotated,
-#                        f" d:{d * pixel_size / 256:.2f} {unit}",
-#                        far,
-#                        cv2.FONT_HERSHEY_SIMPLEX,
-#                        font_scale,
-#                        (100, 0, 0),
-#                        thickness,
-#                    )
-                    annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
-                    depth.append(d * pixel_size / 256 )
+            if defects is not None:
+                for i in range(defects.shape[0]):
+                    s, e, f, d = defects[i, 0]
+                    start = tuple(cnt[s][0])
+                    end = tuple(cnt[e][0])
+                    far = tuple(cnt[f][0])
+                    annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
+                    if (d * pixel_size / DEFECT_FIXED_POINT) > 0.5:
+                        annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
+                        depth.append(d * pixel_size / DEFECT_FIXED_POINT )
 
             depth.sort(reverse=True)
     return depth, annotated  # BGR ndarray

@@ -4,6 +4,7 @@ import pyvista as pv
 from helpers.Helpers import compute_kernel_convex, contours_exclude, clac_scale, get_red_rect_offset, slice_at, make_scale_cube
 from helpers.check_mesh import check_brain
 from typing import Any, Literal, Sequence
+from constants import BINARY_THRESHOLD_VTK, RED_CHANNEL_MIN, GREEN_CHANNEL_MAX, DEFECT_FIXED_POINT
 
     
 # ----------------- main API -----------------
@@ -18,17 +19,6 @@ def compute_vtk_allmarks(
     unit: str = "mm",
     slice_thickness: float = 0.5):
     # --- Load mesh
-    
-#    dic = check_brain(file_path)
-    
-
-#    if dic["label"] == "not_brain":
-#        reply = QMessageBox.question(parent,"Check measurement",
-#            "The imported mesh does not represent a human brain. Do you want to continue processing it?",   # message
-#            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-#        if reply == QMessageBox.No:
-#            return dic["label"],[],0,0,0,[],[],[]
-        
     mesh = pv.read(str(file_path))
     print(f"[VTK All Hallmarks] Loaded mesh: {mesh}")
 
@@ -66,8 +56,8 @@ def compute_vtk_allmarks(
     out_dir_slices = os.path.join(out_dir, "vtk_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
     
-    out_dir_orgin = os.path.join(out_dir, "vtk_orgin")
-    os.makedirs(out_dir_orgin, exist_ok=True)
+    out_dir_origin = os.path.join(out_dir, "vtk_orgin")
+    os.makedirs(out_dir_origin, exist_ok=True)
     
     print(f"[VTK All Hallmarks] Temp output dir: {out_dir}")
 
@@ -109,7 +99,7 @@ def compute_vtk_allmarks(
         {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]()
 
         # Screenshot (array for processing, file for debugging)
-        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_orgin, f"image_{idx:03d}.png"))
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
         mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[0])
@@ -117,10 +107,10 @@ def compute_vtk_allmarks(
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > 150) & (img_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
+        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
         # Binary for contours
-        _, bw = cv2.threshold(gray, 150, 255, 0)
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -160,8 +150,8 @@ def compute_vtk_allmarks(
                             end = tuple(cnt[e][0])
                             far = tuple(cnt[f][0])
                             bgr = cv2.line(bgr, start, end, [255, 0, 0], 1)
-                            if d>256:
-                                depth_mm = d * mm_per_px/256
+                            if d > DEFECT_FIXED_POINT:
+                                depth_mm = d * mm_per_px / DEFECT_FIXED_POINT
                                 bgr = cv2.circle(bgr, far, 2, [255, 255, 0], -1)
                                 depth.append(depth_mm)
                 
@@ -213,7 +203,7 @@ def compute_vtk_allmarks(
         f"Min_sulci_across_slices_{unit}",(round(min(total_depth),2) if total_depth else None)])
         
         df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.",f"Inner_area_{unit}^2", f"Inner_Perimeter_{unit}", f"Outer_Perimeter_{unit}" ,"Sulci_count",
-            f"min_depth_{unit}", f"max_dpeth_{unit}", f"mean_depth_{unit}"])
+            f"min_depth_{unit}", f"max_depth_{unit}", f"mean_depth_{unit}"])
         
         xlsx_path = os.path.join(out_dir, f"Mesh_Allmarks_{Slice_direction}.xlsx")
         df.to_excel(xlsx_path, index=False)
@@ -275,8 +265,8 @@ def compute_vtk_lGI(
     out_dir_slices = os.path.join(out_dir, "vtk_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
     
-    out_dir_orgin = os.path.join(out_dir, "vtk_orgin")
-    os.makedirs(out_dir_orgin, exist_ok=True)
+    out_dir_origin = os.path.join(out_dir, "vtk_orgin")
+    os.makedirs(out_dir_origin, exist_ok=True)
     
     print(f"[VTK lGI] Temp output dir: {out_dir}")
 
@@ -316,7 +306,7 @@ def compute_vtk_lGI(
         {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]()
 
         # Screenshot (array for processing, file for debugging)
-        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_orgin, f"image_{idx:03d}.png"))
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
         mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[0])
@@ -324,10 +314,10 @@ def compute_vtk_lGI(
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > 150) & (img_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
+        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
         # Binary for contours
-        _, bw = cv2.threshold(gray, 150, 255, 0)
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -413,12 +403,7 @@ def compute_vtk_volume(
     x_min, x_max, y_min, y_max, z_min, z_max = mesh.bounds
     mesh_dim = [x_max - x_min, y_max - y_min, z_max - z_min]
     mesh_dim_scaled = np.array(Physical_dim) / np.array(mesh_dim)
-    p = mesh.center
-#    mesh_scaled = mesh.copy()
-#    mesh_scaled.translate(-p, inplace=True)
-#    mesh_scaled.scale(mesh_dim_scaled, inplace=True)  # about origin
-#    mesh_scaled.translate(p, inplace=True)
-#    Volume = mesh_scaled.volume
+    mesh_center = mesh.center
 
     axis_bounds = {
         "X": (x_min, x_max),
@@ -449,8 +434,8 @@ def compute_vtk_volume(
     out_dir_slices = os.path.join(out_dir, "vtk_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
     
-    out_dir_orgin = os.path.join(out_dir, "vtk_orgin")
-    os.makedirs(out_dir_orgin, exist_ok=True)
+    out_dir_origin = os.path.join(out_dir, "vtk_orgin")
+    os.makedirs(out_dir_origin, exist_ok=True)
     
     print(f"[VTK Volume] Temp output dir: {out_dir}")
 
@@ -490,7 +475,7 @@ def compute_vtk_volume(
         {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]()
 
         # Screenshot (array for processing, file for debugging)
-        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_orgin, f"image_{idx:03d}.png"))
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
         mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[0])
@@ -499,10 +484,10 @@ def compute_vtk_volume(
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > 150) & (img_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
+        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
         # Binary for contours
-        _, bw = cv2.threshold(gray, 150, 255, 0)
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -606,8 +591,8 @@ def compute_vtk_area(
     out_dir_slices = os.path.join(out_dir, "vtk_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
     
-    out_dir_orgin = os.path.join(out_dir, "vtk_orgin")
-    os.makedirs(out_dir_orgin, exist_ok=True)
+    out_dir_origin = os.path.join(out_dir, "vtk_orgin")
+    os.makedirs(out_dir_origin, exist_ok=True)
     
     print(f"[VTK Area] Temp output dir: {out_dir}")
 
@@ -646,7 +631,7 @@ def compute_vtk_area(
         {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]()
 
         # Screenshot (array for processing, file for debugging)
-        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_orgin, f"image_{idx:03d}.png"))
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
         mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[0])
@@ -654,10 +639,10 @@ def compute_vtk_area(
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > 150) & (img_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
+        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
         # Binary for contours
-        _, bw = cv2.threshold(gray, 150, 255, 0)
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -760,21 +745,21 @@ def compute_vtk_sulci_depth(
     out_dir_slices = os.path.join(out_dir, "vtk_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
     
-    out_dir_orgin = os.path.join(out_dir, "vtk_orgin")
-    os.makedirs(out_dir_orgin, exist_ok=True)
+    out_dir_origin = os.path.join(out_dir, "vtk_orgin")
+    os.makedirs(out_dir_origin, exist_ok=True)
     
-    print(f"[VTK All Hallmarks] Temp output dir: {out_dir}")
+    print(f"[VTK Sulci depth] Temp output dir: {out_dir}")
 
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
     sections_list: list[pv.PolyData] = []
     rows = []
     total_depth = []
-    
+
     # --- Use a context manager so the plotter is *guaranteed* to be closed safely
     p = pv.Plotter(off_screen=True)
     p.set_background("black")
-    
+
     pre_axis = (axis_index - 1) % 3
     next_axis = (axis_index + 1) % 3
     cube_len = max(1e-6, mesh_dim[0] / 10.0)
@@ -783,13 +768,13 @@ def compute_vtk_sulci_depth(
         # Cross-section slice
         normal, origin = slice_at(mesh, Slice_direction, k)
         section = mesh.slice(normal=normal,origin=origin)
-        
+
         if section.n_points == 0:
             continue
 
         # Red cube reference (10% of X extent)
         scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
-        
+
         plane = pv.Plane(center=origin,
                  direction=normal,  # plane normal
                  i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,  # side lengths
@@ -800,7 +785,7 @@ def compute_vtk_sulci_depth(
         {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]()
 
         # Screenshot (array for processing, file for debugging)
-        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_orgin, f"image_{idx:03d}.png"))
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
         mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[0])
@@ -808,10 +793,10 @@ def compute_vtk_sulci_depth(
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > 150) & (img_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
+        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
         # Binary for contours
-        _, bw = cv2.threshold(gray, 150, 255, 0)
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -820,7 +805,7 @@ def compute_vtk_sulci_depth(
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
         cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
-        
+
         depth = []
         if inner_filtered:
             for cnt in inner_filtered:
@@ -834,8 +819,8 @@ def compute_vtk_sulci_depth(
                             end = tuple(cnt[e][0])
                             far = tuple(cnt[f][0])
                             bgr = cv2.line(bgr, start, end, [255, 0, 0], 1)
-                            if d>256:
-                                depth_mm = d * mm_per_px/256
+                            if d > DEFECT_FIXED_POINT:
+                                depth_mm = d * mm_per_px / DEFECT_FIXED_POINT
                                 bgr = cv2.circle(bgr, far, 2, [255, 255, 0], -1)
                                 depth.append(depth_mm)
                 
@@ -875,7 +860,7 @@ def compute_vtk_sulci_depth(
         rows.append([f"Max_sulci_across_slices_{unit}",(round(max(total_depth),2) if total_depth else None),
         f"Min_sulci_across_slices_{unit}",(round(min(total_depth),2) if total_depth else None)])
         
-        df = pd.DataFrame(rows, columns=["Slice", "Sulci_count", f"min_depth_{unit}", f"max_dpeth_{unit}", f"mean_depth_{unit}"])
+        df = pd.DataFrame(rows, columns=["Slice", "Sulci_count", f"min_depth_{unit}", f"max_depth_{unit}", f"mean_depth_{unit}"])
         
         
         xlsx_path = os.path.join(out_dir, f"Mesh_Sulci_depth_{Slice_direction}.xlsx")

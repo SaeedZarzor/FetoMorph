@@ -3,6 +3,7 @@ import os
 import numpy as np
 from typing import Tuple, Union
 from helpers.Helpers import text_thickness, compute_kernel_convex
+from constants import BINARY_THRESHOLD_DEFAULT, DEFECT_FIXED_POINT
 import pandas as pd
 
 def process_on_images_batch(directory_path,
@@ -41,7 +42,7 @@ def process_on_images_batch(directory_path,
 
         print(f"{file_name} is processing")
         im_bw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        (thresh, im_bw) = cv2.threshold(im_bw, 200, 255, 1)
+        (thresh, im_bw) = cv2.threshold(im_bw, BINARY_THRESHOLD_DEFAULT, 255, 1)
         contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > cnt_threshold]
@@ -93,20 +94,20 @@ def process_on_images_batch(directory_path,
             
         depth = []
         for cnt in filtered_contours:
-            hull = cv2.convexHull(cnt, returnPoints=False)
-            defects = cv2.convexityDefects(cnt, hull)
+            hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
+            if hull is not None and len(hull) >= 3 and len(cnt) > 3 and np.all(np.diff(hull.ravel()) > 0):
+                defects = cv2.convexityDefects(cnt, hull)
 
-            if defects is not None:
-                for i in range(defects.shape[0]):
-                    s, e, f, d = defects[i, 0]
-                    start = tuple(cnt[s][0])
-                    end = tuple(cnt[e][0])
-                    far = tuple(cnt[f][0])
-                    annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
-                    if (d * pixel_size / 256) > 0.5:
-                        annotated = cv2.circle(annotated, tuple(map(int, far)), radius_px, [255, 255, 0], -1)
-                        depth.append(d * pixel_size / 256 )
-
+                if defects is not None:
+                    for i in range(defects.shape[0]):
+                        s, e, f, d = defects[i, 0]
+                        start = tuple(cnt[s][0])
+                        end = tuple(cnt[e][0])
+                        far = tuple(cnt[f][0])
+                        annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
+                        if (d * pixel_size / DEFECT_FIXED_POINT) > 0.5:
+                            annotated = cv2.circle(annotated, tuple(map(int, far)), radius_px, [255, 255, 0], -1)
+                            depth.append(d * pixel_size / DEFECT_FIXED_POINT )
 
                 depth.sort(reverse=True)
 
@@ -127,7 +128,7 @@ def process_on_images_batch(directory_path,
     sheet1.append(['PixelSize:', pixel_size])
     sheet1.append(['PixelSizeUnits:', unit])
     sheet1.append(['KernelSize:', kernel_size])
-    fd = pd.DataFrame(data=sheet1, columns=['File ', 'area', 'perimeter', 'perimeter_convex', 'LGI', 'SulciCount', 'MaxDpeth', 'MinDepth', 'MeanDepth'])
+    fd = pd.DataFrame(data=sheet1, columns=['File ', 'area', 'perimeter', 'perimeter_convex', 'LGI', 'SulciCount', 'MaxDepth', 'MinDepth', 'MeanDepth'])
     
     xlsx_path = os.path.join(out_dir, "Batch_Allmarks.xlsx")
     fd.to_excel(xlsx_path, index=False)

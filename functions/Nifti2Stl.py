@@ -5,11 +5,11 @@ import trimesh
 import numpy as np
 
 
-def nii_to_stl(file_path: str, out_dir: str, valid_labels: set[int],level: float = 0.5)
+def nii_to_stl(file_path: str, out_dir: str, valid_labels: set[int], level: float = 0.5):
 
     img = nib.load(file_path)
-    img = nib.as_closest_canonical(nifti_img)
-    data = nifti_img.get_fdata()     # Get voxel data (3D NumPy array)
+    img = nib.as_closest_canonical(img)
+    data = img.get_fdata()     # Get voxel data (3D NumPy array)
 
 
     if not valid_labels:
@@ -23,13 +23,9 @@ def nii_to_stl(file_path: str, out_dir: str, valid_labels: set[int],level: float
 
     
     verts, faces, normals, values = measure.marching_cubes(brain_mask, level=0.5)
-    stl_mesh = mesh.Mesh(np.zeros(faces.shape[0], dtype=mesh.Mesh.dtype))
-    for i, f in enumerate(faces):
-        for j in range(3):
-            stl_mesh.vectors[i][j] = verts[f[j], :]
-    
-    stl_extracted = os.path.join(out_dir, "output.stl")
+    stl_mesh = trimesh.Trimesh(vertices=verts, faces=faces, vertex_normals=normals)
 
-    stl_mesh.save(stl_extracted)
+    stl_extracted = os.path.join(out_dir, "output.stl")
+    stl_mesh.export(stl_extracted)
 
 

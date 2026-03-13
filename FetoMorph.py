@@ -1,4 +1,5 @@
 from deps import *
+from constants import DEFAULT_NIFTI_REGIONS
 from functions.measurements_image import *
 from functions.measurements_Nifti import *
 from functions.measurements_stl import *
@@ -94,7 +95,7 @@ class MainWindow(QMainWindow):
         # store metics
         self.metrics: dict[str, list[dict]] = {}  # per-path grouping {path: {"File":..., "Kind":..., "Area":..., "Volume":..., "SulciDepth_P1":..., "SulciDepth_P2":..., "SulciDepth_P3":..., "LGI":...}}
         self.current_output_dir = None
-        self.curret_output_3D_slices = None
+        self.current_output_3D_slices = None
         self.last_annotated_path: str | None = None
         self.annotation_records: list[dict] = []          # flat list of all annotations
         self.annotations_by_source: dict[str, list[dict]] = {}  # per-image grouping
@@ -103,7 +104,7 @@ class MainWindow(QMainWindow):
         # NIfTI viewing state (axis: 0=sagittal, 1=coronal, 2=axial)
         self.nifti_axis: int = 1         # default = coronal
         self.nifti_depth: int = 0        # number of slices along current axis
-        self.nifti_selected_regions_default = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}
+        self.nifti_selected_regions_default = DEFAULT_NIFTI_REGIONS
         self.labels_available : set[int] ={}
         self.nifti_label_lut: dict[int, QColor] = {}   # label -> color
         self.nifti_selected_regions: set[int] = set()
@@ -592,7 +593,7 @@ class MainWindow(QMainWindow):
         # Stop timers
         for t in getattr(self, "_timers", []):
             try: t.stop()
-            except Exception: pass
+            except Exception as e: print(f"Warning: timer stop failed: {e}")
 
         # Stop threads/workers
         for w in getattr(self, "_workers", []):
@@ -600,7 +601,7 @@ class MainWindow(QMainWindow):
                 if hasattr(w, "stop"): w.stop()
                 if hasattr(w, "quit"): w.quit()
                 if hasattr(w, "wait"): w.wait()
-            except Exception: pass
+            except Exception as e: print(f"Warning: worker cleanup failed: {e}")
 
         # Finish
         QApplication.restoreOverrideCursor()
@@ -1883,7 +1884,7 @@ class MainWindow(QMainWindow):
                 self.current_output_dir = out_dir
                 labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
 
-                dims, area,saved_pngs, valid_slices = compute_nifti_arae(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold,)
+                dims, area,saved_pngs, valid_slices = compute_nifti_area(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold,)
             
                 if area == 0:
                     QMessageBox.information(self, "NIfTI Area", "All slices were filtered out (too small).")
@@ -2284,7 +2285,7 @@ class MainWindow(QMainWindow):
         px_size_1 = self.image_scales.get(self.current_path, self.pixel_size)
 
                         
-        annotated1, basename1, First_array, label1 =self.anntotation_con(out_dir)
+        annotated1, basename1, First_array, label1 =self.annotation_con(out_dir)
         
         self.reset_view()
         
@@ -2340,7 +2341,7 @@ class MainWindow(QMainWindow):
             # Units mismatch: ask to retry or cancel
 
 
-        annotated2,basename2, Second_array, label2= self.anntotation_con(out_dir)
+        annotated2,basename2, Second_array, label2= self.annotation_con(out_dir)
         self.reset_view()
         self._exit_adjustment_mode()
 
@@ -2759,7 +2760,7 @@ class MainWindow(QMainWindow):
             self._show_widget(self.vtk_view)
             self.vtk_view.delete_slice_section()
             self.vtk_view.show_slice_with_mesh (mesh_file=self.current_path,
-                slice_file= self.curret_output_3D_slices,
+                slice_file= self.current_output_3D_slices,
                 slice_value=idx)
             self._update_slice_readout()
         else:
@@ -2793,7 +2794,7 @@ class MainWindow(QMainWindow):
             if text == "3D":
                 self._show_widget(self.vtk_view)
                 self.slice_nav_mode = "vtk"
-                self.vtk_view.show_slice_with_mesh(mesh_file=self.current_path, slice_file= self.curret_output_3D_slices, slice_value= self.slice_slider.value())
+                self.vtk_view.show_slice_with_mesh(mesh_file=self.current_path, slice_file= self.current_output_3D_slices, slice_value= self.slice_slider.value())
             elif text == "2D":
                 self.vtk_view.delete_slice_section()
                 self._show_widget(self.image_label)
@@ -3071,7 +3072,7 @@ class MainWindow(QMainWindow):
       
       
     def two_mode_view(self, out_dir, saved_pngs, valid_slices):
-        self.curret_output_3D_slices = os.path.join(out_dir, "all_slices_mesh.vtk")
+        self.current_output_3D_slices = os.path.join(out_dir, "all_slices_mesh.vtk")
         self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
         self.nav_tb.show()
         self.slice_slider.setEnabled(True)
@@ -3083,7 +3084,7 @@ class MainWindow(QMainWindow):
         elif self.view_mode.currentText() ==  "3D":
             self.vtk_view.show_slice_with_mesh(
             mesh_file=self.current_path,
-            slice_file= self.curret_output_3D_slices,
+            slice_file= self.current_output_3D_slices,
                     slice_value=mid)
         
     
@@ -3667,7 +3668,7 @@ class MainWindow(QMainWindow):
             self._update_process_actions()
 
 
-    def anntotation_con(self, out_dir):
+    def annotation_con(self, out_dir):
                     
         image_path = self.current_path
         if self.last_annotated_path is not None:

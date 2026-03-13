@@ -3,6 +3,7 @@ import nibabel as nib
 from scipy.ndimage import binary_opening, binary_closing, label
 from helpers.Helpers import compute_kernel_convex, defect_mm_per_px_and_fixed
 from nibabel.affines import apply_affine
+from constants import DEFECT_FIXED_POINT
 
 
 
@@ -145,8 +146,8 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
             depth = []
             if filtered_contours:
                 for cnt in filtered_contours:
-                    hull = cv2.convexHull(cnt, returnPoints=False)  # Compute convex hull
-                    if hull is not None and len(hull) >= 3 and len(cnt) >= 3:
+                    hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)  # Compute convex hull
+                    if hull is not None and len(hull) >= 3 and len(cnt) > 3 and np.all(np.diff(hull.ravel()) > 0):
                         defects = cv2.convexityDefects(cnt, hull)
                         if defects is not None:
                             for i in range(defects.shape[0]):
@@ -155,11 +156,11 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                                 end = tuple(cnt[e][0])
                                 far = tuple(cnt[f][0])
                                 annotated = cv2.line(annotated, start, end, [255, 0, 0], 1)
-                                if d>256:
+                                if d > DEFECT_FIXED_POINT:
                                     if pixel_size_x!=pixel_size_z:
                                         mm_per_px, mm_per_fixed = defect_mm_per_px_and_fixed(start, end, far, pixel_size_x, pixel_size_z)
                                     else:
-                                        mm_per_fixed = pixel_size_x/256
+                                        mm_per_fixed = pixel_size_x / DEFECT_FIXED_POINT
 
                                     depth_mm = d *mm_per_fixed
                                     
@@ -186,9 +187,7 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
         brain_volume = (sum_area * pixel_size_y)/1000
         Area = sum_inner * pixel_size_y /100
         GI_total = sum_inner / sum_outer if sum_outer > 0 else 0
-        total_depth = [x/10 for x in total_depth]
-        for i,v in enumerate(total_depth):
-            total_depth[i] = v/10
+        total_depth = [x / 10 for x in total_depth]
     
         mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
         
@@ -198,7 +197,7 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
         sheet1.append(["Max_sulci_across_slices_cm",(round(max(total_depth),2) if total_depth else None),
         "Min_sulci_across_slices_cm",(round(min(total_depth),2) if total_depth else None)])
 
-        df = pd.DataFrame(sheet1, columns=["Slice", "Inner_area_mm^2" ,"Inner_Perimeter_mm", "Outer_Perimeter_mm", "Sulci_count", "min_depth_mm", "max_dpeth_mm", "mean_depth_mm"])
+        df = pd.DataFrame(sheet1, columns=["Slice", "Inner_area_mm^2" ,"Inner_Perimeter_mm", "Outer_Perimeter_mm", "Sulci_count", "min_depth_mm", "max_depth_mm", "mean_depth_mm"])
         xlsx_path = os.path.join(out_dir, "Brain_Allmarks.xlsx")
         df.to_excel(xlsx_path, index=False)
             
@@ -335,7 +334,7 @@ def compute_nifti_volume(parent, file_path: str, out_dir: str, valid_labels: set
 
 
 
-def compute_nifti_arae(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30,):
+def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30,):
 
 
     nifti_img = nib.load(file_path)
@@ -683,8 +682,8 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
             depth = []
             if filtered_contours:
                 for cnt in filtered_contours:
-                    hull = cv2.convexHull(cnt, returnPoints=False)  # Compute convex hull
-                    if hull is not None and len(hull) >= 3 and len(cnt) >= 3:
+                    hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)  # Compute convex hull
+                    if hull is not None and len(hull) >= 3 and len(cnt) > 3 and np.all(np.diff(hull.ravel()) > 0):
                         defects = cv2.convexityDefects(cnt, hull)
                         if defects is not None:
                             for i in range(defects.shape[0]):
@@ -693,11 +692,11 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
                                 end = tuple(cnt[e][0])
                                 far = tuple(cnt[f][0])
                                 annotated = cv2.line(annotated, start, end, [255, 0, 0], 2)
-                                if d>256:
+                                if d > DEFECT_FIXED_POINT:
                                     if pixel_size_x!=pixel_size_z:
                                         mm_per_px, mm_per_fixed = defect_mm_per_px_and_fixed(start, end, far, pixel_size_x, pixel_size_z)
                                     else:
-                                        mm_per_fixed = pixel_size_x/256
+                                        mm_per_fixed = pixel_size_x / DEFECT_FIXED_POINT
 
                                     depth_mm = d *mm_per_fixed
                                     
@@ -719,9 +718,7 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
             cv2.imwrite(slice_path, annotated)
             saved_pngs.append(slice_path)
         
-        total_depth = [x/10 for x in total_depth]
-        for i,v in enumerate(total_depth):
-            total_depth[i] = v/10
+        total_depth = [x / 10 for x in total_depth]
     
         mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
         
@@ -729,7 +726,7 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
         sheet1.append(["Max_sulci_across_slices_cm",(round(max(total_depth),2) if total_depth else None),
         "Min_sulci_across_slices_cm",(round(min(total_depth),2) if total_depth else None)])
 
-        df = pd.DataFrame(sheet1, columns=["Slice","Sulci_count", "min_depth_mm", "max_dpeth_mm", "mean_depth_mm"])
+        df = pd.DataFrame(sheet1, columns=["Slice","Sulci_count", "min_depth_mm", "max_depth_mm", "mean_depth_mm"])
         xlsx_path = os.path.join(out_dir, "Brain_Sulci.xlsx")
         df.to_excel(xlsx_path, index=False)
             

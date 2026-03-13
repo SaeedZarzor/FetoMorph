@@ -1,10 +1,11 @@
+import os
 import pandas as pd
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import nibabel as nib
 
-def validate_nifti_arae (out_dir: str):
+def validate_nifti_area(out_dir: str):
 
     filename = "brain_extracted.nii.gz"
     file_path = os.path.join(out_dir, filename)
@@ -28,14 +29,14 @@ def validate_nifti_arae (out_dir: str):
         print("[NIfTI Area validation] ")
         
         return plt
-    else
+    else:
         return
 
 def validate_nifti_lGI (out_dir: str):
     filename = "Brain_lGI.xlsx"
     file_path = os.path.join(out_dir, filename)
     if os.path.exists(file_path):
-        df = pd.read_excel(filename)   # you can also specify sheet_name="Sheet1"
+        df = pd.read_excel(file_path)
         perimeters = df['Inner_Perimeter_mm'].to_numpy()   # as NumPy array
         convex_hull_perimeters = df['Outer_Perimeter_mm'].to_numpy()   # as NumPy array
         plt.figure(figsize=(10, 5))
@@ -45,7 +46,7 @@ def validate_nifti_lGI (out_dir: str):
         plt.ylabel("convex hull (blue) and perimeter (red) in mm")
         plt.title("Convex Hull vs. Perimeter Distribution Across Slices")
         plt.grid()
-        brain_convex_perimeter = os.path.join(directory, "brain_convex_perimeter.png")
+        brain_convex_perimeter = os.path.join(out_dir, "brain_convex_perimeter.png")
         plt.savefig(brain_convex_perimeter, dpi=300)
 
         print("[Validation] Saved size-distribution plot: {brain_convex_perimeter}")
@@ -53,7 +54,7 @@ def validate_nifti_lGI (out_dir: str):
         print("[NIfTI lGI validation] ")
         
         return plt
-    else
+    else:
         return
 
 
