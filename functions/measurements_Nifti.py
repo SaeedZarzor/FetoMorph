@@ -1,3 +1,17 @@
+"""NIfTI segmentation volume measurements for FetoMorph.
+
+Processes a 3-D NIfTI segmentation mask along **coronal slices** (axis 1).
+For each slice the module extracts inner / outer contours, computes area,
+perimeter, GI (gyrification index), and convexity-defect sulci depths,
+then integrates across slices to obtain whole-brain volume (cm³), surface
+area (cm²), and aggregate depth statistics.
+
+Voxel sizes are read from the NIfTI header (``get_zooms``).  Because
+voxels can be anisotropic, depth conversion uses
+``defect_mm_per_px_and_fixed`` to project defect vectors onto the
+physical coordinate system.
+"""
+
 from deps import *
 import nibabel as nib
 from scipy.ndimage import binary_opening, binary_closing, label
@@ -50,6 +64,24 @@ def compute_nifti_dims(brain_mask: np.ndarray, affine: np.ndarray):
 
 
 def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: set[int],min_contour_area: float=30, kernel_size: int=5, ):
+    """Compute all hallmarks (volume, area, GI, sulci depths) from a NIfTI segmentation.
+
+    Iterates over coronal slices (axis 1), extracts inner/outer contours,
+    measures area, perimeters, GI, and convexity-defect depths per slice,
+    then integrates across slices.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the ``.nii`` / ``.nii.gz`` file.
+        out_dir: Output directory for slice PNGs and Excel.
+        valid_labels: Set of integer segmentation labels to include.
+        min_contour_area: Minimum contour area (pixels) to keep.
+        kernel_size: Morph-close kernel diameter for outer contour.
+
+    Returns:
+        Tuple of ``(dims_cm, area_cm2, volume_cm3, GI, depths, saved_pngs, valid_slices)``
+        or ``None`` if no valid slices found.
+    """
     nifti_img = nib.load(file_path)
     nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
@@ -64,27 +96,21 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
     print(f"[NIfTI All hallmarks] voxel size: {pixel_size_x:.4f} x {pixel_size_y:.4f} x {pixel_size_z:.4f} mm")
 
 
+    # Voxel face area in the coronal plane (X × Z) — used to convert
+    # pixel counts to physical mm² per slice.
     pixel_area_mm2 = pixel_size_x* pixel_size_z
 
-#    unique_labels = np.unique(image_data)
-#    print("[NIfTI All hallmarks] Unique labels in the image:", unique_labels)
-
-    # Step 1: Define the Selected Regions
-#    selected_regions = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}  # The regions you want to include
-
-    # Check if selected regions exist in the image
-#    valid_labels = selected_regions.intersection(set(unique_labels))
     if not valid_labels:
         print(" [NIfTI All hallmarks] Warning: None of the selected regions are present in this NIfTI file!")
         threshold = np.percentile(image_data, 50)
         brain_mask = image_data #> threshold
     else:
         print("[NIfTI All hallmarks] Extracting regions:", valid_labels)
-        # Step 2: Create a Mask Including Only These Regions
         brain_mask = np.isin(image_data, list(valid_labels))
 
-    
+
     dims = compute_nifti_dims(brain_mask,affine)
+    # Find coronal slice indices (axis 1) that contain brain tissue.
     brain_slices = np.where(np.any(brain_mask, axis=(0, 2)))[0]
     if brain_slices.size == 0:
         QMessageBox.information(parent, "[NIfTI All hallmarks]", "No slices contain the selected mask.")
@@ -164,10 +190,12 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
 
                                     depth_mm = d *mm_per_fixed
                                     
+                                    # Depth filter: keep defects between 0.5% and 25% of
+                                    # brain IS-extent.  dims[2] is in cm, ×10 → mm.
                                     if depth_mm < (0.25* dims[2]*10)  and depth_mm > (0.005* dims[2]*10):
                                         annotated = cv2.circle(annotated, far, 2, [255, 255, 0], -1)
                                         depth.append(depth_mm)
-                
+
             mean_depth = (sum(depth)/len(depth)) if depth else None
             total_depth.extend(depth)
             sheet1.append([idx, slice_area, inner_perimeter, outer_perimeter,
@@ -176,17 +204,21 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                 (max(depth) if depth else None),    # max_depth_mm
                 mean_depth                          # mean_depth_mm
                 ])
-                    
+
             slice_path = os.path.join(out_dir_slices, f"brain_slice_{idx:03d}.png")
             cv2.imwrite(slice_path, annotated)
             saved_pngs.append(slice_path)
 
 
 
-#        brain_length_cm = ((valid_slices[-1] - valid_slices[0] + 1) * pixel_size_y) /10
+        # Volume integration: sum of slice areas (mm²) × slice spacing (mm) → mm³,
+        # then /1000 → cm³.
         brain_volume = (sum_area * pixel_size_y)/1000
+        # Surface area: sum of inner perimeters (mm) × slice spacing → mm²,
+        # then /100 → cm².
         Area = sum_inner * pixel_size_y /100
         GI_total = sum_inner / sum_outer if sum_outer > 0 else 0
+        # Convert depth values from mm to cm for reporting.
         total_depth = [x / 10 for x in total_depth]
     
         mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
@@ -219,8 +251,17 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
 
 
 def compute_nifti_volume(parent, file_path: str, out_dir: str, valid_labels: set[int]):
+    """Compute brain volume (cm³) from a NIfTI segmentation by integrating slice areas.
 
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the NIfTI file.
+        out_dir: Output directory for slice PNGs and Excel.
+        valid_labels: Set of integer segmentation labels to include.
 
+    Returns:
+        Tuple of ``(dims_cm, volume_cm3, saved_pngs, valid_slices)`` or ``None``.
+    """
     nifti_img = nib.load(file_path)
     nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
@@ -335,8 +376,21 @@ def compute_nifti_volume(parent, file_path: str, out_dir: str, valid_labels: set
 
 
 def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30,):
+    """Compute brain surface area (cm²) from a NIfTI segmentation.
 
+    Sums inner-contour perimeters across coronal slices and multiplies
+    by slice spacing to approximate total surface area.
 
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the NIfTI file.
+        out_dir: Output directory for slice PNGs and Excel.
+        valid_labels: Set of integer segmentation labels to include.
+        min_contour_area: Minimum contour area (pixels) to keep.
+
+    Returns:
+        Tuple of ``(dims_cm, area_cm2, saved_pngs, valid_slices)`` or ``None``.
+    """
     nifti_img = nib.load(file_path)
     nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
@@ -453,6 +507,23 @@ def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[
     
 
 def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30, kernel_size: int=5):
+    """Compute the gyrification index (GI) from a NIfTI segmentation.
+
+    GI = total inner perimeter / total outer perimeter across all coronal
+    slices.  The "outer" contour is obtained by morphologically closing
+    each slice mask to fill sulci.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the NIfTI file.
+        out_dir: Output directory for slice PNGs and Excel.
+        valid_labels: Set of integer segmentation labels to include.
+        min_contour_area: Minimum contour area (pixels) to keep.
+        kernel_size: Morph-close kernel diameter.
+
+    Returns:
+        Tuple of ``(GI_total, saved_pngs, valid_slices)`` or ``None``.
+    """
     nifti_img = nib.load(file_path)
     nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)
@@ -603,6 +674,22 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
 
         
 def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30,):
+    """Compute sulci depths from convexity defects across NIfTI coronal slices.
+
+    For each slice, extracts contours, computes convex hulls, and measures
+    defect depths.  Anisotropic voxels are handled via
+    ``defect_mm_per_px_and_fixed``.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the NIfTI file.
+        out_dir: Output directory for slice PNGs and Excel.
+        valid_labels: Set of integer segmentation labels to include.
+        min_contour_area: Minimum contour area (pixels) to keep.
+
+    Returns:
+        Tuple of ``(dims_cm, depths_cm, saved_pngs, valid_slices)`` or ``None``.
+    """
     nifti_img = nib.load(file_path)
     nifti_img = nib.as_closest_canonical(nifti_img)
     image_data = nifti_img.get_fdata()  # Get voxel data (3D NumPy array)

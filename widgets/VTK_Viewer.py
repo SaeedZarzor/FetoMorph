@@ -1,9 +1,30 @@
+"""Embeddable VTK 3-D viewer widget.
+
+Wraps a QVTKRenderWindowInteractor inside a QWidget and exposes
+high-level methods for displaying polydata meshes, 2-D image slices,
+volume renderings, and FreeSurfer surfaces with optional morphometric
+colour overlays.
+"""
+
 from deps import *
 import pyvista as pv
 import nibabel as nib
 
 class VTKViewer(QWidget):
+    """QWidget hosting a VTK render window for 3-D and slice-based visualisation.
+
+    Supports three display modes:
+      - **polydata** -- triangulated surface meshes.
+      - **image2d** -- axis-aligned 2-D slices through a vtkImageData volume.
+      - **volume** -- GPU-accelerated volume rendering.
+    """
+
     def __init__(self, parent=None):
+        """Initialise the VTK viewer and its render window.
+
+        Args:
+            parent: Parent widget.
+        """
         super().__init__(parent)
         self._slice_actor = None
         self.vtkWidget = QVTKRenderWindowInteractor(self)
@@ -16,6 +37,11 @@ class VTKViewer(QWidget):
         self._init_axes_widget()   # enable orthogonal axes
         
     def show_polydata(self, poly: vtkPolyData):
+        """Display a vtkPolyData surface mesh with default lighting.
+
+        Args:
+            poly: The polygonal dataset to render.
+        """
         self._clear_scene()
         mapper = vtkPolyDataMapper(); mapper.SetInputData(poly)
         actor = vtkActor(); actor.SetMapper(mapper); actor.GetProperty().SetColor(0.69, 0.77, 0.87)
@@ -24,6 +50,13 @@ class VTKViewer(QWidget):
         self.show_axes(True)
 
     def show_image2d(self, img: vtkImageData):
+        """Display an axis-aligned 2-D slice through a vtkImageData volume.
+
+        The initial slice is set to the midpoint of the Z-axis extent.
+
+        Args:
+            img: The image volume to slice.
+        """
         self._clear_scene(); self._img = img
         ex = img.GetExtent(); self._axis = 2
         self._slice_min, self._slice_max = self._axis_minmax(ex, self._axis)
@@ -39,6 +72,11 @@ class VTKViewer(QWidget):
         self._mode = "image2d"; self.vtkWidget.GetRenderWindow().Render()
 
     def show_volume(self, img: vtkImageData):
+        """Render a vtkImageData volume using GPU smart volume mapping.
+
+        Args:
+            img: The image volume to render.
+        """
         self._clear_scene()
         mapper = vtkSmartVolumeMapper(); mapper.SetInputData(img)
         prop = vtkVolumeProperty(); prop.ShadeOn(); prop.SetInterpolationTypeToLinear()
@@ -47,9 +85,16 @@ class VTKViewer(QWidget):
         self._mode = "volume"; self.vtkWidget.GetRenderWindow().Render()
         self.show_axes(True)
 
-    def has_slice(self) -> bool: return self._mode == "image2d" and self._img is not None
-    def slice_range(self): return (self._slice_min, self._slice_max) if self.has_slice() else (0,0)
+    def has_slice(self) -> bool:
+        """Return True if the viewer is in image-slice mode with valid data."""
+        return self._mode == "image2d" and self._img is not None
+
+    def slice_range(self):
+        """Return the (min, max) slice index tuple for the current axis."""
+        return (self._slice_min, self._slice_max) if self.has_slice() else (0,0)
+
     def set_slice(self, s: int):
+        """Move to slice index *s*, clamped to the valid range."""
         if not self.has_slice(): return
         s = max(self._slice_min, min(self._slice_max, s))
         if s == self._slice: return
@@ -57,6 +102,11 @@ class VTKViewer(QWidget):
         if self._slice_mapper: self._slice_mapper.SetSliceNumber(self._slice)
         self.vtkWidget.GetRenderWindow().Render()
     def set_orientation(self, key: str):
+        """Change the slicing axis from a human-readable key.
+
+        Args:
+            key: One of "Axial (Z)", "Coronal (Y)", or "Sagittal (X)".
+        """
         if not self.has_slice(): return
         self._axis = 2 if key=="Axial (Z)" else 1 if key=="Coronal (Y)" else 0
         ex = self._img.GetExtent(); self._slice_min, self._slice_max = self._axis_minmax(ex, self._axis)
@@ -65,11 +115,20 @@ class VTKViewer(QWidget):
             self._apply_orientation_to_mapper(self._axis); self._slice_mapper.SetSliceNumber(self._slice)
         self.vtkWidget.GetRenderWindow().Render()
     def slice_index_to_mm(self, index: int | None = None) -> float:
+        """Convert a slice index to a physical position in millimetres.
+
+        Args:
+            index: Slice index; defaults to the current slice.
+
+        Returns:
+            Physical coordinate along the active axis.
+        """
         if not self.has_slice(): return 0.0
         if index is None: index = self._slice
         origin = self._img.GetOrigin(); spacing = self._img.GetSpacing()
         return origin[self._axis] + index * spacing[self._axis]
     def _clear_scene(self):
+        """Remove all actors and props from the renderer, keeping the render window alive."""
         rw = self.vtkWidget.GetRenderWindow()
 
         if not hasattr(self, "renderer") or self.renderer is None:
@@ -85,14 +144,19 @@ class VTKViewer(QWidget):
         self._slice_node = None
         self._img = None
     @staticmethod
-    def _axis_minmax(extent, axis): return (extent[0],extent[1]) if axis==0 else (extent[2],extent[3]) if axis==1 else (extent[4],extent[5])
+    def _axis_minmax(extent, axis):
+        """Return the (min, max) extent pair for the given axis index."""
+        return (extent[0],extent[1]) if axis==0 else (extent[2],extent[3]) if axis==1 else (extent[4],extent[5])
+
     def _apply_orientation_to_mapper(self, axis):
+        """Set the slice mapper orientation to match the given axis index."""
         if axis==2: self._slice_mapper.SetOrientationToZ()
         elif axis==1: self._slice_mapper.SetOrientationToY()
         else: self._slice_mapper.SetOrientationToX()
 
 
     def _init_axes_widget(self):
+        """Create the orientation-marker widget (XYZ triad) in the bottom-left corner."""
         axes = vtkAxesActor()
 
         w = vtkOrientationMarkerWidget()
@@ -109,6 +173,7 @@ class VTKViewer(QWidget):
         self._axes_widget = w
         
     def show_axes(self, visible: bool):
+        """Toggle visibility of the orientation-marker axes widget."""
         if self._axes_widget is not None:
             self._axes_widget.SetEnabled(1 if visible else 0)
             self.vtkWidget.GetRenderWindow().Render()
@@ -169,6 +234,7 @@ class VTKViewer(QWidget):
         self.vtkWidget.GetRenderWindow().Render()
 
     def delete_slice_section(self):
+        """Remove the highlighted slice actor from the scene, if present."""
         if self._slice_actor:
             self.renderer.RemoveActor(self._slice_actor)
             self._slice_actor = None
@@ -236,7 +302,16 @@ class VTKViewer(QWidget):
 
 
     def show_freesurfer_morph(self, surf_path: str, morph_path: str):
-               # --- 1. load surface + morph ---
+        """Display a FreeSurfer surface coloured by a per-vertex morphometric overlay.
+
+        Automatically detects the overlay type (thickness, sulcal depth,
+        curvature, etc.) from the file extension and adds a scalar bar.
+
+        Args:
+            surf_path: Path to a FreeSurfer surface file (e.g. lh.pial).
+            morph_path: Path to a FreeSurfer morph-data file (e.g. lh.thickness).
+        """
+        # --- 1. load surface + morph ---
         verts, faces = nib.freesurfer.read_geometry(surf_path)
         morph = nib.freesurfer.read_morph_data(morph_path)
 
@@ -320,7 +395,14 @@ class VTKViewer(QWidget):
         rh_surf_path: str,
         rh_morph_path: str,
     ):
-        """Show FreeSurfer morph (sulc/thickness/curv/…) for both hemispheres."""
+        """Display both-hemisphere FreeSurfer surfaces with morphometric colour overlay.
+
+        Args:
+            lh_surf_path: Path to left-hemisphere surface file.
+            lh_morph_path: Path to left-hemisphere morph-data file.
+            rh_surf_path: Path to right-hemisphere surface file.
+            rh_morph_path: Path to right-hemisphere morph-data file.
+        """
         # --- load surfaces + morphs ---
         lh_verts, lh_faces = nib.freesurfer.read_geometry(lh_surf_path)
         rh_verts, rh_faces = nib.freesurfer.read_geometry(rh_surf_path)

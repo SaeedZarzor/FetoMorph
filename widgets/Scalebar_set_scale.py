@@ -1,8 +1,27 @@
+"""Scale-bar calibration dialog.
+
+After the user draws a line on the image to measure a known real-world
+distance in pixels, this dialog lets them enter the corresponding
+physical length and unit so the application can compute pixels-per-unit.
+"""
+
 from deps import *
 
 class ScalebarSetScaleDialog(QDialog):
-    """Confirm scale from a measured pixel length."""
+    """Dialog for setting the image scale from a measured pixel length.
+
+    Displays the pixel length that was measured and asks the user to
+    provide the equivalent real-world length and unit.
+    """
+
     def __init__(self, pixel_length: float, unit_init: str = "mm", parent=None):
+        """Initialise the scale-bar calibration dialog.
+
+        Args:
+            pixel_length: Measured distance in pixels.
+            unit_init: Initial measurement unit string.
+            parent: Parent widget.
+        """
         super().__init__(parent)
         self.setWindowTitle("Set Scale from Scalebar")
         self.setModal(True)

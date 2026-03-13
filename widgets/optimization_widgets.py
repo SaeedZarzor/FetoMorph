@@ -1,7 +1,22 @@
+"""Multi-objective optimisation configuration dialog.
+
+Presents checkboxes for objectives (gyrification index, sulci depth, etc.),
+constraints with numeric limits, solver algorithm selection, and a
+termination-criterion slider so the user can fully configure an
+optimisation run before launching it.
+"""
+
 from deps import *
 
 
 class OptimizationOptionsDialog(QtWidgets.QDialog):
+    """Dialog for configuring multi-objective optimisation parameters.
+
+    The user selects which objectives to optimise (and their direction),
+    enables or disables constraints with numeric bounds, picks a solver
+    algorithm (NSGA-II / NSGA-III), and sets the number of generations.
+    """
+
     OBJECTIVE_DIRECTIONS = ["Maximize", "Minimize"]
 
     obj_to_name = {
@@ -36,6 +51,15 @@ class OptimizationOptionsDialog(QtWidgets.QDialog):
     ALGORITHMS = ["NSGA-II", "NSGA-III"]
 
     def __init__(self, parent=None, max_sulci_count: int | None = None, max_cell_density: float | None = None):
+        """Initialise the optimisation options dialog.
+
+        Args:
+            parent: Parent widget.
+            max_sulci_count: Upper bound for the sulci-count constraint
+                (None for unlimited).
+            max_cell_density: Upper bound for the cell-density constraint
+                (None for unlimited).
+        """
         super().__init__(parent)
         self.setWindowTitle("Optimization Options")
         self.setModal(True)
@@ -67,6 +91,7 @@ class OptimizationOptionsDialog(QtWidgets.QDialog):
         self._set_defaults()
 
     def _build_ui(self):
+        """Construct the full dialog layout: objectives, constraints, solver settings."""
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
@@ -185,6 +210,7 @@ class OptimizationOptionsDialog(QtWidgets.QDialog):
         root.addWidget(buttons)
 
     def _set_defaults(self):
+        """Reset all UI controls to their factory-default state."""
         # Select all objectives by default.
         for obj, chk in self.objective_checks.items():
             chk.setChecked(True)
@@ -208,6 +234,7 @@ class OptimizationOptionsDialog(QtWidgets.QDialog):
         self._update_algorithm_availability()
 
     def _validate_and_accept(self):
+        """Validate selections and accept the dialog, or show a warning."""
         if not any(chk.isChecked() for chk in self.objective_checks.values()):
             QtWidgets.QMessageBox.warning(
                 self, "Invalid Selection", "Select at least one objective."
@@ -230,6 +257,7 @@ class OptimizationOptionsDialog(QtWidgets.QDialog):
         self.accept()
 
     def _update_algorithm_availability(self):
+        """Disable NSGA-II when more than three objectives are selected."""
         selected_count = sum(1 for chk in self.objective_checks.values() if chk.isChecked())
         model = self.selected_algorithm.model()
         item = model.item(0)  # NSGA-II
@@ -245,9 +273,11 @@ class OptimizationOptionsDialog(QtWidgets.QDialog):
             self.selected_algorithm.setCurrentText("NSGA-III")
 
     def get_selected_objectives(self) -> list[str]:
+        """Return the list of checked objective key strings."""
         return [obj for obj, chk in self.objective_checks.items() if chk.isChecked()]
 
     def get_objective_directions(self) -> dict[str, str]:
+        """Return a mapping of selected objective keys to 'maximize' or 'minimize'."""
         directions: dict[str, str] = {}
         for obj, chk in self.objective_checks.items():
             if not chk.isChecked():
@@ -257,6 +287,7 @@ class OptimizationOptionsDialog(QtWidgets.QDialog):
         return directions
 
     def get_constraints(self) -> dict[str, float]:
+        """Return a dict of enabled constraint keys to their numeric limits."""
         constraints: dict[str, float] = {}
         for key, chk in self.constraint_checks.items():
             if chk.isChecked():
@@ -267,12 +298,19 @@ class OptimizationOptionsDialog(QtWidgets.QDialog):
         return constraints
 
     def get_selected_algorithms(self) -> str:
+        """Return the name of the selected solver algorithm."""
         return self.selected_algorithm.currentText()
 
     def get_termination_criterion(self) -> int:
+        """Return the termination criterion as the number of generations."""
         return int(self.termination_slider.value() * 10)
 
     def get_settings(self) -> tuple[list[str], dict[str, float], str, int, dict[str, str]]:
+        """Return all dialog settings as a single tuple.
+
+        Returns:
+            A tuple of (objectives, constraints, algorithm, n_gen, directions).
+        """
         return (
             self.get_selected_objectives(),
             self.get_constraints(),

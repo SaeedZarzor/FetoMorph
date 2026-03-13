@@ -1,10 +1,30 @@
+"""Dockable region-of-interest selector widget.
+
+Presents a checkable list of integer region labels, bulk-action buttons
+(select all, clear, invert, defaults), and a quick-entry text field so
+the user can type comma-separated label IDs directly.
+"""
+
 from deps import *
 
 class RegionsDock(QDockWidget):
+    """Dock widget for selecting which segmentation region labels to include.
+
+    Signals:
+        applied: Emitted with the set of selected label ints on Apply.
+        closed: Emitted when the dock is closed.
+    """
+
     applied = Signal(set)   # emits the selected set on Apply
     closed = Signal()       # emits when dock is closed
 
     def __init__(self, parent=None, title="Regions of Interest"):
+        """Initialise the regions dock.
+
+        Args:
+            parent: Parent widget.
+            title: Window title for the dock.
+        """
         super().__init__(title, parent)
         self.setObjectName("RegionsDock")
         self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
@@ -83,9 +103,11 @@ class RegionsDock(QDockWidget):
         self._block_item_changed = False
 
     def set_defaults(self, defaults: set[int]):
+        """Store the default label set used by the Defaults button."""
         self._defaults = set(int(x) for x in defaults or set())
 
     def current_selection(self) -> set[int]:
+        """Return the set of currently checked label integers."""
         return {int(self.lst.item(i).text())
                 for i in range(self.lst.count())
                 if self.lst.item(i).checkState() == Qt.Checked}

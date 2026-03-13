@@ -1,4 +1,12 @@
-# measurements.py
+"""2-D image measurement functions for FetoMorph.
+
+Operates on single brain-slice images (PNG / JPEG).  Each function
+thresholds the image, extracts contours, and computes one or more
+morphometric quantities (area, perimeter, GI, sulci depth).
+
+All pixel → physical-unit conversions use ``pixel_size`` (mm/px).
+"""
+
 import cv2
 import numpy as np
 from typing import Tuple, Union
@@ -13,8 +21,25 @@ def measure_image_allmarks(
     cnt_threshold: float = 20,
     unit: str = "mm",
 ):
+    """Compute all hallmarks (area, perimeters, GI, sulci depths) from an image.
 
+    Pipeline:
+        1. Threshold → extract inner contours (brain boundary).
+        2. Morphological close → extract outer contours (sulci filled).
+        3. GI = inner perimeter / outer perimeter.
+        4. Convexity defects → sulci depths.
 
+    Args:
+        file_path: Path to a brain-slice image.
+        pixel_size: Physical size of one pixel (mm/px).
+        kernel_size: Diameter of the elliptical kernel for morph close.
+        cnt_threshold: Minimum contour area (pixels) to keep.
+        unit: Label for output units.
+
+    Returns:
+        Tuple of ``(area, perimeter, perimeter_convex, GI, depths, annotated_bgr)``.
+    """
+    # font_scale is normalised so that text is ~1 mm tall on-screen
     font_scale = 0.01/pixel_size
     margin = 6
     radius_px = int(round(0.1 / pixel_size))
@@ -49,20 +74,23 @@ def measure_image_allmarks(
     else:
         x1, y1 = 15, 40
 
+    # --- Outer contour: morphological close fills sulci, giving the "convex" boundary.
+    # GI (gyrification index) = inner perimeter / outer perimeter.
     closed_mask = cv2.morphologyEx(im_bw, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
     convex_Contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filtered_conv_contours = [cnt_conv for cnt_conv in convex_Contours if cv2.contourArea(cnt_conv) > cnt_threshold]
-    
+
     if filtered_conv_contours:
         annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, (0, 255, 0), thickness)
         perimeter_convex_sum= sum( cv2.arcLength(convex_cnt, True) for convex_cnt in filtered_conv_contours)
-    
+
     else:
-        perimeter_convex_sum = 1
-        
+        perimeter_convex_sum = 1  # fallback to avoid division by zero
+
     perimeter_convex = perimeter_convex_sum * pixel_size
-    perimeter_Rate = perimeter / perimeter_convex
-            
+    perimeter_Rate = perimeter / perimeter_convex  # GI ratio
+
+    # --- Sulci depth via convexity defects ---
     depth = []
     for cnt in filtered_contours:
         hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
@@ -71,11 +99,14 @@ def measure_image_allmarks(
 
             if defects is not None:
                 for i in range(defects.shape[0]):
+                    # s = start index, e = end index, f = farthest point index
+                    # d = depth in OpenCV 8.8 fixed-point (divide by 256 → pixels)
                     s, e, f, d = defects[i, 0]
                     start = tuple(cnt[s][0])
                     end = tuple(cnt[e][0])
                     far = tuple(cnt[f][0])
                     annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
+                    # Convert fixed-point depth to mm; keep only defects > 0.5 mm
                     if (d * pixel_size / DEFECT_FIXED_POINT) > 0.5:
                         annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
                         depth.append(d * pixel_size / DEFECT_FIXED_POINT )
@@ -214,6 +245,21 @@ def measure_image_lGI(    file_path: str,
     cnt_threshold: float = 20,
     unit: str = "mm",
 ):
+    """Compute the local Gyrification Index from a 2-D brain-slice image.
+
+    GI = inner perimeter / outer perimeter, where "outer" is derived by
+    morphologically closing the binary mask (fills sulci).
+
+    Args:
+        file_path: Path to the image.
+        pixel_size: mm per pixel.
+        kernel_size: Morph-close kernel diameter.
+        cnt_threshold: Minimum contour area to keep (pixels).
+        unit: Label for output units.
+
+    Returns:
+        Tuple of ``(GI_ratio, inner_perim_mm, outer_perim_mm, annotated_bgr)``.
+    """
     font_scale = 0.01/pixel_size
     margin =6
 
@@ -286,7 +332,21 @@ def measure_image_sulci_depth(    file_path: str,
     cnt_threshold: float,
     unit: str = "mm",
 ):
+    """Compute sulci depths from convexity defects on a 2-D brain-slice image.
 
+    For each contour, computes the convex hull and then identifies
+    convexity defects (indentations).  Each defect's depth is converted
+    from OpenCV 8.8 fixed-point to mm using ``pixel_size``.
+
+    Args:
+        file_path: Path to the image.
+        pixel_size: mm per pixel.
+        cnt_threshold: Minimum contour area to keep (pixels).
+        unit: Label for output units.
+
+    Returns:
+        Tuple of ``(depth_list_mm, annotated_bgr)``.
+    """
     font_scale = 0.01/pixel_size
     radius_px = int(round(0.1 / pixel_size))
 
@@ -317,11 +377,14 @@ def measure_image_sulci_depth(    file_path: str,
 
             if defects is not None:
                 for i in range(defects.shape[0]):
+                    # s = start index, e = end index, f = farthest point
+                    # d = depth in 8.8 fixed-point (d / 256 → pixels)
                     s, e, f, d = defects[i, 0]
                     start = tuple(cnt[s][0])
                     end = tuple(cnt[e][0])
                     far = tuple(cnt[f][0])
                     annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
+                    # Convert fixed-point depth to mm; keep defects > 0.5 mm
                     if (d * pixel_size / DEFECT_FIXED_POINT) > 0.5:
                         annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
                         depth.append(d * pixel_size / DEFECT_FIXED_POINT )

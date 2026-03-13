@@ -1,8 +1,27 @@
+"""Morphological kernel size dialog widget.
+
+Provides a slider-and-spinbox dialog that constrains the user to odd
+kernel sizes, which is required by most OpenCV morphology operations.
+"""
+
 from deps import *
 
 class KernelSizeDialog(QDialog):
-    """Pick an odd kernel size for morphology."""
+    """Dialog for picking an odd kernel size for morphological operations.
+
+    The slider and spin box are kept in sync and automatically snap to
+    the nearest valid odd integer within the specified range.
+    """
+
     def __init__(self, parent=None, initial: int = 5, minimum: int = 1, maximum: int = 201):
+        """Initialise the kernel size dialog.
+
+        Args:
+            parent: Parent widget.
+            initial: Starting kernel size (will be forced odd).
+            minimum: Smallest allowed kernel size.
+            maximum: Largest allowed kernel size.
+        """
         super().__init__(parent)
         self.setWindowTitle("Morphology Kernel Size")
         self.setModal(True)

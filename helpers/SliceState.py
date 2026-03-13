@@ -1,8 +1,15 @@
+"""Dataclass and factory for slice geometry state along an arbitrary axis.
+
+Used by the STL/VTK measurement pipelines to precompute the normal, camera
+position, origin, and translation for each coronal/sagittal/axial slice.
+"""
 
 from dataclasses import dataclass
 
+
 @dataclass
 class SliceState:
+    """Immutable snapshot of a single slicing plane's geometry."""
     axis: str
     normal: tuple[int, int, int]
     cpos: str
@@ -17,6 +24,20 @@ def make_state(snorml: str, k: int, s_n: int,
                Ystart: float, Yend: float,
                Zstart: float, Zend: float,
                depth: float) -> SliceState:
+    """Create a ``SliceState`` for the *k*-th of *s_n* evenly spaced slices.
+
+    Args:
+        snorml: Slice axis — ``"X"``, ``"Y"``, or ``"Z"``.
+        k: Zero-based slice index.
+        s_n: Total number of slices.
+        Xstart, Xend: Mesh bounding-box range along X.
+        Ystart, Yend: Mesh bounding-box range along Y.
+        Zstart, Zend: Mesh bounding-box range along Z.
+        depth: Depth along the slicing axis (used for camera translation).
+
+    Returns:
+        A populated ``SliceState``.
+    """
     a = snorml.upper()
     if a == 'X':
         inc   = round(Xstart + k / s_n * (Xend - Xstart), 3)

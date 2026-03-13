@@ -1,19 +1,43 @@
-# helpers.py
+"""Shared helper functions for FetoMorph measurement pipelines.
+
+Provides utilities for OpenCV text sizing, morphological kernels, convexity-
+defect depth conversion (pixel ↔ mm), red-cube scale calibration, scalebar
+drawing, and PyVista slice geometry.
+"""
+
 from deps import *
 import pyvista as pv
 import math
 
 
-
-
 def text_thickness(H, style="regular", cap=10):
+    """Compute an OpenCV line thickness that scales with image height.
+
+    Args:
+        H: Image height in pixels.
+        style: One of ``"thin"``, ``"regular"``, ``"bold"``.
+        cap: Maximum thickness returned.
+
+    Returns:
+        Integer thickness clamped to ``[1, cap]``.
+    """
     base_div = {"thin": 380, "regular": 320, "bold": 260}[style]  # ↑ bigger divisors = thinner
     t = int(round(H / base_div))
     return max(1, min(t, cap))
     
     
 def compute_kernel_convex(kernel_size):
+    """Create an elliptical morphological structuring element.
 
+    Used by the GI (gyrification index) pipeline to morphologically close
+    sulci before computing the "outer" (convex) perimeter.
+
+    Args:
+        kernel_size: Diameter of the ellipse in pixels.
+
+    Returns:
+        A ``uint8`` structuring element suitable for ``cv2.morphologyEx``.
+    """
     kernel_convex = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
     
     return kernel_convex
@@ -52,6 +76,8 @@ def defect_mm_per_px_and_fixed(
     return mm_per_px, mm_per_fixed
 
 def contours_exclude(contours, excluded_space, image_shape):
+    # Needed to remove the red reference-cube contour from the brain contours
+    # so that it does not pollute area / perimeter measurements.
     """
     Filter contours by excluding any that overlap with 'excluded_space' (uint8 mask).
     """
@@ -96,7 +122,15 @@ def get_red_rect_offset(image_rgb):
     return np.array([(x_min + x_max) // 2, (y_min + y_max) // 2])
 
 def get_nifti_present_labels(path: str, cap: int = 5000)-> list[int]:
-   
+    """Return the set of unique integer labels present in a NIfTI file.
+
+    Args:
+        path: Path to the ``.nii`` / ``.nii.gz`` file.
+        cap: Ignore label values above this threshold (avoids noise).
+
+    Returns:
+        A set of integer labels, or ``None`` on failure.
+    """
     try:
         if path is not None or data is None:
             import nibabel as nib
@@ -180,7 +214,17 @@ def add_scalebar(qimg: QImage, zooms, ax) -> QImage:
 
 
 def get_max_slice_thinckness(path: str):
-    
+    """Return the smallest bounding-box dimension of an STL/VTK mesh.
+
+    This gives the maximum sensible slice thickness for the mesh — slicing
+    along the smallest axis with a larger step would produce no slices.
+
+    Args:
+        path: Path to an ``.stl`` or ``.vtk`` mesh file.
+
+    Returns:
+        The smallest extent (mm) or ``None`` for unsupported formats.
+    """
     ext = Path(path).suffix.lower()
     mesh = pv.read(str(path))
 
@@ -233,6 +277,16 @@ def get_max_slice_thinckness(path: str):
 
 
 def slice_at(mesh: pv.DataSet, Slice_direction: str, s: float):
+    """Compute the slicing normal and origin for a PyVista mesh.
+
+    Args:
+        mesh: Any PyVista dataset (will be converted to PolyData if needed).
+        Slice_direction: ``"X"``, ``"Y"``, or ``"Z"``.
+        s: Position along the slice axis.
+
+    Returns:
+        Tuple of ``(normal, origin)`` ready for ``mesh.slice()``.
+    """
     # ensure polygonal surface
     if not isinstance(mesh, pv.PolyData):
         mesh = mesh.extract_surface()
@@ -253,8 +307,22 @@ def slice_at(mesh: pv.DataSet, Slice_direction: str, s: float):
     return normal, origin
 
 def make_scale_cube(Slice_direction: str, cube_len: float, origin, s: float, offset: float = 50.0) -> pv.PolyData:
+    """Create a thin red reference cube for scale calibration in renders.
 
-    # choose thin axis and translation vect
+    The cube is placed next to the slice cross-section.  Its known side length
+    (``cube_len``) is later detected in the screenshot to compute mm-per-pixel.
+
+    Args:
+        Slice_direction: ``"X"``, ``"Y"``, or ``"Z"``.
+        cube_len: Side length of the cube face parallel to the slice plane.
+        origin: Mesh center ``(x, y, z)``.
+        s: Current slice position along the slice axis.
+        offset: Translation away from the mesh centre to avoid overlap.
+
+    Returns:
+        A ``pv.PolyData`` cube positioned beside the slice.
+    """
+    # choose thin axis and translation vector
     if Slice_direction == "X":
         c = (s, origin[1], origin[2])
         cube = pv.Cube(center = c, x_length=0.01, y_length=cube_len, z_length=cube_len)

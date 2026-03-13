@@ -1,4 +1,18 @@
-# measurements_stl.py
+"""STL mesh measurement functions for FetoMorph.
+
+Pipeline: STL mesh → PyVista off-screen slice renders → OpenCV contour
+analysis.  A red reference cube (10 % of Y extent) is rendered alongside
+each cross-section and detected in the screenshot to calibrate mm/px.
+
+Red-cube contours are excluded from brain measurements via
+``contours_exclude`` so they don't pollute area / perimeter values.
+
+Unit conversions:
+    * ``/1000``: mm³ → cm³  (volume)
+    * ``/100``:  mm² → cm²  (surface area)
+    * ``/10``:   mm  → cm   (depth)
+"""
+
 from deps import *
 import pyvista as pv
 from helpers.Helpers import compute_kernel_convex, contours_exclude, clac_scale, get_red_rect_offset, make_scale_cube
@@ -13,6 +27,23 @@ def compute_stl_allmarks(
     min_contour_area: float = 20.0,
     kernel_size: int = 5,
     slice_thickness: float = 0.5):
+    """Compute all hallmarks (volume, area, GI, sulci depths) from an STL mesh.
+
+    Slices the mesh along Y, renders each cross-section with a red scale
+    cube, then runs contour analysis on the screenshots.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the ``.stl`` file.
+        out_dir: Output directory for slice PNGs and Excel.
+        min_contour_area: Minimum contour area (pixels) to keep.
+        kernel_size: Morph-close kernel diameter for outer contour.
+        slice_thickness: Distance between slices (mm).
+
+    Returns:
+        Tuple of ``(label, dims_cm, area_cm2, volume_cm3, GI, depths_cm,
+        saved_pngs, valid_slices)``.
+    """
     # --- Load mesh
     
     dic = check_brain(file_path)
@@ -56,18 +87,19 @@ def compute_stl_allmarks(
     
     print(f"[STL All Hallmarks] Temp output dir: {out_dir}")
 
-    # --- Screenshot resolution via target mm/px spacing
+    # --- Screenshot resolution via target mm/px spacing ---
+    # pixel_spacing controls render resolution: 0.1 mm/px gives ~10 px per mm.
     pixel_spacing = 0.1  # mm per pixel
     image_width = int(np.clip(np.ceil(brain_dim[0] / pixel_spacing), 64, 4096))
     image_height = int(np.clip(np.ceil(brain_dim[2] / pixel_spacing), 64, 4096))
     window_size = (image_width, image_height)
 
-    # --- Camera (look along +Y onto XZ)
+    # --- Camera: positioned along +Y, looking at the XZ plane ---
     center = [(x_min + x_max) / 2.0, (y_min + y_max) / 2.0, (z_min + z_max) / 2.0]
     cam_position = [
-        (center[0], y_max + 100.0, center[2]),  # camera position
-        (center[0], center[1], center[2]),      # focal point
-        (0.0, 0.0, 1.0),                        # view up
+        (center[0], y_max + 100.0, center[2]),  # camera sits 100 mm beyond Y-max
+        (center[0], center[1], center[2]),       # focal point = mesh centre
+        (0.0, 0.0, 1.0),                         # Z-up
     ]
 
     saved_pngs: list[str] = []
@@ -79,10 +111,10 @@ def compute_stl_allmarks(
     sum_outer_mm = 0.0
     sum_area = 0.0
 
-    # --- Use a context manager so the plotter is *guaranteed* to be closed safely
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
     p.camera_position = cam_position
+    # Red reference cube side length = 10% of Y extent, used for scale calibration.
     cube_len = max(1e-6, brain_dim[1] / 10.0)
     max_dim =  max(brain_dim[0],brain_dim[2])
     for idx, y in enumerate(slice_positions):
@@ -238,13 +270,24 @@ def compute_stl_lGI(
     min_contour_area: float = 20.0,
     kernel_size: int = 5,
     slice_thickness: float = 0.5,
-    build_solid: bool = False,  # set True if you want the extruded solid (may be crashy on some macOS stacks)
+    build_solid: bool = False,
 ):
-    """
-    Compute a slice-based LGI proxy from an STL surface using off-screen PyVista rendering.
+    """Compute the gyrification index (GI) from an STL mesh via slice rendering.
+
+    GI = total inner perimeter / total outer perimeter across all Y slices.
+    Optionally builds an extruded 3-D solid from the outer contours.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the ``.stl`` file.
+        out_dir: Output directory.
+        min_contour_area: Minimum contour area (pixels) to keep.
+        kernel_size: Morph-close kernel diameter.
+        slice_thickness: Distance between slices (mm).
+        build_solid: If True, extrude outer contours into a solid mesh.
 
     Returns:
-        GI_total (float), saved_pngs (list[str]), valid_slices (list[int])
+        Tuple of ``(label, dims_cm, GI_total, saved_pngs, valid_slices)``.
     """
     
     dic = check_brain(file_path)
@@ -464,6 +507,18 @@ def compute_stl_volume(
     out_dir: str,
     min_contour_area: float = 20.0,
     slice_thickness: float = 0.5):
+    """Compute brain volume (cm³) from an STL mesh by integrating slice cross-section areas.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the ``.stl`` file.
+        out_dir: Output directory.
+        min_contour_area: Minimum contour area (pixels) to keep.
+        slice_thickness: Distance between slices (mm).
+
+    Returns:
+        Tuple of ``(label, dims_cm, volume_cm3, saved_pngs, valid_slices)``.
+    """
     # --- Load mesh
     
     dic = check_brain(file_path)
@@ -632,6 +687,21 @@ def compute_stl_area(
     out_dir: str,
     min_contour_area: float = 20.0,
     slice_thickness: float = 0.5):
+    """Compute brain surface area (cm²) from an STL mesh.
+
+    Sums inner-contour perimeters across Y slices and multiplies by
+    effective slice thickness.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the ``.stl`` file.
+        out_dir: Output directory.
+        min_contour_area: Minimum contour area (pixels) to keep.
+        slice_thickness: Distance between slices (mm).
+
+    Returns:
+        Tuple of ``(label, dims_cm, area_cm2, saved_pngs, valid_slices)``.
+    """
     # --- Load mesh
     
     dic = check_brain(file_path)
@@ -803,6 +873,18 @@ def compute_stl_sulci_depth(
     out_dir: str,
     min_contour_area: float = 20.0,
     slice_thickness: float = 0.5):
+    """Compute sulci depths from convexity defects across STL mesh slices.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the ``.stl`` file.
+        out_dir: Output directory.
+        min_contour_area: Minimum contour area (pixels) to keep.
+        slice_thickness: Distance between slices (mm).
+
+    Returns:
+        Tuple of ``(label, dims_cm, depths_mm, saved_pngs, valid_slices)``.
+    """
     # --- Load mesh
     
     dic = check_brain(file_path)

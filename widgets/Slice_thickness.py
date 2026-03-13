@@ -1,8 +1,29 @@
+"""Slice thickness dialog widget.
+
+Provides a slider-and-spinbox dialog for choosing a floating-point slice
+thickness value, mapping a continuous range onto an integer slider for
+smooth interaction.
+"""
+
 from deps import *
 
 class SilceThicknessDialog(QDialog):
-    """Pick a slice thickness (float)"""
+    """Dialog for selecting a slice thickness as a floating-point value.
+
+    An integer QSlider is internally mapped to the float range
+    [minimum, maximum] with the given step size.
+    """
+
     def __init__(self, parent=None, initial: float = 0.5, minimum: float = 0.001, maximum: float = 10.0, step: float = 0.005):
+        """Initialise the slice thickness dialog.
+
+        Args:
+            parent: Parent widget.
+            initial: Starting thickness value.
+            minimum: Lower bound of the allowed range.
+            maximum: Upper bound of the allowed range.
+            step: Step size for the slider and spin box.
+        """
         super().__init__(parent)
         self.setWindowTitle("Set Slice Thickness")
         self.setModal(True)
@@ -68,9 +89,11 @@ class SilceThicknessDialog(QDialog):
 
     # helpers
     def _to_int(self, val: float) -> int:
+        """Convert a float value to its integer slider position."""
         return int(round((float(val) - self._min) / self._step))
 
     def _to_float(self, i: int) -> float:
+        """Convert an integer slider position back to its float value."""
         return self._min + i * self._step
 
     @staticmethod

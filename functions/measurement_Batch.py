@@ -1,3 +1,11 @@
+"""Batch morphometric measurement of brain slice images.
+
+Processes a directory of 2-D slice images, extracts contours,
+computes area, perimeter, local Gyrification Index (LGI), and
+convexity-defect depths, then writes annotated PNGs and an Excel
+summary.
+"""
+
 import cv2
 import os
 import numpy as np
@@ -12,6 +20,33 @@ def process_on_images_batch(directory_path,
     kernel_size: int = 5,
     cnt_threshold: float = 20,
     unit: str = "mm"):
+    """Run morphometric analysis on every image in a directory.
+
+    For each image the function binarises it, finds external contours,
+    computes area and perimeter in physical units, derives a convex-hull
+    perimeter for LGI, and records convexity-defect depths.  Annotated
+    images are saved and all measurements are collected into an Excel
+    spreadsheet.
+
+    Args:
+        directory_path: Path to the directory containing input slice images.
+        out_dir: Root output directory; an ``image_Batch`` sub-folder is
+            created inside it for annotated PNGs.
+        pixel_size: Physical size of one pixel in the chosen unit.
+            Defaults to 0.01.
+        kernel_size: Size of the morphological closing kernel used when
+            computing the convex contour. Defaults to 5.
+        cnt_threshold: Minimum contour area (in pixels) to keep a contour.
+            May be increased automatically if the LGI ratio is below 1.
+            Defaults to 20.
+        unit: Physical unit label written to the Excel output.
+            Defaults to "mm".
+
+    Returns:
+        A tuple of (valid_slices, saved_pngs) where *valid_slices* is a
+        list of integer indices of successfully processed images and
+        *saved_pngs* is a list of file paths to the annotated PNG files.
+    """
     
     sheet1 = []
     valid_slices = []

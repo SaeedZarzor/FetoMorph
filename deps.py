@@ -1,4 +1,9 @@
-# deps.py  — central imports for the app
+"""Central dependency imports for FetoMorph.
+
+Every module in the project does ``from deps import *`` so that Qt, VTK,
+NumPy, OpenCV and other heavy libraries are imported once and made
+available everywhere under short, consistent names.
+"""
 
 # ---------------- Qt ----------------
 from PySide6 import QtCore, QtGui, QtWidgets

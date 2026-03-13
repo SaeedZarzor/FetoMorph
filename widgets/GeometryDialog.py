@@ -1,12 +1,37 @@
+"""Mesh geometry dialog with interactive 3-D preview.
+
+Lets the user inspect and rescale the X/Y/Z dimensions of a loaded mesh,
+choose a slicing direction and measurement unit, and preview the result
+in an embedded PyVista viewer.
+"""
+
 # add to imports
 from deps import *
 from pyvistaqt import QtInteractor
 import pyvista as pv
 
 class GeometryDialogWithAspect(QDialog):
+    """Dialog for editing mesh geometry dimensions with a live 3-D preview.
+
+    The three axis lengths are kept in sync so that changing one rescales
+    the others proportionally.  A PyVista interactor on the right shows
+    the mesh with an optional axis highlight for the chosen slice direction.
+    """
+
     UNIT_FACTORS = {"mm": 1.0, "µm": 1e-3, "um": 1e-3, "cm": 10.0, "m": 1000.0}
 
     def __init__(self, parent=None, mesh =  pv.DataSet, Lx=1.0, Ly=1.0, Lz=1.0, unit="mm", slice_dir="Y"):
+        """Initialise the geometry dialog.
+
+        Args:
+            parent: Parent widget.
+            mesh: PyVista mesh dataset to display and measure.
+            Lx: Initial X-axis length in the given unit.
+            Ly: Initial Y-axis length in the given unit.
+            Lz: Initial Z-axis length in the given unit.
+            unit: Measurement unit string (e.g. "mm", "µm").
+            slice_dir: Initial slicing axis ("X", "Y", or "Z").
+        """
         super().__init__(parent)
          
         self.setWindowTitle("Mesh Geometry")
@@ -81,6 +106,7 @@ class GeometryDialogWithAspect(QDialog):
 
         
     def _init_view(self):
+        """Set up the 3-D preview with mesh, axes, and bounding box."""
         self.plot.clear()
         self.plot.add_mesh(self.mesh, style="surface", color='blue', show_edges=True, opacity=1.0)
         self.plot.add_axes(interactive=False)  # XYZ triad in corner
@@ -111,7 +137,7 @@ class GeometryDialogWithAspect(QDialog):
 #            self.plot.add_mesh(pv.Arrow((cx, cy, cz), (0, 0, 1), scale=s), color="blue", name="axis_z")
 
     def _highlight_axis(self, axis: str):
-        # brighten selected axis, dim others
+        """Brighten the selected axis arrow and dim the others."""
         axis = axis.upper()
         for k in ("X", "Y", "Z"):
             actor = self.plot.renderer._actors.get(f"axis_{k}")
@@ -122,6 +148,7 @@ class GeometryDialogWithAspect(QDialog):
         self.plot.render()
         
     def _setup_len_box(self, sb: QDoubleSpinBox, val: float, unit: str):
+        """Configure a length spin box with appropriate range and suffix."""
         sb.setDecimals(4)
         sb.setRange(1e-9, 1e12)
         sb.setSingleStep(max(val * 0.01, 0.01))
@@ -129,6 +156,7 @@ class GeometryDialogWithAspect(QDialog):
         sb.setSuffix(f" {unit}")
 
     def _scaled_update(self, which: str, new_val: float):
+        """Proportionally update all axes when one value changes."""
         if self._blocking:
             return
         s = self.UNIT_FACTORS.get(self.unit_cb.currentText(), 1.0)
@@ -144,6 +172,7 @@ class GeometryDialogWithAspect(QDialog):
         self._apply(self._Lx0_mm * scale / s, self._Ly0_mm * scale / s, self._Lz0_mm * scale / s)
 
     def _apply(self, x, y, z):
+        """Set all three spin box values without triggering re-entrant updates."""
         self._blocking = True
         self.x_sb.setValue(x)
         self.y_sb.setValue(y)
@@ -151,6 +180,7 @@ class GeometryDialogWithAspect(QDialog):
         self._blocking = False
 
     def _unit_changed(self, new_unit: str):
+        """Convert displayed values when the measurement unit changes."""
         new_f = self.UNIT_FACTORS.get(new_unit, 1.0)
         old_f = self._unit_mm_factor
         if new_f == old_f:
@@ -173,6 +203,11 @@ class GeometryDialogWithAspect(QDialog):
         self._apply(Lx_ori / s, Ly_ori / s, Lz_ori / s)
 
     def values(self) -> tuple[tuple[float, float, float], str, str]:
+        """Return the current geometry settings.
+
+        Returns:
+            A tuple of ((Lx, Ly, Lz), slice_direction, unit).
+        """
         return (
             (self.x_sb.value(), self.y_sb.value(), self.z_sb.value()),
             self.dir_cb.currentText().upper(),

@@ -1,3 +1,18 @@
+"""Multi-objective optimisation of brain morphometric slices using NSGA-II/III.
+
+Given a DataFrame of per-slice measurements (GI, sulci counts, depths, area,
+cell density), finds Pareto-optimal slices that best satisfy the user's
+selected objectives and constraints.
+
+Key concepts:
+    * **pymoo minimises** by default — objectives that should be *maximised*
+      are sign-flipped (``-val``) before passing to the solver.
+    * ``obj_to_column`` maps internal objective names (e.g. ``"perimeter_rate"``)
+      to the DataFrame column names (e.g. ``"LGI"``).
+    * Constraints are expressed as ``g(x) ≤ 0``: e.g.
+      ``cell_density - max_cell_density ≤ 0``.
+"""
+
 from deps import *
 from pymoo.core.problem import Problem
 from pymoo.algorithms.moo.nsga2 import NSGA2
@@ -13,6 +28,13 @@ from pymoo.visualization.scatter import Scatter
 from itertools import combinations
 
 class MyProblem(Problem):
+    """pymoo Problem wrapper that maps DataFrame rows to objective values.
+
+    Each decision variable is a continuous index into the DataFrame; the
+    ``_evaluate`` method floors it to an integer row index and looks up
+    the requested metric columns.
+    """
+
     def __init__(self, data, objectives = None, constraints = None, objective_directions=None):
         self.df = data.copy()
         self.objectives = objectives or []
@@ -40,7 +62,8 @@ class MyProblem(Problem):
 
 
     def _evaluate(self, x, out, *args, **kwargs):
-        # Umwandlung der kontinuierlichen Variablen in Ganzzahlen-Indizes
+        """Evaluate objectives and constraints for a population of solutions."""
+        # Convert continuous decision variables to integer DataFrame row indices.
         indices = np.floor(x).astype(int).flatten()
         indices = np.clip(indices, 0, len(self.df) - 1)
 
@@ -70,7 +93,7 @@ class MyProblem(Problem):
                 continue
             direction = str(self.objective_directions.get(obj, "maximize")).lower()
             val = objective_values[obj]
-            # pymoo minimizes by default.
+            # pymoo minimises by default — flip sign for maximisation objectives.
             F.append(-val if direction == "maximize" else val)
 
         out["F"] = np.column_stack(F)
@@ -102,6 +125,22 @@ def optimization(
     algorithms="NSGA-III",
     n_gen: int = 200,
 ):
+    """Run NSGA-II or NSGA-III multi-objective optimisation on measurement data.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        df1: DataFrame with one row per slice and metric columns.
+        out_dir: Directory for output Excel and scatter plots.
+        objectives: List of objective names (keys of ``obj_to_column``).
+        objective_directions: Dict mapping objective → ``"maximize"``/``"minimize"``.
+        constraints: Dict of upper-bound constraints, e.g.
+            ``{"max_cell_density": 2500, "number_SulciCount": 2}``.
+        algorithms: ``"NSGA-II"`` or ``"NSGA-III"``.
+        n_gen: Number of generations (termination criterion).
+
+    Returns:
+        Tuple of ``(pareto_df, scatter_pngs, n_optimal)``.
+    """
     if df1 is None or df1.empty:
         return None, [], 0
 
@@ -146,7 +185,7 @@ def optimization(
         ref_dirs = get_reference_directions("das-dennis", len(objectives), n_partitions=12)
         pop_size = max(adaptive_pop_size, len(ref_dirs))
 
-        #  NSGA-III Algorithmus definieren
+        # Define NSGA-III algorithm with Das-Dennis reference directions.
         algorithm = NSGA3(
             pop_size=pop_size,
             ref_dirs=ref_dirs,
@@ -230,7 +269,9 @@ def optimization(
     # Save scatter plots for every pair of selected objectives.
     os.makedirs(out_dir, exist_ok=True)
     
-    # Map objectives to their corresponding DataFrame columns
+    # Map internal objective names → DataFrame column names.
+    # This indirection allows the UI to use descriptive names while the
+    # DataFrame columns match the measurement pipeline output.
     obj_to_column = {
         "perimeter_rate": "LGI",
         "cell_density": "CellDensity",

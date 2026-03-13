@@ -1,3 +1,11 @@
+"""Excel ingestion and column normalisation for FetoMorph optimisation.
+
+Reads one or more Excel files produced by the measurement pipelines,
+normalises metric column names (handles typos and variant spellings),
+strips metadata rows, and concatenates the results into a single
+``pandas.DataFrame`` ready for the NSGA optimiser.
+"""
+
 from deps import *
 
 
@@ -24,6 +32,7 @@ _ALIASES = {
 
 
 def _norm_col_name(name: str) -> str:
+    """Lowercase, strip whitespace/punctuation for fuzzy column matching."""
     return (
         str(name)
         .strip()
@@ -36,6 +45,7 @@ def _norm_col_name(name: str) -> str:
 
 
 def _normalize_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename columns to canonical metric names using ``_ALIASES``."""
     rename_map = {}
     for col in df.columns:
         key = _norm_col_name(col)
@@ -48,6 +58,7 @@ def _normalize_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_max_sulcicount(df: pd.DataFrame):
+    """Return the maximum SulciCount value in *df*, or ``None``."""
     if "SulciCount" not in df.columns:
         return None
     vals = pd.to_numeric(df["SulciCount"], errors="coerce").dropna()
@@ -57,6 +68,7 @@ def get_max_sulcicount(df: pd.DataFrame):
 
 
 def get_max_celldensity(df: pd.DataFrame):
+    """Return the maximum CellDensity value in *df*, or ``None``."""
     if "CellDensity" not in df.columns:
         return None
     vals = pd.to_numeric(df["CellDensity"], errors="coerce").dropna()
@@ -67,6 +79,18 @@ def get_max_celldensity(df: pd.DataFrame):
 
 
 def conver_excel(file_paths: list[str]) -> tuple[pd.DataFrame, int | None, float | None]:
+    """Load and concatenate measurement Excel files for optimisation.
+
+    Strips metadata rows (``PixelSize:``, etc.), normalises column names,
+    and returns the merged DataFrame along with the maximum SulciCount
+    and CellDensity values found (used as constraint upper bounds).
+
+    Args:
+        file_paths: List of ``.xlsx`` paths produced by FetoMorph.
+
+    Returns:
+        Tuple of ``(df, max_sulci_count, max_cell_density)``.
+    """
     df = {}
     ignore_values = ["PixelSize:", "PixelSizeUnits:", "KernelSize:"]
 

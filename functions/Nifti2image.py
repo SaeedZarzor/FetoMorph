@@ -1,4 +1,10 @@
-# save as scale_bar_tools.py (requires: pip install opencv-python numpy)
+"""Image post-processing utilities for NIfTI-derived slice images.
+
+Provides background cleanup (removing grey/black backgrounds while
+preserving coloured regions), automatic scale-bar detection, and
+scale-bar rendering.  The high-level helper ``nifti_slice_to_image``
+chains these steps into a single call.
+"""
 
 from __future__ import annotations
 import cv2
@@ -15,9 +21,23 @@ def clean_background_keep_colored(
     v_thresh: int = 40,
     unify_color: Optional[Tuple[int, int, int]] = None  # (B, G, R)
 ) -> np.ndarray:
-    """
-    Return a copy of `img_bgr` where non-colored pixels become white.
-    Optionally paint all colored pixels the same color.
+    """Replace non-coloured pixels with white, preserving coloured regions.
+
+    Pixels with low saturation or very dark value are treated as
+    background and set to white.  Optionally, all surviving coloured
+    pixels can be repainted to a single uniform colour.
+
+    Args:
+        img_bgr: Input image in BGR colour space.
+        s_thresh: Minimum HSV saturation to consider a pixel coloured.
+            Defaults to 60.
+        v_thresh: Minimum HSV value to consider a pixel coloured.
+            Defaults to 40.
+        unify_color: If provided, a (B, G, R) tuple used to repaint
+            every coloured pixel with a single colour.
+
+    Returns:
+        A copy of the image with background pixels set to white.
     """
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
     S, V = hsv[:, :, 1], hsv[:, :, 2]
@@ -37,10 +57,19 @@ def clean_background_keep_colored(
 # ---------- Scale-bar detection & measurement ----------
 
 def detect_scale_bar_length(img_bgr: np.ndarray) -> tuple[Optional[int], Optional[Tuple[int,int,int,int]]]:
-    """
-    Detect the original scale bar and return (length_in_pixels, bounding_box),
-    or (None, None) if not found.
-    Heuristics: near-white, bottom region, long & thin, right-biased.
+    """Detect the original scale bar in an image and measure its length.
+
+    Uses heuristics based on near-white colour, position in the bottom
+    region, elongated aspect ratio, and right-side bias to identify the
+    most likely scale-bar component.
+
+    Args:
+        img_bgr: Input image in BGR colour space.
+
+    Returns:
+        A tuple of (length_in_pixels, bounding_box) where
+        *bounding_box* is (x, y, width, height), or (None, None) if no
+        scale bar is found.
     """
     h, w = img_bgr.shape[:2]
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
@@ -103,10 +132,29 @@ def draw_new_scale_bar(
     font_scale_ratio: float = 0.9,
     font_thickness: int = 2
 ) -> np.ndarray:
-    """
-    Draw a crisp horizontal bar with `length_px` pixels.
-      - where='bottom_right' or (x_left, y_bottom) for custom position.
-      - thickness & margins scale with image size.
+    """Draw a horizontal scale bar onto an image.
+
+    Bar thickness and margins scale automatically with the smaller image
+    dimension.
+
+    Args:
+        img_bgr: Input image in BGR colour space.
+        length_px: Desired bar length in pixels.
+        where: Placement hint. ``"bottom_right"`` (default) or an
+            ``(x_left, y_bottom)`` tuple for a custom position.
+        color: Bar colour in BGR. Defaults to black ``(0, 0, 0)``.
+        thickness_ratio: Bar thickness as a fraction of the smaller
+            image dimension. Defaults to 0.007.
+        margin_ratio: Margin from image edges as a fraction of the
+            smaller dimension. Defaults to 0.08.
+        text: Optional label drawn below the bar (e.g. ``"25 mm"``).
+        font_scale_ratio: Scaling factor applied to the font size
+            relative to bar thickness. Defaults to 0.9.
+        font_thickness: Thickness of the rendered text. Defaults to 2.
+
+    Returns:
+        A copy of the image with the scale bar (and optional label)
+        drawn on it.
     """
     out = img_bgr.copy()
     h, w = out.shape[:2]
@@ -157,13 +205,28 @@ def nifti_slice_to_image(
     smooth: Optional[str] = "median",   # "gaussian", "median", "bilateral"
     smooth_strength: int = 5        # kernel size or strength parameter
 ) -> int:
-    """
-    1) Read the image (resolution preserved).
-    2) Remove gray/black background -> white; optionally unify colored region.
-    3) Measure the existing scale bar length (or set as a fraction of width).
-    4) Draw a new scale bar of that length at the bottom-right with optional text.
+    """Clean a slice image, optionally smooth it, and redraw the scale bar.
 
-    Returns the pixel length used for the new bar.
+    Pipeline: read the image, replace grey/black background with white
+    (optionally unifying all coloured pixels), detect the existing
+    scale bar length, apply optional spatial smoothing, and draw a new
+    scale bar at the bottom-right corner.
+
+    Args:
+        in_path: Path to the input image file.
+        out_path: Path where the processed image will be saved.
+        unify_color: If provided, a (B, G, R) tuple to repaint all
+            coloured pixels with a single colour.
+        label_text: Optional text label rendered below the scale bar.
+        scale_bar: Whether to draw a new scale bar. Defaults to True.
+        smooth: Smoothing method to apply after background cleanup.
+            One of ``"gaussian"``, ``"median"``, ``"bilateral"``, or
+            ``None`` to skip. Defaults to ``"median"``.
+        smooth_strength: Kernel size or strength parameter for the
+            chosen smoothing filter. Defaults to 5.
+
+    Returns:
+        The pixel length used for the new scale bar.
     """
     img = cv2.imread(in_path, cv2.IMREAD_COLOR)
     if img is None:

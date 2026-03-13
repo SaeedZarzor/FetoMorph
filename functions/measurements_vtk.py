@@ -1,4 +1,17 @@
-# measurements_vtk.py
+"""VTK mesh measurement functions for FetoMorph.
+
+Same render-and-measure pipeline as the STL module, but adapted for VTK
+meshes that may use arbitrary model units.  A ``Physical_dim`` parameter
+supplies the real-world dimensions so that a ``mesh_dim_scaled`` factor
+converts model units → physical mm.
+
+Key differences from the STL pipeline:
+    * ``BINARY_THRESHOLD_VTK = 150`` (vs 200 for STL) because VTK renders
+      use a black background instead of white.
+    * Slice direction is configurable (X / Y / Z) via cyclic axis indexing:
+      ``pre_axis = (axis_index - 1) % 3``, ``next_axis = (axis_index + 1) % 3``.
+"""
+
 from deps import *
 import pyvista as pv
 from helpers.Helpers import compute_kernel_convex, contours_exclude, clac_scale, get_red_rect_offset, slice_at, make_scale_cube
@@ -18,6 +31,22 @@ def compute_vtk_allmarks(
     Physical_dim: Sequence[int] | None = None,
     unit: str = "mm",
     slice_thickness: float = 0.5):
+    """Compute all hallmarks (area, volume, GI, sulci depths) from a VTK mesh.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the ``.vtk`` file.
+        out_dir: Output directory.
+        min_contour_area: Minimum contour area (pixels) to keep.
+        kernel_size: Morph-close kernel diameter.
+        Slice_direction: Axis to slice along.
+        Physical_dim: Real-world ``[X, Y, Z]`` dimensions for unit scaling.
+        unit: Label for output units.
+        slice_thickness: Distance between slices in model units.
+
+    Returns:
+        Tuple of ``(area, volume, GI, depths, saved_pngs, valid_slices)``.
+    """
     # --- Load mesh
     mesh = pv.read(str(file_path))
     print(f"[VTK All Hallmarks] Loaded mesh: {mesh}")
@@ -25,6 +54,8 @@ def compute_vtk_allmarks(
     # --- Bounds / dims (mm)
     x_min, x_max, y_min, y_max, z_min, z_max = mesh.bounds
     mesh_dim = [x_max - x_min, y_max - y_min, z_max - z_min]
+    # Scale factor: converts model units to physical mm per axis.
+    # E.g. if the mesh is 50 units wide but physically 100 mm, scale = 2.0.
     mesh_dim_scaled = np.array(Physical_dim) / np.array(mesh_dim)
 
     axis_bounds = {
@@ -33,19 +64,19 @@ def compute_vtk_allmarks(
         "Z": (z_min, z_max),
     }
 
-    # --- Slice positions along Y
+    # --- Slice positions along the chosen axis
     if slice_thickness <= 0:
         slice_thickness = 0.05
-        
+
     low, high = axis_bounds[Slice_direction]
     slice_positions = np.arange(low, high, slice_thickness)
-        
+
     N = len(slice_positions)
     if N == 0:
         print(f"[VTK All Hallmarks] No slices to process (thickness too large vs. {Slice_direction} range).")
         return 0.0, [], []
 
-    # Effective thickness to exactly span Y-extent
+    # Effective slice thickness in physical units (model units × scale).
     axis_index = {"X": 0, "Y": 1, "Z": 2}.get(Slice_direction)
     slice_thickness_eff = mesh_dim[axis_index] / N
     slice_thickness_eff *= mesh_dim_scaled[axis_index]
@@ -69,58 +100,57 @@ def compute_vtk_allmarks(
     sum_inner_mm = 0.0
     sum_outer_mm = 0.0
     sum_area = 0.0
-    
-    # --- Use a context manager so the plotter is *guaranteed* to be closed safely
+
+    # VTK renders use a black background → threshold is BINARY_THRESHOLD_VTK (150)
+    # instead of the 200 used for white-background STL renders.
     p = pv.Plotter(off_screen=True)
     p.set_background("black")
-    
+
+    # Cyclic axis indexing: for a given slice axis, pre_axis and next_axis
+    # give the two in-plane axes used for plane sizing and cube placement.
     pre_axis = (axis_index - 1) % 3
     next_axis = (axis_index + 1) % 3
     cube_len = max(1e-6, mesh_dim[0] / 10.0)
 
     for idx, k in enumerate(slice_positions):
-        # Cross-section slice
         normal, origin = slice_at(mesh, Slice_direction, k)
         section = mesh.slice(normal=normal,origin=origin)
-        
+
         if section.n_points == 0:
             continue
 
-        # Red cube reference (10% of X extent)
         scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
-        
+
         plane = pv.Plane(center=origin,
-                 direction=normal,  # plane normal
-                 i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,  # side lengths
-                 i_resolution=1, j_resolution=1)        # Render: section + scale cube
+                 direction=normal,
+                 i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,
+                 i_resolution=1, j_resolution=1)
         p.clear()
         p.add_mesh(section, color="#ffffff", opacity=1)
         p.add_mesh(scale_cube, color="red")
+        # Select camera view matching the slice plane orientation.
         {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]()
 
-        # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
-        # Compute mm/px scale from the red cube
+        # Scale cube is rendered in physical mm (cube_len × mesh_dim_scaled[0]).
         mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[0])
 
-        # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
-        # Binary for contours
+        # Use BINARY_THRESHOLD_VTK (150) for black-background VTK renders.
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
 
-        # Inner contours: exclude red ref + area filter
+        # Exclude red reference-cube contours from brain measurements.
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
         cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
 
-        # Outer contours via morph close, exclude red + area filter
         kernel = compute_kernel_convex(max(1, int(kernel_size)))
         closed = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel)
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -128,7 +158,6 @@ def compute_vtk_allmarks(
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
         cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), 1)
 
-        # Perimeters (mm)
         area_perim_px  = sum(cv2.contourArea(c)     for c in inner_filtered)
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
         outer_perim_px = sum(cv2.arcLength(c, True) for c in outer_filtered)
@@ -140,11 +169,12 @@ def compute_vtk_allmarks(
         depth = []
         if inner_filtered:
             for cnt in inner_filtered:
-                hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)  # Compute convex hull
+                hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
                 if hull is not None and np.all(np.diff(hull.ravel()) > 0) and len(hull) >= 3 and len(cnt) > 3:
                     defects = cv2.convexityDefects(cnt, hull)
                     if defects is not None:
                         for i in range(defects.shape[0]):
+                            # s=start, e=end, f=farthest, d=depth (8.8 fixed-point)
                             s, e, f, d = defects[i, 0]
                             start = tuple(cnt[s][0])
                             end = tuple(cnt[e][0])
@@ -226,6 +256,22 @@ def compute_vtk_lGI(
     Physical_dim: Sequence[int] | None = None,
     unit: str = "mm",
     slice_thickness: float = 0.5):
+    """Compute the gyrification index (GI) from a VTK mesh.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the ``.vtk`` file.
+        out_dir: Output directory.
+        min_contour_area: Minimum contour area (pixels) to keep.
+        kernel_size: Morph-close kernel diameter.
+        Slice_direction: Axis to slice along.
+        Physical_dim: Real-world ``[X, Y, Z]`` dimensions for unit scaling.
+        unit: Label for output units.
+        slice_thickness: Distance between slices in model units.
+
+    Returns:
+        Tuple of ``(GI_total, saved_pngs, valid_slices)``.
+    """
     # --- Load mesh
     
     mesh = pv.read(str(file_path))
@@ -394,6 +440,21 @@ def compute_vtk_volume(
     Physical_dim: Sequence[int] | None = None,
     unit: str = "mm",
     slice_thickness: float = 0.5):
+    """Compute volume from a VTK mesh by integrating slice cross-section areas.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the ``.vtk`` file.
+        out_dir: Output directory.
+        min_contour_area: Minimum contour area (pixels) to keep.
+        Slice_direction: Axis to slice along.
+        Physical_dim: Real-world ``[X, Y, Z]`` dimensions for unit scaling.
+        unit: Label for output units.
+        slice_thickness: Distance between slices in model units.
+
+    Returns:
+        Tuple of ``(volume, saved_pngs, valid_slices)``.
+    """
     # --- Load mesh
     
         
@@ -551,6 +612,21 @@ def compute_vtk_area(
     Physical_dim: Sequence[int] | None = None,
     unit: str = "mm",
     slice_thickness: float = 0.5):
+    """Compute surface area from a VTK mesh by summing slice perimeters.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the ``.vtk`` file.
+        out_dir: Output directory.
+        min_contour_area: Minimum contour area (pixels) to keep.
+        Slice_direction: Axis to slice along.
+        Physical_dim: Real-world ``[X, Y, Z]`` dimensions for unit scaling.
+        unit: Label for output units.
+        slice_thickness: Distance between slices in model units.
+
+    Returns:
+        Tuple of ``(area, saved_pngs, valid_slices)``.
+    """
     # --- Load mesh
     
         
@@ -705,6 +781,21 @@ def compute_vtk_sulci_depth(
     Physical_dim: Sequence[int] | None = None,
     unit: str = "mm",
     slice_thickness: float = 0.5):
+    """Compute sulci depths from convexity defects across VTK mesh slices.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the ``.vtk`` file.
+        out_dir: Output directory.
+        min_contour_area: Minimum contour area (pixels) to keep.
+        Slice_direction: Axis to slice along.
+        Physical_dim: Real-world ``[X, Y, Z]`` dimensions for unit scaling.
+        unit: Label for output units.
+        slice_thickness: Distance between slices in model units.
+
+    Returns:
+        Tuple of ``(depths, saved_pngs, valid_slices)``.
+    """
     # --- Load mesh
     
         

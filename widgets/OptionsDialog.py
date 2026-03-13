@@ -1,7 +1,24 @@
+"""Image processing options dialog.
+
+Collects user preferences for colour unification, scale bar insertion,
+and smoothing (type and strength) before a batch processing run.
+"""
+
 from deps import *
 
 class ProcessingOptionsDialog(QtWidgets.QDialog):
+    """Dialog for configuring image processing options.
+
+    Options include colour unification of segmented regions, scale bar
+    overlay, and choice of smoothing filter with adjustable strength.
+    """
+
     def __init__(self, parent=None):
+        """Initialise the processing options dialog.
+
+        Args:
+            parent: Parent widget.
+        """
         super().__init__(parent)
         self.setWindowTitle("Processing Options")
         self.setModal(True)
@@ -72,6 +89,7 @@ class ProcessingOptionsDialog(QtWidgets.QDialog):
 
     # --- Defaults handler ---
     def set_defaults(self):
+        """Reset all options to their factory defaults."""
         self._bgr = (255, 0, 0)             # Blue in BGR
         self._update_preview()
         self.chk_unify.setChecked(True)
@@ -99,14 +117,18 @@ class ProcessingOptionsDialog(QtWidgets.QDialog):
 
     # --- Public getters ---
     def unify_color(self) -> Optional[Tuple[int,int,int]]:
+        """Return the BGR unify colour, or None if unification is disabled."""
         return self._bgr if self.chk_unify.isChecked() else None
 
     def add_scale_bar(self) -> bool:
+        """Return True if the user wants a scale bar overlay."""
         return self.chk_scalebar.isChecked()
 
     def smooth_kind(self) -> str:
+        """Return the lowercase name of the selected smoothing filter."""
         return self.cmb_smooth.currentText().lower()
 
     def smooth_strength(self) -> int:
+        """Return the smoothing strength (slider value 1--25)."""
         return self.slider_strength.value()
 

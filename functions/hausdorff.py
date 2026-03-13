@@ -1,3 +1,18 @@
+"""Hausdorff distance computation between two brain-slice contours.
+
+Workflow:
+    1. ``convert_image`` extracts contour coordinates from a brain-slice
+       image and scales them to physical units.
+    2. ``calculate_hausdorff_distance`` aligns the two point sets and
+       computes the directed and symmetric Hausdorff distances.
+
+**Why alignment is needed:** contours from different imaging modalities
+(e.g. MRI vs simulation) may be offset in pixel space even though they
+represent the same anatomy.  Alignment modes (``right_bottom``,
+``left_top``, ``centroid``) translate the first contour so that a
+reference corner or centroid matches the second.
+"""
+
 import cv2
 import numpy as np
 import os
@@ -10,12 +25,23 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 
 def _to_xy2(a):
+    """Ensure *a* is an ``(N, 2)`` float array."""
     a = np.squeeze(np.asarray(a)).astype(float)
     if a.ndim != 2 or a.shape[1] != 2:
         raise ValueError("Expected (N,2) array")
     return a
 
 def _align_points(c1, c2, mode="right_bottom"):
+    """Translate *c1* so that a reference anchor matches *c2*.
+
+    Alignment modes:
+        * ``"right_bottom"``: align maximum X and Y coordinates.
+        * ``"left_top"``:     align minimum X and Y coordinates.
+        * ``"centroid"``:     align centroids.
+
+    Returns:
+        Tuple of ``(aligned_c1, (dx, dy))``.
+    """
     if mode == "right_bottom":
         dx = c2[:,0].max() - c1[:,0].max()
         dy = c2[:,1].max() - c1[:,1].max()
@@ -34,8 +60,21 @@ def convert_image(
         image_path, out_dir,
         pixel_spacing: float = 0.01,
         min_contour_area: float =200):
+    """Extract contour coordinates from a brain-slice image.
 
-    # Load the image
+    Thresholds the image, filters contours by area, scales to physical
+    units, and saves an annotated copy.
+
+    Args:
+        image_path: Path to the image file.
+        out_dir: Directory for the annotated output image.
+        pixel_spacing: mm per pixel for coordinate scaling.
+        min_contour_area: Minimum contour area (pixels) to keep.
+
+    Returns:
+        Tuple of ``(annotated_bgr, basename, contour_coords_mm)``
+        or ``(None, None)`` if no contours found.
+    """
     image = cv2.imread(image_path)
     
     if image is None:
@@ -107,7 +146,25 @@ def calculate_hausdorff_distance(
     First_label="First", Second_label="Second",
     invert_y=True, align_mode="right_bottom",
     out_dir=None, filename="Hausdorff_distance_plot.png"):
-    
+    """Compute symmetric Hausdorff distance between two 2-D contour sets.
+
+    Optionally aligns the first contour to the second before measuring
+    (see ``_align_points`` for alignment modes).
+
+    Args:
+        contours_coords_first: ``(N, 2)`` array of the first contour.
+        contours_coords_second: ``(M, 2)`` array of the second contour.
+        First_label: Legend label for the first contour.
+        Second_label: Legend label for the second contour.
+        invert_y: If True, invert Y axis on the plot (image convention).
+        align_mode: ``"right_bottom"``, ``"left_top"``, ``"centroid"``, or
+            ``"none"`` to skip alignment.
+        out_dir: Directory to save the plot.
+        filename: Output file name.
+
+    Returns:
+        Tuple of ``(plot_rgba, hausdorff_dist, d12, d21)`` or ``(None, …)``.
+    """
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, filename)
     

@@ -1,3 +1,11 @@
+"""Aspect-fit image label with interactive measurement and selection modes.
+
+Extends QLabel to draw a pixmap with preserved aspect ratio and provides
+two interactive overlay modes: a click-drag line for scale-bar measurement
+and a rubber-band rectangle for region-of-interest selection.  Persistent
+rectangle annotations can also be added programmatically.
+"""
+
 from deps import *
 
 
@@ -9,6 +17,11 @@ class ScaledImageLabel(QLabel):
     It draws self._pix manually; QLabel's built-in pixmap is *not* used.
     """
     def __init__(self, parent=None):
+        """Initialise the scaled image label.
+
+        Args:
+            parent: Parent widget.
+        """
         super().__init__(parent)
         # general appearance/behavior
         self._pix = QPixmap()
@@ -36,16 +49,24 @@ class ScaledImageLabel(QLabel):
 
     # ---------------- public API ----------------
     def hasImage(self) -> bool:
+        """Return True if a non-null pixmap is loaded."""
         return not self._pix.isNull()
 
     def imageSize(self) -> QSize:
+        """Return the original (unscaled) size of the loaded pixmap."""
         return self._pix.size()
 
     def setImage(self, pm: QPixmap | None):
+        """Replace the displayed pixmap and trigger a repaint.
+
+        Args:
+            pm: New pixmap, or None to clear.
+        """
         self._pix = pm if pm is not None else QPixmap()
         self.update()
 
     def clearImage(self):
+        """Remove the displayed pixmap and repaint."""
         self._pix = QPixmap()
         self.update()
 
@@ -62,6 +83,7 @@ class ScaledImageLabel(QLabel):
         self.update()
 
     def cancel_scalebar_measure(self):
+        """Cancel an in-progress scalebar measurement and restore the cursor."""
         self._measure_active = False
         self._measure_p1_img = None
         self._measure_p2_img = None
@@ -83,6 +105,7 @@ class ScaledImageLabel(QLabel):
         self.setFocus()
 
     def cancel_square_selection(self):
+        """Cancel an in-progress square/rectangle selection."""
         self._sel_active = False
         if self._rubber:
             self._rubber.hide()
@@ -112,21 +135,26 @@ class ScaledImageLabel(QLabel):
         self.update()
 
     def clear_annotations(self):
+        """Remove all persistent rectangle annotations."""
         self._annots.clear()
         self.update()
 
     def remove_last_annotation(self):
+        """Remove the most recently added annotation, if any."""
         if self._annots:
             self._annots.pop()
             self.update()
     # ---------------- sizing ----------------
     def sizeHint(self) -> QSize:
+        """Return the preferred size for layout negotiation."""
         return QSize(900, 600)
 
     def hasHeightForWidth(self) -> bool:
+        """Signal that this widget uses aspect-ratio-based height."""
         return True
 
     def heightForWidth(self, w: int) -> int:
+        """Return the ideal height for the given width, preserving aspect ratio."""
         if self._pix.isNull():
             return super().heightForWidth(w)
         ar = self._pix.height() / max(1, self._pix.width())
@@ -134,6 +162,7 @@ class ScaledImageLabel(QLabel):
 
     # ---------------- painting ----------------
     def paintEvent(self, e):
+        """Draw the scaled pixmap, measurement line overlay, and annotations."""
         super().paintEvent(e)
         if self._pix.isNull():
             return
@@ -238,6 +267,7 @@ class ScaledImageLabel(QLabel):
         return QPoint(int(round(x)), int(round(y)))
         
     def _image_rect_to_widget(self, r_img: QRect) -> QRect:
+        """Map an image-space rectangle to widget coordinates."""
         tl = self._image_to_widget(r_img.topLeft())
         br = self._image_to_widget(r_img.bottomRight())
         return QRect(tl, br).normalized()

@@ -1,8 +1,27 @@
-from deps import * 
+"""Contour area threshold dialog widget.
+
+Provides a slider-and-spinbox dialog for choosing a minimum contour area
+(in pixels) used to filter small or noisy contours during image processing.
+"""
+
+from deps import *
 
 class ContourThresholdDialog(QDialog):
-    """Pick a contour area threshold (in pixels)."""
+    """Dialog for selecting a contour area threshold in pixels.
+
+    Combines a horizontal slider with a double spin box so the user can
+    quickly scrub to a rough value and then fine-tune it numerically.
+    """
+
     def __init__(self, parent=None, initial: float = 50.0, minimum: float = 0.0, maximum: float = 100000.0):
+        """Initialise the contour threshold dialog.
+
+        Args:
+            parent: Parent widget.
+            initial: Starting threshold value in pixels.
+            minimum: Lower bound of the allowed range.
+            maximum: Upper bound of the allowed range.
+        """
         super().__init__(parent)
         self.setWindowTitle("Contour Area Threshold (px)")
         self.setModal(True)
@@ -54,6 +73,11 @@ class ContourThresholdDialog(QDialog):
         form.addRow(btns)
 
     def value(self) -> float:
+        """Return the currently selected threshold value.
+
+        Returns:
+            The threshold in pixels as a float.
+        """
         return float(self.spin.value())
 
 
