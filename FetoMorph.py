@@ -1,3 +1,19 @@
+"""FetoMorph -- a desktop application for morphometric analysis of fetal brain data.
+
+Supports 2-D histological images (PNG/JPEG/TIFF), NIfTI volumetric scans,
+VTK legacy meshes, and STL surface meshes.  The GUI is built with PySide6
+and VTK, exposing measurement routines (area, volume, perimeter, sulci
+depth, LGI, curvature, Hausdorff distance) through both menus and a
+ribbon toolbar.  Results are collected in an in-memory metrics store and
+can be exported to Excel.
+
+Typical workflow:
+    1. Import a file (image, NIfTI, VTK, or STL).
+    2. Adjust parameters (pixel scale, kernel size, ROI selection, etc.).
+    3. Run one or more measurements from the Process menu.
+    4. Review results in the Metrics dock and export to Excel.
+"""
+
 from deps import *
 from constants import DEFAULT_NIFTI_REGIONS
 from functions.measurements_image import *
@@ -37,6 +53,14 @@ APP_DIR = Path(__file__).resolve().parent
 ASSETS = APP_DIR / "assets"
 
 def ext(path: str) -> str:
+    """Return the lowercase file extension, with special handling for .nii.gz.
+
+    Args:
+        path: Filesystem path (absolute or relative).
+
+    Returns:
+        Lowercase extension string, e.g. ".png" or ".nii.gz".
+    """
     low = path.lower()
     if low.endswith(".nii.gz"):
         return ".nii.gz"
@@ -46,43 +70,137 @@ def ext(path: str) -> str:
 # Console capture
 # ---------------------------
 class QtConsole(QObject):
+    """Qt-aware console sink that re-emits written text as a Signal.
+
+    Used to redirect stdout/stderr into the in-app progress panel so the
+    user can follow long-running computations without a terminal.
+    """
+
     text = Signal(str)
+
     def write(self, s: str):
+        """Emit non-empty strings through the ``text`` signal.
+
+        Args:
+            s: Text to emit.
+        """
         if s:
             self.text.emit(str(s))
-    def flush(self): pass
+
+    def flush(self):
+        """No-op flush to satisfy the file-like interface."""
+        pass
 
 class TeeStream:
-    def __init__(self, a, b): self.a, self.b = a, b
+    """Duplicate writes to two streams, like the Unix ``tee`` command.
+
+    Errors on either stream are silently swallowed so that a broken
+    console never crashes the application.
+    """
+
+    def __init__(self, a, b):
+        """Initialise with two file-like destinations.
+
+        Args:
+            a: Primary stream (typically the original sys.stdout/stderr).
+            b: Secondary stream (typically a QtConsole instance).
+        """
+        self.a, self.b = a, b
+
     def write(self, s):
+        """Write *s* to both underlying streams.
+
+        Args:
+            s: Text to write.
+        """
         for t in (self.a, self.b):
             try: t.write(s)
             except Exception: pass
+
     def flush(self):
+        """Flush both underlying streams."""
         for t in (self.a, self.b):
             try: t.flush()
             except Exception: pass
 
 class QtVTKOutputWindow(vtkOutputWindow):
+    """Redirect VTK's internal logging into the application's QtConsole.
+
+    Without this, VTK prints warnings and errors to the C-level stderr
+    which is invisible inside a GUI application.
+    """
+
     def __init__(self, sink: QtConsole):
+        """Initialise with the application's QtConsole sink.
+
+        Args:
+            sink: QtConsole instance whose ``text`` signal feeds the
+                progress panel.
+        """
         super().__init__(); self._sink = sink
-    def DisplayText(self, txt): self._sink.write(txt)
-    def DisplayErrorText(self, txt): self._sink.write("VTK ERROR: " + txt)
-    def DisplayWarningText(self, txt): self._sink.write("VTK WARNING: " + txt)
-    def DisplayGenericWarningText(self, txt): self._sink.write("VTK WARNING: " + txt)
-    def DisplayDebugText(self, txt): self._sink.write("VTK DEBUG: " + txt)
+
+    def DisplayText(self, txt):
+        """Forward plain VTK text.
+
+        Args:
+            txt: Message text.
+        """
+        self._sink.write(txt)
+
+    def DisplayErrorText(self, txt):
+        """Forward VTK error messages with an ERROR prefix.
+
+        Args:
+            txt: Error message text.
+        """
+        self._sink.write("VTK ERROR: " + txt)
+
+    def DisplayWarningText(self, txt):
+        """Forward VTK warning messages with a WARNING prefix.
+
+        Args:
+            txt: Warning message text.
+        """
+        self._sink.write("VTK WARNING: " + txt)
+
+    def DisplayGenericWarningText(self, txt):
+        """Forward VTK generic warning messages with a WARNING prefix.
+
+        Args:
+            txt: Warning message text.
+        """
+        self._sink.write("VTK WARNING: " + txt)
+
+    def DisplayDebugText(self, txt):
+        """Forward VTK debug messages with a DEBUG prefix.
+
+        Args:
+            txt: Debug message text.
+        """
+        self._sink.write("VTK DEBUG: " + txt)
 
 
 # ---------------------------
 # Main Window
 # ---------------------------
 class MainWindow(QMainWindow):
+    """Central application window for FetoMorph.
+
+    Manages file import (images, NIfTI, VTK, STL), interactive display
+    via a ScaledImageLabel (2-D) or VTKViewer (3-D), measurement
+    dispatching for area/volume/perimeter/sulci-depth/LGI/curvature/
+    Hausdorff, annotation cropping, FreeSurfer surface viewing, and
+    metrics collection with Excel export.  A ribbon toolbar mirrors the
+    menu actions for quick access.
+    """
+
     def __init__(self):
+        """Initialise the main window, menus, toolbar, state variables, and console hooks."""
         super().__init__()
         self.setWindowTitle("Unified Image / VTK / NIfTI Viewer (PySide6 + VTK)")
         self.resize(1200, 900)
 
-        # State
+        # ---- Core state ----
         self.current_path: str | None = None
         self.current_kind: str | None = None  # "image" | "nifti" | "vtk_image" | "vtk_poly" | "vtk_surface" | "stl"
         self._active_view = "image"
@@ -92,8 +210,14 @@ class MainWindow(QMainWindow):
         self.temp_dir = tempfile.mkdtemp(prefix="FetoMorph_")
         print(f"[Temp] Working directory: {self.temp_dir}")
 
-        # store metics
-        self.metrics: dict[str, list[dict]] = {}  # per-path grouping {path: {"File":..., "Kind":..., "Area":..., "Volume":..., "SulciDepth_P1":..., "SulciDepth_P2":..., "SulciDepth_P3":..., "LGI":...}}
+        # Metrics store -- keyed by file path; each value is a list of row
+        # dicts with columns: File, Kind, Label, Annotation, Source,
+        # SliceDirection, PixelSize, PixelSizeUnits, KernelSize, LengthUnit,
+        # SliceThickness, Length(PA), Width(LR), Hight(IS), Area, Volume,
+        # Perimeter, Perimeter_convex, SulciCount, MinDepth, MaxDepth,
+        # MeanDepth, LGI.  Multiple rows per path arise when measurement
+        # parameters change.
+        self.metrics: dict[str, list[dict]] = {}
         self.current_output_dir = None
         self.current_output_3D_slices = None
         self.last_annotated_path: str | None = None
@@ -114,6 +238,8 @@ class MainWindow(QMainWindow):
         
         # Params for measurements
         self.units_length = None          # e.g., "mm" (set by user prompt)
+        # Default physical size of one pixel in length-units (e.g. 0.01 mm/px).
+        # Acts as a fallback when the user has not yet calibrated the image.
         self.pixel_size_default = 0.01
         self.pixel_size = self.pixel_size_default       # current working scale (units/pixel)
         self.image_scales = {}                          # per-file scale: {path: float}
@@ -139,6 +265,9 @@ class MainWindow(QMainWindow):
         self.slice_nav_index_map = []        # list[int] original slice indices (optional label)
         self._init_metrics_dock()
 
+        # Pixmap carousel for multi-image results (e.g. curvature, Hausdorff).
+        # _pms holds QPixmap objects; _pm_index tracks which one is displayed.
+        # Ctrl+M / Ctrl+Shift+M cycle through them.
         self._pm_index = 0
         self._pms = []
         QShortcut(QKeySequence("Ctrl+M"), self).activated.connect(self._next_pm)
@@ -390,6 +519,7 @@ class MainWindow(QMainWindow):
 
     # ---------- Import handlers ----------
     def import_image(self):
+        """Open a file dialog for image files and load the selected image."""
         start = self.last_dir if os.path.isdir(self.last_dir) else ""
         path, _ = QFileDialog.getOpenFileName(self, "Import Image", start, "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.gif)")
         self.open_path(path)
@@ -398,6 +528,7 @@ class MainWindow(QMainWindow):
         print(f"Importing image: {path}"); self.load_image(path)
 
     def import_vtk(self):
+        """Open a file dialog for VTK legacy files and load the selected mesh/image."""
         start = self.last_dir if os.path.isdir(self.last_dir) else ""
         path, _ = QFileDialog.getOpenFileName(self, "Import .vtk", start, "VTK Legacy (*.vtk)")
         self.open_path(path)
@@ -406,6 +537,7 @@ class MainWindow(QMainWindow):
         print(f"Importing VTK: {path}"); self.load_vtk(path)
 
     def import_stl(self):
+        """Open a file dialog for STL mesh files and load the selected surface."""
         start = self.last_dir if os.path.isdir(self.last_dir) else ""
         path, _ = QFileDialog.getOpenFileName(self, "Import .stl", start, "STL Mesh (*.stl)")
         self.open_path(path)
@@ -414,6 +546,7 @@ class MainWindow(QMainWindow):
         print(f"Importing STL: {path}"); self.load_stl(path)
 
     def import_nifti(self):
+        """Open a file dialog for NIfTI volumes and load the selected scan."""
         start = self.last_dir if os.path.isdir(self.last_dir) else ""
         path, _ = QFileDialog.getOpenFileName(self, "Import NIfTI", start, "NIfTI (*.nii *.nii.gz)")
         self.open_path(path)
@@ -563,6 +696,7 @@ class MainWindow(QMainWindow):
 
 
     def close_current(self):
+        """Close the currently loaded file and reset the display to a blank state."""
         self.image_label.clearImage(); self._show_widget(self.image_label); self._set_slice_controls(False);self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False)
         self.nav_tb.hide()
         self._set_current(None, None); print("\n Closed current file and reset view.")
@@ -570,6 +704,7 @@ class MainWindow(QMainWindow):
 
 
     def quit_app(self):
+        """Gracefully shut down the application, stopping workers and timers first."""
         if getattr(self, "_shutting_down", False):
             return
         self._shutting_down = True
@@ -723,6 +858,23 @@ class MainWindow(QMainWindow):
 
         
     def _record_metric_for(self, path: str, annotation: Optional[str] = None, source: Optional[str] = None ,**vals):
+        """Record one or more metric values for a given file path.
+
+        Delegates to ``_ensure_metric_row`` for row creation, then maps
+        friendly keyword arguments (e.g. ``area``, ``volume``,
+        ``sulci_depth``) onto the canonical column names in the metrics
+        dict.
+
+        Args:
+            path: Filesystem path of the data file being measured.
+            annotation: Optional annotation/ROI label.
+            source: Optional provenance string (e.g. Excel source path).
+            **vals: Metric values keyed by friendly name. Special keys
+                include ``sulci_depth`` (list/tuple), ``dimensions``
+                (3-tuple), ``pixel_size``, ``pixel_size_units``,
+                ``kernel_size``, ``slice_thickness``, ``direction``,
+                and ``unite``.
+        """
         if not path:
             return
         kind = getattr(self, "current_kind", None)
@@ -792,6 +944,13 @@ class MainWindow(QMainWindow):
 
 
     def open_path(self, path: str):
+        """Route a file path to the appropriate loader based on its extension.
+
+        Also updates the recent-files list and menu.
+
+        Args:
+            path: Absolute path of the file to open.
+        """
         ext = Path(path).suffix.lower()
         try:
             if ext in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff"}:
@@ -818,6 +977,11 @@ class MainWindow(QMainWindow):
         populate_recent_menu(self.menu_recent, self.recent, self.open_path)
     # --------- Loaders ----------
     def load_image(self, path: str):
+        """Load and display a 2-D raster image.
+
+        Args:
+            path: Path to the image file (PNG, JPEG, BMP, TIFF, GIF).
+        """
         pm = QPixmap(path)
         if pm.isNull(): QMessageBox.critical(self, "Open Failed", "Could not read image file."); return
         self.image_label.setImage(pm); self._show_widget(self.image_label); self._set_slice_controls(False)
@@ -825,6 +989,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{self.current_path} image is loaded", 5000)
 
     def load_nifti(self, path: str):
+        """Load a NIfTI volume and display it in 2-D or 3-D mode.
+
+        Args:
+            path: Path to the .nii or .nii.gz file.
+        """
         self._set_current("nifti", path)
         rdr = vtkNIFTIImageReader(); rdr.SetFileName(path); rdr.Update(); img = rdr.GetOutput()
         print(f"NIfTI loaded:\n"
@@ -839,6 +1008,11 @@ class MainWindow(QMainWindow):
             self._nifti_set_orientation(self.orient_combo.currentText());
 
     def load_stl(self, path: str):
+        """Load an STL mesh and render it in the VTK viewer.
+
+        Args:
+            path: Path to the .stl file.
+        """
         r = vtkSTLReader(); r.SetFileName(path); r.Update(); poly = r.GetOutput()
         if not poly or poly.GetNumberOfPoints()==0:
             QMessageBox.critical(self,"Open Failed","Empty or invalid .stl file."); return
@@ -850,6 +1024,14 @@ class MainWindow(QMainWindow):
         self._set_current("stl", path)
 
     def load_vtk(self, path: str):
+        """Load a VTK legacy file (image data or polydata) and display it.
+
+        Falls back through DataSetReader, GenericDataObjectReader, and
+        DataSetSurfaceFilter to handle diverse VTK dataset types.
+
+        Args:
+            path: Path to the .vtk file.
+        """
         dsr = vtkDataSetReader(); dsr.SetFileName(path); dsr.Update(); ds = dsr.GetOutput()
         if ds is None:
             gr = vtkGenericDataObjectReader(); gr.SetFileName(path); gr.Update(); ds = gr.GetOutput()
@@ -867,6 +1049,7 @@ class MainWindow(QMainWindow):
         
         
     def set_custom_label(self):
+        """Prompt the user to enter a custom label string for the current file."""
         val, ok = QInputDialog.getText(
         self,
         "Set Custom Label",
@@ -1208,6 +1391,7 @@ class MainWindow(QMainWindow):
 
 
     def on_measure_volumes(self):
+        """Compute volume for the currently loaded 3-D object (NIfTI, STL, or VTK)."""
         if not self.current_path or not os.path.isfile(self.current_path):
             print("[Volume] No file is loaded."); return
         if self.current_kind == "image":
@@ -1816,7 +2000,12 @@ class MainWindow(QMainWindow):
             
             
     def on_measure_area(self):
-        """Process → Measures → Area: compute and show annotated result WITHOUT saving."""
+        """Compute surface area for the current file and display the annotated result.
+
+        Dispatches to the correct back-end depending on ``current_kind``
+        (image, NIfTI, STL, or VTK).  Results are stored in the metrics
+        dict but not automatically saved to disk.
+        """
         if self.current_kind == "image":
             if not self.current_path or not os.path.isfile(self.current_path):
                 print("[Area] No image file is loaded."); return
@@ -1994,7 +2183,12 @@ class MainWindow(QMainWindow):
             print("[Area] Unsupported current kind. Open an image, NIfTI, or STL file.")
 
     def on_process_batch(self):
-        """Process → Measure hallmarks for a set of images simultaneously """
+        """Run all-hallmarks measurement on every image in a user-selected folder.
+
+        The user is prompted to adjust the first image (annotation, scale,
+        etc.) and press Shift+Alt+E to continue.  All images in the batch
+        must share the same resolution and unit.
+        """
         start = self.last_dir if os.path.isdir(self.last_dir) else ""
         dir_path = QFileDialog.getExistingDirectory(
             self, "Choose a folder", start,
@@ -2077,6 +2271,10 @@ class MainWindow(QMainWindow):
             return
 
     def on_measure_curvature(self):
+        """Compute and display curvature profiles for the current 2-D image.
+
+        Generates two plot variants accessible via Ctrl+M / Ctrl+Shift+M.
+        """
         if self.current_kind == "image":
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -2112,7 +2310,13 @@ class MainWindow(QMainWindow):
         else:
             print("[Curvature] Unsupported current kind. Open an image first.")
 
-    def on_optimization(self): 
+    def on_optimization(self):
+        """Launch multi-objective optimisation from one or more Excel metric files.
+
+        Opens a dialog for objective/constraint configuration, runs the
+        selected algorithm (default NSGA-III), and displays Pareto-optimal
+        results.
+        """
         # TEMP output
         uid = uuid.uuid4().hex[:8]
         out_dir = os.path.join(self.temp_dir, f"Optimization_{uid}")
@@ -2679,6 +2883,17 @@ class MainWindow(QMainWindow):
 
     # ---------- Utils ----------
     def _np_bgr_to_qpixmap(self, arr: np.ndarray) -> QPixmap:
+        """Convert a NumPy BGR/BGRA/grayscale image to a QPixmap.
+
+        Args:
+            arr: HxWx1, HxWx3 (BGR), or HxWx4 (BGRA) uint8 array.
+
+        Returns:
+            QPixmap ready for display in a Qt widget.
+
+        Raises:
+            ValueError: If *arr* is not uint8 or has unexpected shape.
+        """
         if arr.dtype != np.uint8:
             raise ValueError("Expected uint8 array.")
         if arr.ndim != 3 or arr.shape[2] not in (1, 3, 4):
@@ -2702,13 +2917,28 @@ class MainWindow(QMainWindow):
         return QPixmap.fromImage(qimg)
     # ---------- Plumbing ----------
     def _show_widget(self, w: QWidget):
+        """Show only *w* (image_label or vtk_view) and update ``_active_view``.
+
+        Args:
+            w: The widget to make visible.
+        """
         self.image_label.setVisible(False); self.vtk_view.setVisible(False); w.setVisible(True)
         self._active_view = "image" if w is self.image_label else "vtk"
 
     def _append_progress(self, text: str):
+        """Append *text* to the progress console and scroll to the bottom.
+
+        Args:
+            text: Plain-text string to append.
+        """
         self.progress_edit.moveCursor(QTextCursor.End); self.progress_edit.insertPlainText(text); self.progress_edit.moveCursor(QTextCursor.End)
 
     def closeEvent(self, e):
+        """Restore original stdout/stderr and clean up the temp directory on exit.
+
+        Args:
+            e: The QCloseEvent.
+        """
         sys.stdout = self._orig_stdout; sys.stderr = self._orig_stderr
         try: shutil.rmtree(self.temp_dir, ignore_errors=True); print(f"[Temp] Cleaned: {self.temp_dir}")
         except Exception as ex: print(f"[Temp] Cleanup error: {ex}")
@@ -2716,18 +2946,21 @@ class MainWindow(QMainWindow):
         self.statusBar().clearMessage()
 
     def _next_pm(self):
+        """Cycle forward through the pixmap carousel (Ctrl+M)."""
         if not self._pms:
             return
         self._pm_index = (self._pm_index + 1) % len(self._pms)
         self.image_label.setImage(self._pms[self._pm_index])
 
     def _prev_pm(self):
+        """Cycle backward through the pixmap carousel (Ctrl+Shift+M)."""
         if not self._pms:
             return
         self._pm_index = (self._pm_index - 1) % len(self._pms)
         self.image_label.setImage(self._pms[self._pm_index])
     # ----- slice controls -----
     def _sync_slice_controls(self):
+        """Synchronise the slice slider range and value with the VTK viewer's current volume."""
         if self.vtk_view.has_slice():
             lo, hi = self.vtk_view.slice_range()
             self.slice_slider.blockSignals(True); self.slice_slider.setMinimum(lo); self.slice_slider.setMaximum(hi)
@@ -2735,9 +2968,15 @@ class MainWindow(QMainWindow):
             self._set_slice_controls(True); self._update_slice_readout(); self.vtk_view.set_slice((lo+hi)//2)
         else: self._set_slice_controls(False)
     def _set_slice_controls(self, vis: bool):
+        """Toggle visibility of all slice-navigation widgets.
+
+        Args:
+            vis: True to show, False to hide.
+        """
         for w in (self.slice_slider, self.orient_combo, self.slice_caption, self.slice_value_label): w.setVisible(vis)
         if not vis: self.slice_value_label.setText("—")
     def _update_slice_readout(self):
+        """Refresh the slice index / mm label next to the slider."""
         if not self.slice_caption.isVisible(): self.slice_value_label.setText("—"); return
         lo = self.slice_slider.minimum(); hi = self.slice_slider.maximum(); idx = self.slice_slider.value(); pos_mm = self.vtk_view.slice_index_to_mm(idx)
         self.slice_value_label.setText(f"{idx}/{hi}  ({pos_mm:.2f} mm)")
@@ -2769,6 +3008,11 @@ class MainWindow(QMainWindow):
 
                 
     def _on_orientation_changed(self, text: str):
+        """Handle a change in the orientation combo box (Axial/Coronal/Sagittal).
+
+        Args:
+            text: The newly selected orientation label.
+        """
         self.vtk_view.set_orientation(text)
         if self.vtk_view.has_slice():
             lo, hi = self.vtk_view.slice_range()
@@ -2781,6 +3025,12 @@ class MainWindow(QMainWindow):
             self._update_slice_readout()
                     
     def _on_view_changed(self, text: str, path: Optional[str] = None):
+        """Switch between 2-D and 3-D display modes for NIfTI or mesh data.
+
+        Args:
+            text: "2D" or "3D".
+            path: Optional override for the file path to load.
+        """
         if self.current_kind == "nifti":
             if text == "3D":
                 self.slice_nav_mode = None
@@ -2804,6 +3054,11 @@ class MainWindow(QMainWindow):
             
             
     def _show_png_on_image_label(self, png_path: str):
+        """Load a PNG file and display it on the image label widget.
+
+        Args:
+            png_path: Path to the PNG preview image.
+        """
         from PySide6.QtGui import QPixmap
         pm = QPixmap(png_path)
         if pm.isNull():
