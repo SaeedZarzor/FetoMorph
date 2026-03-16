@@ -41,6 +41,8 @@ from widgets.OptionsDialog import ProcessingOptionsDialog
 from widgets.Recent_paths import RecentPaths, populate_recent_menu
 from widgets.GeometryDialog import GeometryDialogWithAspect
 from widgets.RegionDock import *
+from widgets.GestationalWeeksDialog import GestationalWeeksDialog
+from widgets.ImageBrowserDialog import ImageBrowserDialog
 from ribbon import *
 from icons import set_icons
 
@@ -357,11 +359,19 @@ class MainWindow(QMainWindow):
         self.act_choose_regions = QAction("ROI selection…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
         self.act_set_physical_dim = QAction("Mesh dimensions…", self);self.act_set_physical_dim.setToolTip("Define the physical dimensions of the VTK mesh."); self.act_set_physical_dim.triggered.connect(self.load_mesh_and_ask_geometry);Setting_menu.addAction(self.act_set_physical_dim)
     
+        # Freesurfer menu
         Freesurfer_menu = self.menuBar().addMenu("Freesurfer Viewer")
         self.act_view_surfacses = QAction("Surfaces…", self); self.act_view_surfacses.setToolTip("Display the brain surface reconstructed with FreeSurfer (e.g. pial, white)."); self.act_view_surfacses.triggered.connect(self.view_freesurfer_surfaces); Freesurfer_menu.addAction(self.act_view_surfacses)
         self.act_view_morph_map = QAction("Morph maps…", self); self.act_view_morph_map.setToolTip("Display the morph map of a brain surface reconstructed with FreeSurfer (e.g. slucs, thickness, curve)."); self.act_view_morph_map.triggered.connect(self.view_morph_map); Freesurfer_menu.addAction(self.act_view_morph_map)
         self.act_pial_to_stl = QAction("Pial → STL…", self); self.act_pial_to_stl.triggered.connect(self.on_pial_to_stl); Freesurfer_menu.addAction(self.act_pial_to_stl)
         self.act_pial_merge = QAction("Combined STL…", self); self.act_pial_merge.triggered.connect(self.on_combined_stl); Freesurfer_menu.addAction(self.act_pial_merge)
+
+        # Examples menu
+        Examples_menu = self.menuBar().addMenu("Examples")
+        Fetal_brain_2D_sections = Examples_menu.addMenu("Fetal brain 2D sections")
+        Fetal_brain_3D_nifti = Examples_menu.addMenu("Fetal brain 3D NIfTI")
+        fill_2D_sections = Fetal_brain_2D_sections.addAction("Filled 2D sections"); fill_2D_sections.setShortcut(QKeySequence("Ctrl+Alt+F")); fill_2D_sections.setToolTip("Open example filled 2D fetal brain sections by gestational week"); fill_2D_sections.triggered.connect(self.choose_gestational_week_2D_fill)
+        # cropped_2D_sections = Fetal_brain_2D_sections.addAction("Cropped 2D sections"); cropped_2D_sections.setShortcut(QKeySequence("Ctrl+Alt+C")); cropped_2D_sections.setToolTip("Open example cropped 2D fetal brain sections by gestational week"); cropped_2D_sections.triggered.connect(self.choose_gestational_week_2D_cropped)
 
         # Disable initially
         for action in [
@@ -4371,7 +4381,29 @@ class MainWindow(QMainWindow):
 
         else:
             return
-    
+# ================= ِExamples ============================
+
+    def choose_gestational_week_2D_fill(self):
+        """Open a filled 2D fetal brain section for a user-chosen gestational week."""
+        dlg = GestationalWeeksDialog(self, initial=24)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        week = dlg.value()
+        axis = dlg.axis().lower()
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Examples", "full_slices", str(week), axis)
+        if not os.path.isdir(base):
+            QMessageBox.warning(self, "Not Found", f"No data folder for week {week} / {axis}.\n{base}")
+            return
+        browser = ImageBrowserDialog(self, folder=base, title=f"Week {week} — {axis.capitalize()} — Select Image")
+        if browser.exec() != QDialog.Accepted:
+            return
+        path = browser.selected_path()
+        if not path:
+            return
+        self.load_image(path)
+
+# def choose_gestational_week_2D_cropped(self): pass
+
 # ---------------------------
 # Entry point
 # ---------------------------
