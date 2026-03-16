@@ -1,0 +1,30 @@
+{
+  "band_root": "C:\\Users\\Divya\\git\\FetoMorph\\area_band_output_multi",
+  "axes": ["axis_x", "axis_y", "axis_z"],
+  "glob_pattern": "band_axis*.png",
+  "bbox_norm": null,
+  "bbox_norm_by_axis": {
+    "axis_x": [0.31, 0.167, 0.25, 0.29],
+    "axis_y": [0.58, 0.17, 0.23, 0.33],
+    "axis_z": [0.638, 0.25, 0.25, 0.26]
+  },
+  "row_fraction": [0.0, 1.0],
+  "col_fraction": [0.45, 1.0],
+  "margin_frac": 0.05,
+  "margin_px": null,
+  "output_dirname": "brain_slices_cropped",
+  "overwrite": false,
+  "verbose": true,
+  "manifest_name": "crop_manifest.json",
+  "min_foreground_pixels": 32,
+  "validate_manual_bbox": true,
+  "fallback_to_auto": true,
+  "allow_auto_for_unset_axes": false,
+  "add_scale_bar": true,
+  "scale_bar_label": "20 mm",
+  "scale_bar_fallback_frac": 0.1,
+  "scale_bar_top_pad_frac": 0.27,
+  "scale_bar_top_pad_px": null,
+  "scale_bar_length_scale": 0.7,
+  "scale_bar_font_scale_ratio": 0.4
+}

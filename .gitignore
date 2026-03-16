@@ -3,19 +3,46 @@
 # Virtual environments
 venv/
 .venv/
+env/
+ENV/
 
-# Platform cruft
-.DS_Store
+# Project-specific generated folders
+assets/
+output/
+area_band_output_multi/
+docs/
 
-# Python cache/bytecode
+# Python cache/build artifacts
 __pycache__/
 *.py[cod]
-
-# Build artifacts
-dist/
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
 build/
+dist/
 *.egg-info/
+.eggs/
 
-# Project assets
-assets/not_used/*.png
+# Jupyter
+.ipynb_checkpoints/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local env/log/temp
+.env
+.env.*
+*.log
+tmp/
+temp/
+
 

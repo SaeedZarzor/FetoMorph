@@ -1,0 +1,26 @@
+{
+  "file_path": "",
+  "out_dir": "",
+  "axis": "z",
+  "n": 20,
+  "p": 0.9,
+  "save_png": true,
+  "profile_plot": true,
+  "show_crosshair": false,
+  "area_labels": [
+    3,
+    4,
+    5,
+    6,
+    11,
+    12,
+    13,
+    14,
+    15,
+    17
+  ],
+  "use_pial_overlay": true,
+  "pial_space": "scanner",
+  "pial_line_thickness": 1,
+  "pial_tolerance_mm": 0.12
+}

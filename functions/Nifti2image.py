@@ -101,7 +101,7 @@ def draw_new_scale_bar(
     margin_ratio: float = 0.08,
     text: Optional[str] = None,
     font_scale_ratio: float = 0.9,
-    font_thickness: int = 2
+    font_thickness: int = 1
 ) -> np.ndarray:
     """
     Draw a crisp horizontal bar with `length_px` pixels.
@@ -130,14 +130,24 @@ def draw_new_scale_bar(
     y1 = int(np.clip(y1, 0, h - 1))
     y2 = int(np.clip(y2, 0, h - 1))
 
+    if text:
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        # tie font size to bar thickness but keep it smaller for clarity
+        fscale = (thickness / 10.0) * font_scale_ratio + 0.25
+        (_, th), _ = cv2.getTextSize(text, font, fscale, font_thickness)
+        gap = max(3, int(0.35 * th))
+        needed_h = (y2 - y1) + gap + th
+        # If the text would go out of bounds, move the bar up.
+        if y2 + gap + th > h - 1:
+            shift = (y2 + gap + th) - (h - 1)
+            y1 = max(0, y1 - shift)
+            y2 = max(0, y2 - shift)
+
     cv2.rectangle(out, (x1, y1), (x2, y2), color, thickness=-1)
 
     if text:
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        # roughly tie font size to bar thickness
-        fscale = (thickness / 10.0) * font_scale_ratio + 0.3
         tx = max(5, x1)
-        ty = min(h - 5, y2 + int(5 * thickness))
+        ty = min(h - 2, y2 + gap + th)
         cv2.putText(out, text, (tx, ty), font, fscale, color, font_thickness, cv2.LINE_AA)
 
     return out
