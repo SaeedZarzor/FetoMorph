@@ -371,7 +371,7 @@ class MainWindow(QMainWindow):
         Fetal_brain_2D_sections = Examples_menu.addMenu("Fetal brain 2D sections")
         Fetal_brain_3D_nifti = Examples_menu.addMenu("Fetal brain 3D NIfTI")
         fill_2D_sections = Fetal_brain_2D_sections.addAction("Filled 2D sections"); fill_2D_sections.setShortcut(QKeySequence("Ctrl+Alt+F")); fill_2D_sections.setToolTip("Open example filled 2D fetal brain sections by gestational week"); fill_2D_sections.triggered.connect(self.choose_gestational_week_2D_fill)
-        # cropped_2D_sections = Fetal_brain_2D_sections.addAction("Cropped 2D sections"); cropped_2D_sections.setShortcut(QKeySequence("Ctrl+Alt+C")); cropped_2D_sections.setToolTip("Open example cropped 2D fetal brain sections by gestational week"); cropped_2D_sections.triggered.connect(self.choose_gestational_week_2D_cropped)
+        cropped_2D_sections = Fetal_brain_2D_sections.addAction("Cropped 2D sections"); cropped_2D_sections.setShortcut(QKeySequence("Ctrl+Alt+C")); cropped_2D_sections.setToolTip("Open example cropped 2D fetal brain sections by gestational week"); cropped_2D_sections.triggered.connect(self.choose_gestational_week_2D_cropped)
 
         # Disable initially
         for action in [
@@ -4402,7 +4402,25 @@ class MainWindow(QMainWindow):
             return
         self.load_image(path)
 
-# def choose_gestational_week_2D_cropped(self): pass
+    def choose_gestational_week_2D_cropped(self):
+        """Open a cropped 2D fetal brain section for a user-chosen gestational week."""
+        dlg = GestationalWeeksDialog(self, initial=24)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        week = dlg.value()
+        axis = dlg.axis().lower()
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Examples", "cropped_slices", str(week), axis)
+        if not os.path.isdir(base):
+            QMessageBox.warning(self, "Not Found", f"No data folder for week {week} / {axis}.\n{base}")
+            return
+        browser = ImageBrowserDialog(self, folder=base, title=f"Week {week} — {axis.capitalize()} — Select Image")
+        if browser.exec() != QDialog.Accepted:
+            return
+        path = browser.selected_path()
+        if not path:
+            return
+        self.load_image(path)
+
 
 # ---------------------------
 # Entry point
