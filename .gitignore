@@ -18,4 +18,11 @@ build/
 
 # Project assets
 assets/not_used/*.png
+assets/data/
+assets/labels.xlsx
+
+# Project-specific generated folders
+area_band_output_multi/
+docs/
+output/
 
