@@ -43,11 +43,56 @@ class VTKViewer(QWidget):
             poly: The polygonal dataset to render.
         """
         self._clear_scene()
+        from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
+        self.vtkWidget.GetRenderWindow().GetInteractor().SetInteractorStyle(vtkInteractorStyleTrackballCamera())
         mapper = vtkPolyDataMapper(); mapper.SetInputData(poly)
         actor = vtkActor(); actor.SetMapper(mapper); actor.GetProperty().SetColor(0.69, 0.77, 0.87)
         self.renderer.AddActor(actor); self.renderer.ResetCamera()
         self._mode = "polydata"; self.vtkWidget.GetRenderWindow().Render()
         self.show_axes(True)
+
+    def show_polydata_2d(self, poly: vtkPolyData, flat_axis: int = 2):
+        """Display a planar vtkPolyData with an orthographic top-down camera.
+
+        Args:
+            poly: The polygonal dataset to render.
+            flat_axis: The axis perpendicular to the plane (0=X, 1=Y, 2=Z).
+        """
+        self._clear_scene()
+        mapper = vtkPolyDataMapper(); mapper.SetInputData(poly)
+        actor = vtkActor(); actor.SetMapper(mapper)
+        actor.GetProperty().SetColor(0.69, 0.77, 0.87)
+        self.renderer.AddActor(actor)
+
+        # Orthographic camera looking along the flat axis
+        cam = self.renderer.GetActiveCamera()
+        cam.ParallelProjectionOn()
+        self.renderer.ResetCamera()
+
+        # Orient camera perpendicular to the flat plane
+        pos = list(cam.GetPosition())
+        foc = list(cam.GetFocalPoint())
+        up = [0, 0, 0]
+        if flat_axis == 0:      # flat in X → look along X
+            pos[0] = foc[0] + cam.GetDistance()
+            up[1] = 1
+        elif flat_axis == 1:    # flat in Y → look along Y
+            pos[1] = foc[1] + cam.GetDistance()
+            up[2] = 1
+        else:                   # flat in Z → look along Z
+            pos[2] = foc[2] + cam.GetDistance()
+            up[1] = 1
+        cam.SetPosition(*pos)
+        cam.SetViewUp(*up)
+        self.renderer.ResetCamera()
+
+        # 2D interaction style (pan + zoom only, no rotation)
+        from vtkmodules.vtkInteractionStyle import vtkInteractorStyleImage
+        self.vtkWidget.GetRenderWindow().GetInteractor().SetInteractorStyle(vtkInteractorStyleImage())
+
+        self._mode = "polydata2d"
+        self.vtkWidget.GetRenderWindow().Render()
+        self.show_axes(False)
 
     def show_image2d(self, img: vtkImageData):
         """Display an axis-aligned 2-D slice through a vtkImageData volume.
@@ -78,6 +123,8 @@ class VTKViewer(QWidget):
             img: The image volume to render.
         """
         self._clear_scene()
+        from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
+        self.vtkWidget.GetRenderWindow().GetInteractor().SetInteractorStyle(vtkInteractorStyleTrackballCamera())
         mapper = vtkSmartVolumeMapper(); mapper.SetInputData(img)
         prop = vtkVolumeProperty(); prop.ShadeOn(); prop.SetInterpolationTypeToLinear()
         volume = vtkVolume(); volume.SetMapper(mapper); volume.SetProperty(prop)

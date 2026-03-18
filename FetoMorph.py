@@ -527,6 +527,10 @@ class MainWindow(QMainWindow):
         self.nav_tb.addWidget(self.slice_value_label)
 #        self.slice_value_label.setVisible(False)
 
+    @property
+    def is_vtk(self) -> bool:
+        return self.current_kind is not None and self.current_kind.startswith("vtk")
+
     # ---------- Import handlers ----------
     def import_image(self):
         """Open a file dialog for image files and load the selected image."""
@@ -567,7 +571,7 @@ class MainWindow(QMainWindow):
     # ---------- File menu ----------
     def save_view(self):
         """Ask path & save exactly what is displayed (no auto-saving during processing)."""
-        if self._active_view not in ("image", "vtk"):
+        if self._active_view not in ("image", "vtk"):  # _active_view uses "vtk" for the view widget, not the kind tag
             QMessageBox.information(self, "Save View", "Nothing to save."); return
         base = "view"
         if self.current_path: base = os.path.splitext(os.path.basename(self.current_path))[0] + "_view"
@@ -1052,6 +1056,25 @@ class MainWindow(QMainWindow):
               f"  Polys:  {poly.GetNumberOfPolys():,}")
         self._set_current("stl", path)
 
+    @staticmethod
+    def _polydata_is_planar(pd: vtkPolyData, tol: float = 1e-6) -> int | None:
+        """Return the flat axis index if all points lie in a single plane, else None.
+
+        Checks whether the coordinate range along any axis is below *tol*,
+        meaning the mesh is effectively 2-D.
+
+        Returns:
+            Axis index (0=X, 1=Y, 2=Z) if planar, or None if not.
+        """
+        n = pd.GetNumberOfPoints()
+        if n < 3:
+            return 2
+        bounds = pd.GetBounds()  # (xmin,xmax, ymin,ymax, zmin,zmax)
+        for i in range(3):
+            if bounds[2 * i + 1] - bounds[2 * i] < tol:
+                return i
+        return None
+
     def load_vtk(self, path: str):
         """Load a VTK legacy file (image data or polydata) and display it.
 
@@ -1066,14 +1089,22 @@ class MainWindow(QMainWindow):
             gr = vtkGenericDataObjectReader(); gr.SetFileName(path); gr.Update(); ds = gr.GetOutput()
         if isinstance(ds, vtkImageData):
             self.vtk_view.show_image2d(ds); self._show_widget(self.vtk_view); self._sync_slice_controls()
-            print(f"Legacy VTK image loaded. Extent={ds.GetExtent()}  Range={ds.GetScalarRange()}"); self._set_current("vtk", path); return
+            print(f"Legacy VTK image loaded. Extent={ds.GetExtent()}  Range={ds.GetScalarRange()}"); self._set_current("vtk_image", path); return
         if isinstance(ds, vtkPolyData) and ds.GetNumberOfPoints()>0:
+            flat_axis = self._polydata_is_planar(ds)
+            if flat_axis is not None:
+                self.vtk_view.show_polydata_2d(ds, flat_axis); self._show_widget(self.vtk_view); self._set_slice_controls(False)
+                print(f"Legacy VTK polydata (planar/2D). Points={ds.GetNumberOfPoints()}  Polys={ds.GetNumberOfPolys()}"); self._set_current("vtk_image", path); return
             self.vtk_view.show_polydata(ds); self._show_widget(self.vtk_view); self._set_slice_controls(False)
-            print(f"Legacy VTK polydata loaded. Points={ds.GetNumberOfPoints()}  Polys={ds.GetNumberOfPolys()}"); self._set_current("vtk", path); return
+            print(f"Legacy VTK polydata loaded. Points={ds.GetNumberOfPoints()}  Polys={ds.GetNumberOfPolys()}"); self._set_current("vtk_poly", path); return
         surf = vtkDataSetSurfaceFilter(); surf.SetInputData(ds); surf.Update(); poly = surf.GetOutput()
         if poly and poly.GetNumberOfPoints()>0:
+            flat_axis = self._polydata_is_planar(poly)
+            if flat_axis is not None:
+                self.vtk_view.show_polydata_2d(poly, flat_axis); self._show_widget(self.vtk_view); self._set_slice_controls(False)
+                print(f"Legacy VTK dataset surfaced (planar/2D). Points={poly.GetNumberOfPoints()}  Polys={poly.GetNumberOfPolys()}"); self._set_current("vtk_image", path); return
             self.vtk_view.show_polydata(poly); self._show_widget(self.vtk_view); self._set_slice_controls(False)
-            print(f"Legacy VTK dataset surfaced. Points={poly.GetNumberOfPoints()}  Polys={poly.GetNumberOfPolys()}"); self._set_current("vtk", path); return
+            print(f"Legacy VTK dataset surfaced. Points={poly.GetNumberOfPoints()}  Polys={poly.GetNumberOfPolys()}"); self._set_current("vtk_surface", path); return
         QMessageBox.critical(self, "Open Failed", "Unsupported or empty .vtk dataset (no points after surface extraction).")
         
         
@@ -1367,7 +1398,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "STL hallmarks Failed", f"{type(ex).__name__}: {ex}")
                 return
         
-        elif self.current_kind == "vtk":
+        elif self.is_vtk:
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -1505,7 +1536,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "STL Volume Failed", f"{type(ex).__name__}: {ex}")
             return
             
-        elif self.current_kind == "vtk":
+        elif self.is_vtk:
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -1804,7 +1835,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
             return
             
-        elif self.current_kind == "vtk":
+        elif self.is_vtk:
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -1984,7 +2015,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "STL Sulci depth Failed", f"{type(ex).__name__}: {ex}")
             return
             
-        elif self.current_kind == "vtk":
+        elif self.is_vtk:
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -2169,7 +2200,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "STL Area Failed", f"{type(ex).__name__}: {ex}")
             return
         
-        elif self.current_kind == "vtk":
+        elif self.is_vtk:
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -2751,7 +2782,7 @@ class MainWindow(QMainWindow):
         Returns:
             True if the user accepted the dialog, False otherwise.
         """
-        if self.current_kind == "vtk":
+        if self.is_vtk:
             mesh = pv.read(str(self.current_path))
             xmin, xmax, ymin, ymax, zmin, zmax = mesh.bounds
             if all(abs(v) > 1e-9 for v in self.physical_dim):
@@ -3091,7 +3122,7 @@ class MainWindow(QMainWindow):
             elif text == "2D":
                 self.slice_nav_mode = "nifti"
                 self._nifti_set_orientation(self.orient_combo.currentText(), path);
-        elif self.current_kind in ["vtk", "stl"]:
+        elif self.is_vtk or self.current_kind == "stl":
             if text == "3D":
                 self._show_widget(self.vtk_view)
                 self.slice_nav_mode = "vtk"
@@ -3183,7 +3214,7 @@ class MainWindow(QMainWindow):
         elif eext == ".vti":
             rdr = vtkXMLImageDataReader(); rdr.SetFileName(local); rdr.Update(); img = rdr.GetOutput()
             self.vtk_view.show_image2d(img); self._show_widget(self.vtk_view); self._sync_slice_controls()
-            print(f"VTI loaded (drop). Extent={img.GetExtent()} Spacing={img.GetSpacing()} Range={img.GetScalarRange()}"); self._set_current("vtk", local)
+            print(f"VTI loaded (drop). Extent={img.GetExtent()} Spacing={img.GetSpacing()} Range={img.GetScalarRange()}"); self._set_current("vtk_image", local)
         else:
             QMessageBox.information(self, "Unsupported", f"Unsupported file: {local}")
 
@@ -3192,8 +3223,9 @@ class MainWindow(QMainWindow):
         """Update the active file identity and enable/disable actions accordingly.
 
         Args:
-            kind: File type string (e.g. "image", "nifti", "vtk", "stl",
-                "Freesurfer", "Optimization") or None when closing.
+            kind: File type string (e.g. "image", "nifti", "vtk_image",
+                "vtk_poly", "vtk_surface", "stl", "Freesurfer",
+                "Optimization") or None when closing.
             path: Absolute filesystem path of the active file, or None.
         """
         self.current_kind = kind
@@ -3262,7 +3294,7 @@ class MainWindow(QMainWindow):
         """
         kind = self.current_kind
 
-        if kind in ("stl", "vtk"):
+        if kind == "stl" or (kind is not None and kind.startswith("vtk")):
             self.act_meas_area.setEnabled(True)
             self.act_meas_perimeter.setEnabled(False)
             self.act_meas_lgi.setEnabled(True)
@@ -3326,7 +3358,7 @@ class MainWindow(QMainWindow):
             self.act_set_scale.setEnabled(True)
             self.nav_tb.hide()
 
-        if kind == "vtk":
+        if kind is not None and kind.startswith("vtk"):
             self.act_set_physical_dim.setEnabled(True)
         
         else:
@@ -3500,7 +3532,7 @@ class MainWindow(QMainWindow):
                 self._set_current("nifti", path)
                 self._on_view_changed(self.view_mode.currentText())
 
-            elif kind in ("stl", "vtk"):
+            elif kind == "stl" or (kind is not None and kind.startswith("vtk")):
                 poly = _read_mesh(path)
                 # show in your VTK view
                 self._show_widget(self.vtk_view)
