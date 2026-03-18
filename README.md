@@ -1,5 +1,10 @@
 # FetoMorph
 
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+![GitHub stars](https://img.shields.io/github/stars/SaeedZarzor/FetoMorph?style=social)
+![Last commit](https://img.shields.io/github/last-commit/SaeedZarzor/FetoMorph)
+
 A desktop application for morphometric analysis of fetal brain data. FetoMorph supports multiple imaging modalities — 2D histological slices, 3D volumetric scans (NIfTI), and surface meshes (STL/VTK) — and provides a comprehensive set of measurement, visualization, and optimization tools.
 
 Built with PySide6 (Qt6), VTK, and OpenCV.
