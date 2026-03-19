@@ -332,6 +332,7 @@ class MainWindow(QMainWindow):
         self.act_meas_volumes = QAction("Volumes", self); self.act_meas_volumes.triggered.connect(self.on_measure_volumes); measures_menu.addAction(self.act_meas_volumes)
         self.act_meas_area = QAction("Area", self); self.act_meas_area.triggered.connect(self.on_measure_area); measures_menu.addAction(self.act_meas_area)
         self.act_meas_perimeter = QAction("Perimeter", self); self.act_meas_perimeter.triggered.connect(self.on_measure_perimeter); measures_menu.addAction(self.act_meas_perimeter)
+        self.act_meas_stright = QAction("Straight", self); self.act_meas_stright.triggered.connect(self.on_measure_straight); measures_menu.addAction(self.act_meas_stright)
         self.act_meas_sulci = QAction("Sulci Depth", self); self.act_meas_sulci.triggered.connect(self.on_measure_sulci_depth); measures_menu.addAction(self.act_meas_sulci)
         process_menu.addSeparator()
         
@@ -457,6 +458,7 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Measure", self.act_meas_perimeter)
         self.ribbon.add_action("Measure", self.act_meas_area)
         self.ribbon.add_action("Measure", self.act_meas_volumes)
+        self.ribbon.add_action("Measure", self.act_meas_straight)
         self.ribbon.add_action("Measure", self.act_meas_sulci)
         
         self.ribbon.add_action("Analysis", self.act_meas_lgi)
