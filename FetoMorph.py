@@ -715,6 +715,8 @@ class MainWindow(QMainWindow):
     def close_current(self):
         """Close the currently loaded file and reset the display to a blank state."""
         self.image_label.clearImage(); self._show_widget(self.image_label); self._set_slice_controls(False);self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False)
+        self.image_label.clear_line_annotations()
+        self.image_label.cancel_line_measure()
         self.nav_tb.hide()
         self._set_current(None, None); print("\n Closed current file and reset view.")
         self.statusBar().showMessage("Closed current file and reset view.", 3000)
@@ -1787,7 +1789,123 @@ class MainWindow(QMainWindow):
         else:
             return
 
-    def on_measure_straight(self): pass  # placeholder for future straight-line measurement implementation
+    def on_measure_straight(self):
+        """Process → Measures → Straight Line: interactive two-click distance measurement."""
+        if not self.current_path or not os.path.isfile(self.current_path):
+            print("[Straight line] No file is loaded."); return
+
+        if self.current_kind == "image":
+            # ensure calibration
+            while True:
+                if not self.units_length or self.current_path not in self.image_scales:
+                    ok = self.set_image_scale()
+                    if ok:
+                        break
+                    else:
+                        return
+                else:
+                    break
+
+            u = self.ensure_units()
+            px_size = self.image_scales.get(self.current_path, self.pixel_size)
+            record_path = self.current_path
+
+            print(f"[Straight line] Click two points on the image to measure distance.")
+
+            def _finish(pixel_length, p1, p2):
+                distance = pixel_length * px_size
+                self.image_label.add_line_annotation(
+                    p1, p2, label=f"{distance:.2f} {u}", color=QColor(0, 200, 255))
+                self._record_metric_for(
+                    record_path,
+                    unite=u,
+                    pixel_size=px_size,
+                    straight_line_distance=distance)
+                print(f"[Straight line] Distance = {distance:.2f} {u}")
+
+            self.image_label.start_line_measure(_finish)
+
+        elif self.is_vtk:
+            if self._flat_axis is not None:
+                self._measure_straight_planar_vtk()
+                return
+            print("[Straight line] Not supported for 3D VTK meshes.")
+            return
+
+        else:
+            print("[Straight line] Unsupported file type."); return
+
+    def _measure_straight_planar_vtk(self):
+        """Capture planar VTK as 2D image and launch interactive straight-line measure."""
+        import pyvista as pv
+
+        try:
+            if all(v == 0 for v in self.physical_dim):
+                self.load_mesh_and_ask_geometry()
+
+            u = self.units_length
+            mesh = pv.read(str(self.current_path))
+            xmin, xmax, ymin, ymax, zmin, zmax = mesh.bounds
+            mesh_dim = (xmax - xmin, ymax - ymin, zmax - zmin)
+
+            flat = self._flat_axis
+            if flat == 0:
+                vert_axis, horiz_axis = 1, 2
+            elif flat == 1:
+                vert_axis, horiz_axis = 2, 0
+            else:
+                vert_axis, horiz_axis = 1, 0
+
+            bgr, world_per_px = self.vtk_view.capture_polydata2d_screenshot()
+
+            md = mesh_dim[vert_axis]
+            if md < 1e-12:
+                md = mesh_dim[horiz_axis]
+            scale_factor = self.physical_dim[vert_axis] / max(md, 1e-12)
+            pixel_size = world_per_px * scale_factor
+
+            # Add scale bar to the screenshot
+            image_width_phys = bgr.shape[1] * pixel_size
+            target = image_width_phys * 0.2
+            magnitude = 10 ** int(np.floor(np.log10(max(target, 1e-9))))
+            bar_phys = next((magnitude * n for n in [1, 2, 5, 10] if magnitude * n >= target * 0.7), magnitude * 10)
+            bar_px = int(round(bar_phys / pixel_size))
+            bgr = draw_new_scale_bar(bgr, bar_px, text=f"{bar_phys:g} {u}")
+
+            # Display the screenshot as an image
+            pm = self._np_bgr_to_qpixmap(bgr)
+            self.image_label.setImage(pm)
+            self._show_widget(self.image_label)
+            self._active_view = "image"
+
+            # Register scale for the captured image
+            uid = uuid.uuid4().hex[:8]
+            out_dir = os.path.join(self.temp_dir, f"planar_vtk_straight_{uid}")
+            os.makedirs(out_dir, exist_ok=True)
+            img_path = os.path.join(out_dir, "screenshot.png")
+            cv2.imwrite(img_path, bgr)
+            self.image_scales[img_path] = pixel_size
+            self._set_current("image", img_path)
+
+            print(f"[Straight line VTK] Click two points on the image to measure distance.")
+
+            def _finish(pixel_length, p1, p2):
+                distance = pixel_length * pixel_size
+                self.image_label.add_line_annotation(
+                    p1, p2, label=f"{distance:.2f} {u}", color=QColor(0, 200, 255))
+                self._record_metric_for(
+                    img_path,
+                    unite=u,
+                    pixel_size=pixel_size,
+                    dimensions=self.physical_dim,
+                    straight_line_distance=distance)
+                print(f"[Straight line VTK] Distance = {distance:.2f} {u}")
+
+            self.image_label.start_line_measure(_finish)
+
+        except Exception as ex:
+            print(f"[Straight line VTK] ERROR: {ex}")
+            QMessageBox.critical(self, "Straight Line VTK Failed", f"{type(ex).__name__}: {ex}")
     
     def on_measure_lgi(self):
         """Process → Measures → lGI: compute and show annotated result WITHOUT saving."""
@@ -3632,7 +3750,8 @@ class MainWindow(QMainWindow):
     
     def reset_view(self):
         """Reload the original file, clear all on-screen annotations, and reset navigation."""
-        for meth in ("cancel_square_selection", "cancel_scalebar_measure", "clear_annotations"):
+        for meth in ("cancel_square_selection", "cancel_scalebar_measure", "cancel_line_measure",
+                     "clear_annotations", "clear_line_annotations"):
             if hasattr(self.image_label, meth):
                 getattr(self.image_label, meth)()
 

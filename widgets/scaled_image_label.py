@@ -47,6 +47,15 @@ class ScaledImageLabel(QLabel):
         self._rubber.hide()
         self._annots: list[dict] = []
 
+        # ---- straight-line measurement state ----
+        self._line_measure_active: bool = False
+        self._line_p1_img: QPoint | None = None
+        self._line_p2_img: QPoint | None = None
+        self._line_measure_cb = None  # callable(pixel_length, p1_img, p2_img)
+
+        # ---- persistent line annotations ----
+        self._line_annots: list[dict] = []  # [{p1, p2, label, color}]
+
     # ---------------- public API ----------------
     def hasImage(self) -> bool:
         """Return True if a non-null pixmap is loaded."""
@@ -90,6 +99,48 @@ class ScaledImageLabel(QLabel):
         self._measure_finished_cb = None
         self.unsetCursor()
         self.update()
+
+    # --- straight-line measure mode ---
+    def start_line_measure(self, finished_cb):
+        """Enable two-click line measure mode; calls finished_cb(pixel_length, p1_img, p2_img)."""
+        if self._pix.isNull():
+            return
+        self._line_measure_active = True
+        self._line_p1_img = None
+        self._line_p2_img = None
+        self._line_measure_cb = finished_cb
+        self.setCursor(Qt.CrossCursor)
+        self.update()
+
+    def cancel_line_measure(self):
+        """Cancel an in-progress line measurement and restore the cursor."""
+        self._line_measure_active = False
+        self._line_p1_img = None
+        self._line_p2_img = None
+        self._line_measure_cb = None
+        self.unsetCursor()
+        self.update()
+
+    # --- persistent line annotations ---
+    def add_line_annotation(self, p1_img: QPoint, p2_img: QPoint,
+                            label: str = "", color: QColor = QColor(0, 200, 255)):
+        """Store a persistent line overlay in image coordinates."""
+        self._line_annots.append({
+            "p1": QPoint(p1_img), "p2": QPoint(p2_img),
+            "label": label, "color": QColor(color),
+        })
+        self.update()
+
+    def clear_line_annotations(self):
+        """Remove all persistent line annotations."""
+        self._line_annots.clear()
+        self.update()
+
+    def remove_last_line_annotation(self):
+        """Remove the most recently added line annotation."""
+        if self._line_annots:
+            self._line_annots.pop()
+            self.update()
 
     # --- square selection mode ---
     def start_square_selection(self, on_done):
@@ -188,6 +239,49 @@ class ScaledImageLabel(QLabel):
                 tx = (p1w.x() + p2w.x()) // 2
                 ty = (p1w.y() + p2w.y()) // 2 - 8
                 p.drawText(tx, ty, f"{pixlen:.1f} px")
+
+            # overlay the active straight-line measurement (cyan dashed)
+            if self._line_measure_active and self._line_p1_img is not None and self._line_p2_img is not None:
+                p1w = self._image_to_widget(self._line_p1_img)
+                p2w = self._image_to_widget(self._line_p2_img)
+                pen = QPen(QColor(0, 200, 255), 2, Qt.DashLine)
+                p.setPen(pen)
+                p.drawLine(p1w, p2w)
+                # draw small circles at endpoints
+                p.setBrush(QColor(0, 200, 255))
+                p.drawEllipse(p1w, 4, 4)
+                p.drawEllipse(p2w, 4, 4)
+                # pixel length label
+                dx = self._line_p2_img.x() - self._line_p1_img.x()
+                dy = self._line_p2_img.y() - self._line_p1_img.y()
+                pixlen = float((dx * dx + dy * dy) ** 0.5)
+                tx = (p1w.x() + p2w.x()) // 2
+                ty = (p1w.y() + p2w.y()) // 2 - 10
+                p.setPen(QColor(0, 200, 255))
+                p.drawText(tx, ty, f"{pixlen:.1f} px")
+
+            # persistent line annotations
+            for la in self._line_annots:
+                p1w = self._image_to_widget(la["p1"])
+                p2w = self._image_to_widget(la["p2"])
+                col = la.get("color", QColor(0, 200, 255))
+                pen = QPen(col, 2, Qt.SolidLine)
+                p.setPen(pen)
+                p.drawLine(p1w, p2w)
+                p.setBrush(col)
+                p.drawEllipse(p1w, 3, 3)
+                p.drawEllipse(p2w, 3, 3)
+                label = la.get("label", "")
+                if label:
+                    tx = (p1w.x() + p2w.x()) // 2
+                    ty = (p1w.y() + p2w.y()) // 2 - 10
+                    fm = p.fontMetrics()
+                    tw = fm.horizontalAdvance(label) + 8
+                    th = fm.height() + 4
+                    bg = QRect(tx - 2, ty - th + 2, tw, th)
+                    p.fillRect(bg, QColor(0, 0, 0, 160))
+                    p.setPen(Qt.white)
+                    p.drawText(bg, Qt.AlignCenter, label)
                 
             # ✅ guard: only draw annotations if the attribute exists and is non-empty
             annots = getattr(self, "_annots", [])
@@ -274,6 +368,27 @@ class ScaledImageLabel(QLabel):
 
     # ---------------- mouse / key handling ----------------
     def mousePressEvent(self, e):
+        # straight-line measure (two-click)
+        if self._line_measure_active and e.button() == Qt.LeftButton:
+            pt = self._widget_to_image(e.pos())
+            if pt is not None:
+                if self._line_p1_img is None:
+                    self._line_p1_img = pt
+                    self._line_p2_img = pt
+                else:
+                    self._line_p2_img = pt
+                    dx = self._line_p2_img.x() - self._line_p1_img.x()
+                    dy = self._line_p2_img.y() - self._line_p1_img.y()
+                    pixlen = float((dx**2 + dy**2) ** 0.5)
+                    cb = self._line_measure_cb
+                    p1, p2 = QPoint(self._line_p1_img), QPoint(self._line_p2_img)
+                    self.cancel_line_measure()
+                    if cb and pixlen > 0:
+                        cb(pixlen, p1, p2)
+                self.update()
+                e.accept()
+                return
+
         # scalebar line start
         if self._measure_active and e.button() == Qt.LeftButton:
             pt = self._widget_to_image(e.pos())
@@ -299,6 +414,15 @@ class ScaledImageLabel(QLabel):
         super().mousePressEvent(e)
 
     def mouseMoveEvent(self, e):
+        # straight-line live tracking
+        if self._line_measure_active and self._line_p1_img is not None:
+            pt = self._widget_to_image(e.pos())
+            if pt is not None:
+                self._line_p2_img = pt
+                self.update()
+                e.accept()
+                return
+
         # scalebar update
         if self._measure_active and self._measure_p1_img is not None:
             pt = self._widget_to_image(e.pos())
@@ -375,6 +499,10 @@ class ScaledImageLabel(QLabel):
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_Escape:
+            if self._line_measure_active:
+                self.cancel_line_measure()
+                e.accept()
+                return
             if self._sel_active:
                 self.cancel_square_selection()
                 e.accept()
