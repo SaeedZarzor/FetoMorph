@@ -54,6 +54,7 @@ def set_icons(ui, assets: Path):
         "act_pial_to_stl":      "icons/convert.png",
         "act_view_surfacses":   "icons/Freesurfer.png",
         "act_view_morph_map":   "icons/morph_map.png",
+        "act_meas_stright":     "icons/length.png",
     }
 
     for attr, rel in icons.items():

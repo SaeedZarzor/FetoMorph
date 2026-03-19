@@ -458,7 +458,7 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Measure", self.act_meas_perimeter)
         self.ribbon.add_action("Measure", self.act_meas_area)
         self.ribbon.add_action("Measure", self.act_meas_volumes)
-        self.ribbon.add_action("Measure", self.act_meas_straight)
+        self.ribbon.add_action("Measure", self.act_meas_stright)
         self.ribbon.add_action("Measure", self.act_meas_sulci)
         
         self.ribbon.add_action("Analysis", self.act_meas_lgi)
@@ -1787,6 +1787,8 @@ class MainWindow(QMainWindow):
         else:
             return
 
+    def on_measure_straight(self): pass  # placeholder for future straight-line measurement implementation
+    
     def on_measure_lgi(self):
         """Process → Measures → lGI: compute and show annotated result WITHOUT saving."""
         
