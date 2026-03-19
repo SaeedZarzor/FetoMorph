@@ -22,7 +22,7 @@ from functions.measurements_stl import *
 from functions.measurements_vtk import *
 from functions.measurement_Batch import *
 from functions.pial_to_stl import *
-from functions.Nifti2image import nifti_slice_to_image
+from functions.Nifti2image import nifti_slice_to_image, draw_new_scale_bar
 from functions.curvature import compute_curvature_profile, save_curvature_plot
 from functions.hausdorff import calculate_hausdorff_distance, convert_image
 from functions.nii_extractor import nifti_extractor
@@ -253,6 +253,7 @@ class MainWindow(QMainWindow):
         self.custom_label: str = None
         self.physical_dim: tuple[int, int, int] = (0, 0, 0)
         self.slice_direction: Literal["X", "Y", "Z"] = "Y"
+        self._flat_axis: int | None = None  # axis index if current mesh is planar (0=X,1=Y,2=Z)
         
         # Params for optimization
         self.optimization_objectives: list[str] = []
@@ -1088,21 +1089,26 @@ class MainWindow(QMainWindow):
         if ds is None:
             gr = vtkGenericDataObjectReader(); gr.SetFileName(path); gr.Update(); ds = gr.GetOutput()
         if isinstance(ds, vtkImageData):
+            self._flat_axis = None
             self.vtk_view.show_image2d(ds); self._show_widget(self.vtk_view); self._sync_slice_controls()
             print(f"Legacy VTK image loaded. Extent={ds.GetExtent()}  Range={ds.GetScalarRange()}"); self._set_current("vtk_image", path); return
         if isinstance(ds, vtkPolyData) and ds.GetNumberOfPoints()>0:
             flat_axis = self._polydata_is_planar(ds)
             if flat_axis is not None:
+                self._flat_axis = flat_axis; self.slice_direction = ("X", "Y", "Z")[flat_axis]
                 self.vtk_view.show_polydata_2d(ds, flat_axis); self._show_widget(self.vtk_view); self._set_slice_controls(False)
                 print(f"Legacy VTK polydata (planar/2D). Points={ds.GetNumberOfPoints()}  Polys={ds.GetNumberOfPolys()}"); self._set_current("vtk_image", path); return
+            self._flat_axis = None
             self.vtk_view.show_polydata(ds); self._show_widget(self.vtk_view); self._set_slice_controls(False)
             print(f"Legacy VTK polydata loaded. Points={ds.GetNumberOfPoints()}  Polys={ds.GetNumberOfPolys()}"); self._set_current("vtk_poly", path); return
         surf = vtkDataSetSurfaceFilter(); surf.SetInputData(ds); surf.Update(); poly = surf.GetOutput()
         if poly and poly.GetNumberOfPoints()>0:
             flat_axis = self._polydata_is_planar(poly)
             if flat_axis is not None:
+                self._flat_axis = flat_axis; self.slice_direction = ("X", "Y", "Z")[flat_axis]
                 self.vtk_view.show_polydata_2d(poly, flat_axis); self._show_widget(self.vtk_view); self._set_slice_controls(False)
                 print(f"Legacy VTK dataset surfaced (planar/2D). Points={poly.GetNumberOfPoints()}  Polys={poly.GetNumberOfPolys()}"); self._set_current("vtk_image", path); return
+            self._flat_axis = None
             self.vtk_view.show_polydata(poly); self._show_widget(self.vtk_view); self._set_slice_controls(False)
             print(f"Legacy VTK dataset surfaced. Points={poly.GetNumberOfPoints()}  Polys={poly.GetNumberOfPolys()}"); self._set_current("vtk_surface", path); return
         QMessageBox.critical(self, "Open Failed", "Unsupported or empty .vtk dataset (no points after surface extraction).")
@@ -1230,6 +1236,132 @@ class MainWindow(QMainWindow):
         except Exception as ex:
             print(f"ERROR exporting metrics: {ex}")
             QMessageBox.critical(self, "Export Failed", f"{type(ex).__name__}: {ex}")
+
+    # ---------- Planar VTK measurement via screenshot ----------
+    def _measure_planar_vtk(self, mode: str = "allmarks"):
+        """Measure a planar VTK mesh by capturing a 2D screenshot and running image measurements.
+
+        Args:
+            mode: One of "allmarks", "perimeter", "area", "lGI", "sulci_depth".
+        """
+        import pyvista as pv
+
+        t0 = time.time()
+        try:
+            # Ensure geometry
+            if all(v == 0 for v in self.physical_dim):
+                self.load_mesh_and_ask_geometry()
+
+            u = self.units_length
+
+            # Read mesh bounds
+            mesh = pv.read(str(self.current_path))
+            xmin, xmax, ymin, ymax, zmin, zmax = mesh.bounds
+            mesh_dim = (xmax - xmin, ymax - ymin, zmax - zmin)
+
+            # Determine camera vertical axis from _flat_axis
+            flat = self._flat_axis
+            if flat == 0:       # flat in X → camera looks along X, vertical=Y, horizontal=Z
+                vert_axis, horiz_axis = 1, 2
+            elif flat == 1:     # flat in Y → camera looks along Y, vertical=Z, horizontal=X
+                vert_axis, horiz_axis = 2, 0
+            else:               # flat in Z → camera looks along Z, vertical=Y, horizontal=X
+                vert_axis, horiz_axis = 1, 0
+
+            # Capture screenshot
+            bgr, world_per_px = self.vtk_view.capture_polydata2d_screenshot()
+
+            # Compute pixel_size in physical units
+            md = mesh_dim[vert_axis]
+            if md < 1e-12:
+                md = mesh_dim[horiz_axis]
+            scale_factor = self.physical_dim[vert_axis] / max(md, 1e-12)
+            pixel_size = world_per_px * scale_factor
+
+            # Save clean image to temp for measurement functions
+            uid = uuid.uuid4().hex[:8]
+            out_dir = os.path.join(self.temp_dir, f"planar_vtk_{mode}_{uid}")
+            os.makedirs(out_dir, exist_ok=True)
+            self.current_output_dir = out_dir
+            img_path = os.path.join(out_dir, "screenshot.png")
+            cv2.imwrite(img_path, bgr)
+
+            # Call measurement function
+            if mode == "allmarks":
+                area, perimeter, perimeter_convex, lGI, depth, annotated_bgr = measure_image_allmarks(
+                    img_path, pixel_size=pixel_size, kernel_size=self.kernel_size,
+                    cnt_threshold=self.cnt_threshold, unit=u)
+            elif mode == "perimeter":
+                perimeter, annotated_bgr = measure_image_perimeter(
+                    img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u)
+            elif mode == "area":
+                area, annotated_bgr = measure_image_area(
+                    img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u)
+            elif mode == "lGI":
+                lGI, perimeter, perimeter_convex, annotated_bgr = measure_image_lGI(
+                    img_path, pixel_size=pixel_size, kernel_size=self.kernel_size,
+                    cnt_threshold=self.cnt_threshold, unit=u)
+            elif mode == "sulci_depth":
+                depth, annotated_bgr = measure_image_sulci_depth(
+                    img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u)
+            else:
+                print(f"[Planar VTK] Unknown mode: {mode}")
+                return
+
+            # Add scale bar to annotated image
+            image_width_phys = bgr.shape[1] * pixel_size
+            target = image_width_phys * 0.2
+            magnitude = 10 ** int(np.floor(np.log10(max(target, 1e-9))))
+            bar_phys = next((magnitude * n for n in [1, 2, 5, 10] if magnitude * n >= target * 0.7), magnitude * 10)
+            bar_px = int(round(bar_phys / pixel_size))
+            annotated_bgr = draw_new_scale_bar(annotated_bgr, bar_px, text=f"{bar_phys:g} {u}")
+
+            # Save annotated image to temp
+            annotated_path = os.path.join(out_dir, "annotated.png")
+            cv2.imwrite(annotated_path, annotated_bgr)
+
+            # Register scale so re-measurement works without prompting
+            self.image_scales[img_path] = pixel_size
+            self.pixel_size = pixel_size
+
+            # Display
+            pm = self._np_bgr_to_qpixmap(annotated_bgr)
+            self.image_label.setImage(pm)
+            self.image_label.remove_last_annotation()
+            self._show_widget(self.image_label)
+            self._active_view = "image"
+            self._set_current("image", img_path)
+
+            # Record metrics and print
+            if mode == "allmarks":
+                self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim,
+                    kernel_size=self.kernel_size, area=area, perimeter=perimeter,
+                    perimeter_convex=perimeter_convex, lgi=lGI, sulci_depth=depth)
+                print(f"[Planar VTK allmarks] area={area:.2f} {u}^2, perimeter={perimeter:.2f} {u}, GI={lGI:.2f}")
+                if isinstance(depth, (list, tuple)) and len(depth) >= 3:
+                    print(f"  Max sulci depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} {u}")
+            elif mode == "perimeter":
+                self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim, perimeter=perimeter)
+                print(f"[Planar VTK perimeter] perimeter={perimeter:.2f} {u}")
+            elif mode == "area":
+                self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim, area=area)
+                print(f"[Planar VTK area] area={area:.2f} {u}^2")
+            elif mode == "lGI":
+                self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim,
+                    kernel_size=self.kernel_size, lgi=lGI)
+                print(f"[Planar VTK lGI] GI={lGI:.2f}")
+            elif mode == "sulci_depth":
+                self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim, sulci_depth=depth)
+                if isinstance(depth, (list, tuple)) and len(depth) > 0:
+                    summary = ", ".join(f"{float(v):.2f}" for v in depth[:3])
+                    print(f"[Planar VTK sulci depth] max depths = {summary} {u}")
+
+            dt = time.time() - t0
+            print(f"[Planar VTK {mode}] Done in {dt:.2f}s.")
+
+        except Exception as ex:
+            print(f"[Planar VTK {mode}] ERROR: {ex}")
+            QMessageBox.critical(self, f"Planar VTK {mode} Failed", f"{type(ex).__name__}: {ex}")
 
     # ---------- Process menu (stubs) ----------
     def on_measure_allmarks(self):
@@ -1399,6 +1531,9 @@ class MainWindow(QMainWindow):
                 return
         
         elif self.is_vtk:
+            if self._flat_axis is not None:
+                self._measure_planar_vtk(mode="allmarks")
+                return
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -1537,6 +1672,10 @@ class MainWindow(QMainWindow):
             return
             
         elif self.is_vtk:
+            if self._flat_axis is not None:
+                print("[Volume] Not applicable for planar 2D meshes.")
+                QMessageBox.information(self, "Volume", "Volume measurement is not applicable for planar 2D meshes.")
+                return
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -1636,9 +1775,16 @@ class MainWindow(QMainWindow):
                 print(f"[Perimeter] ERROR: {ex}")
                 QMessageBox.critical(self, "Perimeter Failed", f"{type(ex).__name__}: {ex}")
             
+        elif self.is_vtk:
+            if self._flat_axis is not None:
+                self._measure_planar_vtk(mode="perimeter")
+                return
+            print("[Perimeter] Not supported for 3D VTK meshes.")
+            return
+
         else:
             return
-            
+
     def on_measure_lgi(self):
         """Process → Measures → lGI: compute and show annotated result WITHOUT saving."""
         
@@ -1836,6 +1982,9 @@ class MainWindow(QMainWindow):
             return
             
         elif self.is_vtk:
+            if self._flat_axis is not None:
+                self._measure_planar_vtk(mode="lGI")
+                return
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -2016,6 +2165,9 @@ class MainWindow(QMainWindow):
             return
             
         elif self.is_vtk:
+            if self._flat_axis is not None:
+                self._measure_planar_vtk(mode="sulci_depth")
+                return
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -2201,6 +2353,9 @@ class MainWindow(QMainWindow):
             return
         
         elif self.is_vtk:
+            if self._flat_axis is not None:
+                self._measure_planar_vtk(mode="area")
+                return
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -2796,7 +2951,7 @@ class MainWindow(QMainWindow):
             slice_dir = getattr(self, "slice_direction", "Y").upper()
 
 
-            dlg = GeometryDialogWithAspect(self, mesh = mesh, Lx=Lx0, Ly=Ly0, Lz=Lz0, unit=unit, slice_dir=slice_dir)
+            dlg = GeometryDialogWithAspect(self, mesh=mesh, Lx=Lx0, Ly=Ly0, Lz=Lz0, unit=unit, slice_dir=slice_dir, flat_axis=self._flat_axis)
             if dlg.exec() == QDialog.Accepted:
                 (Lx, Ly, Lz), slice_dir, unit = dlg.values()
             else:
@@ -3295,11 +3450,12 @@ class MainWindow(QMainWindow):
         kind = self.current_kind
 
         if kind == "stl" or (kind is not None and kind.startswith("vtk")):
+            is_planar = self._flat_axis is not None
             self.act_meas_area.setEnabled(True)
-            self.act_meas_perimeter.setEnabled(False)
+            self.act_meas_perimeter.setEnabled(is_planar)
             self.act_meas_lgi.setEnabled(True)
             self.act_meas_sulci.setEnabled(True)
-            self.act_meas_volumes.setEnabled(True)
+            self.act_meas_volumes.setEnabled(not is_planar)
             self.act_meas_allmarks.setEnabled(True)
             self.act_nitfi2png.setEnabled(False)
             self.act_meas_curvature.setEnabled(False)

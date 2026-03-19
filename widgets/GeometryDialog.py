@@ -20,7 +20,7 @@ class GeometryDialogWithAspect(QDialog):
 
     UNIT_FACTORS = {"mm": 1.0, "µm": 1e-3, "um": 1e-3, "cm": 10.0, "m": 1000.0}
 
-    def __init__(self, parent=None, mesh =  pv.DataSet, Lx=1.0, Ly=1.0, Lz=1.0, unit="mm", slice_dir="Y"):
+    def __init__(self, parent=None, mesh=pv.DataSet, Lx=1.0, Ly=1.0, Lz=1.0, unit="mm", slice_dir="Y", flat_axis: int | None = None):
         """Initialise the geometry dialog.
 
         Args:
@@ -31,12 +31,16 @@ class GeometryDialogWithAspect(QDialog):
             Lz: Initial Z-axis length in the given unit.
             unit: Measurement unit string (e.g. "mm", "µm").
             slice_dir: Initial slicing axis ("X", "Y", or "Z").
+            flat_axis: If the mesh is planar, the perpendicular axis index
+                (0=X, 1=Y, 2=Z).  When set, the flat-axis spin box is
+                disabled and the slice-direction combo is hidden.
         """
         super().__init__(parent)
-         
+
         self.setWindowTitle("Mesh Geometry")
         self.setWindowModality(Qt.ApplicationModal)
         self.mesh = mesh
+        self._flat_axis = flat_axis
 
         f = self.UNIT_FACTORS.get(unit, 1.0)
         self._Lx0_mm = max(Lx * f, 1e-9)
@@ -51,7 +55,7 @@ class GeometryDialogWithAspect(QDialog):
         left.setLayout(vleft)          # single layout for 'left'
         form = QFormLayout()           # no parent here
 
-        
+
         self.x_sb = QDoubleSpinBox(self); self._setup_len_box(self.x_sb, Lx, unit)
         self.y_sb = QDoubleSpinBox(self); self._setup_len_box(self.y_sb, Ly, unit)
         self.z_sb = QDoubleSpinBox(self); self._setup_len_box(self.z_sb, Lz, unit)
@@ -60,7 +64,6 @@ class GeometryDialogWithAspect(QDialog):
         self.z_sb.valueChanged.connect(lambda v: self._scaled_update('z', v))
 
         self.dir_cb = QComboBox(self); self.dir_cb.addItems(["X", "Y", "Z"])
-        self.dir_cb.setCurrentText(slice_dir.upper() if slice_dir in ("X","Y","Z") else "Y")
         self.dir_cb.currentTextChanged.connect(self._highlight_axis)
 
         self.unit_cb = QComboBox(self)
@@ -72,7 +75,19 @@ class GeometryDialogWithAspect(QDialog):
         form.addRow("X length:", self.x_sb)
         form.addRow("Y length:", self.y_sb)
         form.addRow("Z length:", self.z_sb)
-        form.addRow("Slice direction:", self.dir_cb)
+
+        # For planar meshes: disable flat-axis spin box, hide slice direction
+        if flat_axis is not None:
+            flat_sb = (self.x_sb, self.y_sb, self.z_sb)[flat_axis]
+            flat_sb.setEnabled(False)
+            flat_sb.setToolTip("Flat axis — not editable for planar meshes")
+            # Auto-set slice direction to the flat axis
+            self.dir_cb.setCurrentText(("X", "Y", "Z")[flat_axis])
+            self.dir_cb.setVisible(False)
+        else:
+            self.dir_cb.setCurrentText(slice_dir.upper() if slice_dir in ("X","Y","Z") else "Y")
+            form.addRow("Slice direction:", self.dir_cb)
+
         form.addRow("Unit:", self.unit_cb)
 
         self.orig_btn = QPushButton("Original", self)
@@ -169,7 +184,18 @@ class GeometryDialogWithAspect(QDialog):
             scale = new_mm / self._Lz0_mm
         if not (scale > 0):
             return
-        self._apply(self._Lx0_mm * scale / s, self._Ly0_mm * scale / s, self._Lz0_mm * scale / s)
+        new_x = self._Lx0_mm * scale / s
+        new_y = self._Ly0_mm * scale / s
+        new_z = self._Lz0_mm * scale / s
+        # For planar meshes keep the flat axis value unchanged
+        if self._flat_axis is not None:
+            if self._flat_axis == 0:
+                new_x = self.x_sb.value()
+            elif self._flat_axis == 1:
+                new_y = self.y_sb.value()
+            else:
+                new_z = self.z_sb.value()
+        self._apply(new_x, new_y, new_z)
 
     def _apply(self, x, y, z):
         """Set all three spin box values without triggering re-entrant updates."""

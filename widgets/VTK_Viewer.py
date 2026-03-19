@@ -94,6 +94,50 @@ class VTKViewer(QWidget):
         self.vtkWidget.GetRenderWindow().Render()
         self.show_axes(False)
 
+    def capture_polydata2d_screenshot(self) -> tuple:
+        """Capture a white-bg / black-mesh screenshot of the polydata2d view.
+
+        Returns:
+            Tuple of (bgr_image, world_units_per_pixel).
+        """
+        rw = self.vtkWidget.GetRenderWindow()
+        # Save state
+        old_bg = self.renderer.GetBackground()
+        actors = self.renderer.GetActors()
+        actors.InitTraversal()
+        saved_colors = []
+        a = actors.GetNextActor()
+        while a:
+            saved_colors.append((a, a.GetProperty().GetColor()))
+            a.GetProperty().SetColor(0.0, 0.0, 0.0)
+            a = actors.GetNextActor()
+        self.renderer.SetBackground(1.0, 1.0, 1.0)
+        rw.Render()
+
+        # Capture
+        w2i = vtkWindowToImageFilter()
+        w2i.SetInput(rw)
+        w2i.ReadFrontBufferOff()
+        w2i.Update()
+        vtk_img = w2i.GetOutput()
+        dims = vtk_img.GetDimensions()  # (width, height, 1)
+        from vtkmodules.util.numpy_support import vtk_to_numpy
+        arr = vtk_to_numpy(vtk_img.GetPointData().GetScalars())
+        arr = arr.reshape(dims[1], dims[0], -1)
+        arr = np.flipud(arr)  # VTK images are bottom-up
+        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+
+        # Compute scale
+        cam = self.renderer.GetActiveCamera()
+        world_per_px = (2.0 * cam.GetParallelScale()) / dims[1]
+
+        # Restore
+        for actor, color in saved_colors:
+            actor.GetProperty().SetColor(*color)
+        self.renderer.SetBackground(*old_bg)
+        rw.Render()
+        return bgr, world_per_px
+
     def show_image2d(self, img: vtkImageData):
         """Display an axis-aligned 2-D slice through a vtkImageData volume.
 
