@@ -14,7 +14,7 @@ Key differences from the STL pipeline:
 
 from deps import *
 import pyvista as pv
-from helpers.Helpers import compute_kernel_convex, contours_exclude, clac_scale, get_red_rect_offset, slice_at, make_scale_cube
+from helpers.Helpers import compute_kernel_convex, contours_exclude, clac_scale, get_red_rect_offset, slice_at, make_scale_cube, compactness_3D, compactness_2D
 from helpers.check_mesh import check_brain
 from typing import Any, Literal, Sequence
 from constants import BINARY_THRESHOLD_VTK, RED_CHANNEL_MIN, GREEN_CHANNEL_MAX, DEFECT_FIXED_POINT
@@ -397,7 +397,7 @@ def compute_vtk_lGI(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
-        rows.append([idx, len(inner_filtered), GI_slice])
+        rows.append([idx, len(inner_filtered), inner_perim_mm, outer_perim_mm, GI_slice])
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
         plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         sections_list.append(section)
@@ -963,3 +963,163 @@ def compute_vtk_sulci_depth(
 
     # Always return a 3-tuple
     return total_depth ,saved_pngs, valid_slices
+
+def compute_compactness_vtk(parent,
+    file_path: str,
+    out_dir: str,
+    min_contour_area: float = 20.0,
+    Slice_direction: Literal["X", "Y", "Z"] = "Y",
+    Physical_dim: Sequence[int] | None = None,
+    unit: str = "mm",
+    slice_thickness: float = 0.5):
+
+    # --- Load mesh
+
+    mesh = pv.read(str(file_path))
+    print(f"[VTK compactness] Loaded mesh: {mesh}")
+
+    # --- Bounds / dims (mm)
+    x_min, x_max, y_min, y_max, z_min, z_max = mesh.bounds
+    mesh_dim = [x_max - x_min, y_max - y_min, z_max - z_min]
+    mesh_dim_scaled = np.array(Physical_dim) / np.array(mesh_dim)
+
+    axis_bounds = {
+        "X": (x_min, x_max),
+        "Y": (y_min, y_max),
+        "Z": (z_min, z_max),
+    }
+
+    # --- Slice positions along the chosen axis
+    if slice_thickness <= 0:
+        slice_thickness = 0.05
+
+    low, high = axis_bounds[Slice_direction]
+    slice_positions = np.arange(low, high, slice_thickness)
+
+    N = len(slice_positions)
+    if N == 0:
+        print(f"[VTK compactness] No slices to process (thickness too large vs. {Slice_direction} range).")
+        return 0.0, [], []
+
+    # Effective thickness to exactly span the axis extent, scaled to physical units
+    axis_index = {"X": 0, "Y": 1, "Z": 2}.get(Slice_direction)
+    slice_thickness_eff = mesh_dim[axis_index] / N
+    slice_thickness_eff *= mesh_dim_scaled[axis_index]
+    print(f"[VTK compactness] Effective slice thickness: {slice_thickness_eff} {unit}")
+
+    # --- Outputs
+    os.makedirs(out_dir, exist_ok=True)
+    out_dir_slices = os.path.join(out_dir, "vtk_slices")
+    os.makedirs(out_dir_slices, exist_ok=True)
+
+    out_dir_origin = os.path.join(out_dir, "vtk_orgin")
+    os.makedirs(out_dir_origin, exist_ok=True)
+
+    print(f"[VTK compactness] Temp output dir: {out_dir}")
+
+    saved_pngs: list[str] = []
+    valid_slices: list[int] = []
+    sections_list: list[pv.PolyData] = []
+    rows = []
+    sum_inner_mm = 0.0
+    sum_area_mm2 = 0.0
+
+    # --- Use a context manager so the plotter is *guaranteed* to be closed safely
+    p = pv.Plotter(off_screen=True)
+    p.set_background("black")
+
+    pre_axis = (axis_index - 1) % 3
+    next_axis = (axis_index + 1) % 3
+    cube_len = max(1e-6, mesh_dim[0] / 10.0)
+
+    for idx, k in enumerate(slice_positions):
+        # Cross-section slice
+        normal, origin = slice_at(mesh, Slice_direction, k)
+        section = mesh.slice(normal=normal,origin=origin)
+
+        if section.n_points == 0:
+            continue
+
+        # Red cube reference (10% of X extent)
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
+
+        plane = pv.Plane(center=origin,
+                 direction=normal,  # plane normal
+                 i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,  # side lengths
+                 i_resolution=1, j_resolution=1)        # Render: section + scale cube
+        p.clear()
+        p.add_mesh(section, color="#ffffff", opacity=1)
+        p.add_mesh(scale_cube, color="red")
+        {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]()
+
+        # Screenshot (array for processing, file for debugging)
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
+
+        # Compute mm/px scale from the red cube
+        mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[0])
+
+        # Prepare masks / contours (pixel space)
+        bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
+
+        # Binary for contours
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
+        contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+
+        # Inner contours: exclude red ref + area filter
+        inner_candidates = contours_exclude(contours, red_rect, bw.shape)
+        inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+
+        # Convert pixel measurements to physical units
+        inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
+        area_px  = sum(cv2.contourArea(c)     for c in inner_filtered)
+        inner_perim_mm = inner_perim_px * mm_per_px
+        area_mm2 = area_px * (mm_per_px ** 2)
+        comp_2D = compactness_2D(area_mm2, inner_perim_mm)
+
+        # Accumulate in physical units
+        sum_inner_mm += inner_perim_mm
+        sum_area_mm2 += area_mm2
+
+        # Save annotated slice
+        slice_path = os.path.join(out_dir_slices, f"slice_{idx:03d}.png")
+        cv2.imwrite(slice_path, bgr)
+        saved_pngs.append(slice_path)
+        valid_slices.append(idx)
+        rows.append([idx, len(inner_filtered), comp_2D])
+        section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
+        sections_list.append(section)
+        sections_list.append(plane)
+
+    # ---- end with: plotter is fully and safely closed here ----
+
+    Volume = sum_area_mm2 * slice_thickness_eff
+    Area = sum_inner_mm * slice_thickness_eff
+    comp_3D = compactness_3D(Volume, Area)
+    if sections_list:
+        all_slices_mesh = pv.merge(sections_list)
+        slice_mesh_path = os.path.join(out_dir, "all_slices_mesh.vtk")
+        all_slices_mesh.save(slice_mesh_path)
+    else:
+        all_slices_mesh = pv.PolyData()
+    # Save per-slice + total to Excel
+    try:
+        rows.append(["Compactness", round(comp_3D, 2)])
+        rows.append([f"Volume {unit}^3", round(Volume, 2)])
+        rows.append([f"Area {unit}^2", round(Area, 2)])
+        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", "Slice_compactness"])
+
+        xlsx_path = os.path.join(out_dir, f"Mesh_compactness_{Slice_direction}.xlsx")
+        df.to_excel(xlsx_path, index=False)
+        print(f"[VTK compactness] Saved Excel → {xlsx_path}")
+    except Exception as ex:
+        print(f"[VTK compactness] WARN: could not save Excel: {ex}")
+
+
+    # Always return a 3-tuple
+    return  comp_3D, saved_pngs, valid_slices

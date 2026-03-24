@@ -28,7 +28,7 @@ from functions.hausdorff import calculate_hausdorff_distance, convert_image
 from functions.nii_extractor import nifti_extractor
 from functions.optimization import optimization
 from helpers.Read_Excel import conver_excel
-from helpers.Helpers import get_nifti_present_labels, add_scalebar, get_max_slice_thinckness
+from helpers.Helpers import get_nifti_present_labels, add_scalebar, get_max_slice_thinckness,compactness_3D,compactness_2D
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.Contour_threshold import ContourThresholdDialog
 from widgets.Scalebar_set_scale import ScalebarSetScaleDialog
@@ -339,6 +339,7 @@ class MainWindow(QMainWindow):
         analysis_menu = process_menu.addMenu("Analysis")
         self.act_meas_lgi = QAction("LGI", self); self.act_meas_lgi.triggered.connect(self.on_measure_lgi); analysis_menu.addAction(self.act_meas_lgi); self.act_meas_lgi.setToolTip("Compute Local Gyrification Index")
         self.act_meas_curvature = QAction("Curvature", self); self.act_meas_curvature.triggered.connect(self.on_measure_curvature); analysis_menu.addAction(self.act_meas_curvature)
+        self.act_meas_compactness = QAction("Compactness", self); self.act_meas_compactness.triggered.connect(self.on_measure_compactness); analysis_menu.addAction(self.act_meas_compactness); self.act_meas_compactness.setToolTip("Measure of how closely a shape approaches the most space-efficient form")
         self.act_hausdorf = QAction("Hausdorff distance", self); self.act_hausdorf.triggered.connect(self.on_measure_hausdorff); analysis_menu.addAction(self.act_hausdorf)
         process_menu.addSeparator()
         
@@ -400,6 +401,8 @@ class MainWindow(QMainWindow):
             self.act_meas_area,
             self.act_meas_perimeter,
             self.act_meas_lgi,
+            self.act_meas_stright,
+            self.act_meas_compactness,
             self.act_meas_sulci,
         ]:
             action.setEnabled(False)
@@ -414,7 +417,7 @@ class MainWindow(QMainWindow):
         vtk_output = QtVTKOutputWindow(self._qt_console); vtkOutputWindow.SetInstance(vtk_output)
         print("Application started. Progress output will appear here.")
 
-        self.all_actions = {self.act_show_results, self.act_Reset, self.act_close, self.act_quit, self.act_imp_img, self.act_imp_vtk, self.act_imp_stl, self.act_imp_nii, self.act_save, self.act_save_data, self.act_export_metrics, self.act_meas_allmarks, self.act_meas_perimeter, self.act_meas_area, self.act_meas_volumes, self.act_meas_lgi, self.act_meas_sulci, self.act_meas_curvature, self.act_hausdorf, self.act_set_custom_label,  self.act_set_image_scale, self.act_set_scale,  self.act_kernel_size, self.act_slice_thickness,  self.act_cnt_threshold, self.act_annotate_square, self.act_choose_regions, self.act_optimization, self.act_nitfi2png, self.act_niftiextractor, self.act_pial_to_stl, self.act_pial_merge, self.act_img_batch, self.act_set_physical_dim}
+        self.all_actions = {self.act_show_results, self.act_Reset, self.act_close, self.act_quit, self.act_imp_img, self.act_imp_vtk, self.act_imp_stl, self.act_imp_nii, self.act_save, self.act_save_data, self.act_export_metrics, self.act_meas_allmarks, self.act_meas_perimeter, self.act_meas_area, self.act_meas_volumes, self.act_meas_lgi, self.act_meas_sulci, self.act_meas_curvature, self.act_meas_compactness, self.act_hausdorf, self.act_set_custom_label,  self.act_set_image_scale, self.act_set_scale,  self.act_kernel_size, self.act_slice_thickness,  self.act_cnt_threshold, self.act_annotate_square, self.act_choose_regions, self.act_optimization, self.act_nitfi2png, self.act_niftiextractor, self.act_pial_to_stl, self.act_pial_merge, self.act_img_batch, self.act_set_physical_dim}
         self._update_process_actions()
     
 
@@ -463,6 +466,7 @@ class MainWindow(QMainWindow):
         
         self.ribbon.add_action("Analysis", self.act_meas_lgi)
         self.ribbon.add_action("Analysis", self.act_meas_curvature)
+        self.ribbon.add_action("Analysis", self.act_meas_compactness)
         self.ribbon.add_action("Analysis", self.act_hausdorf)
         
         self.ribbon.add_action("Process", self.act_img_batch)
@@ -715,8 +719,6 @@ class MainWindow(QMainWindow):
     def close_current(self):
         """Close the currently loaded file and reset the display to a blank state."""
         self.image_label.clearImage(); self._show_widget(self.image_label); self._set_slice_controls(False);self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False)
-        self.image_label.clear_line_annotations()
-        self.image_label.cancel_line_measure()
         self.nav_tb.hide()
         self._set_current(None, None); print("\n Closed current file and reset view.")
         self.statusBar().showMessage("Closed current file and reset view.", 3000)
@@ -869,6 +871,7 @@ class MainWindow(QMainWindow):
                 "MaxDepth": None,
                 "MeanDepth": None,
                 "LGI": None,
+                "Compactness": None,
             }
             rows.append(row)
             return row
@@ -971,7 +974,7 @@ class MainWindow(QMainWindow):
             "volume": "Volume",
             "perimeter": "Perimeter",
             "perimeter_convex": "Perimeter_convex",
-            "lgi": "LGI",
+            "lgi": "LGI", "compactness": "Compactness"
             # triple handled above
         }
         for k, v in vals.items():
@@ -1149,7 +1152,7 @@ class MainWindow(QMainWindow):
             "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "MinDepth", "MaxDepth","MeanDepth",
-            "LGI",
+            "LGI", "Compactness",
         ]
         
         cols = base_cols + metric_cols
@@ -1189,7 +1192,7 @@ class MainWindow(QMainWindow):
             "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "MinDepth", "MaxDepth","MeanDepth",
-            "LGI",
+            "LGI","Compactness",
         ]
         has_any_metric = df[real_metric_cols].notna().any(axis=1)
         df = df.loc[has_any_metric].copy()
@@ -1287,7 +1290,8 @@ class MainWindow(QMainWindow):
             out_dir = os.path.join(self.temp_dir, f"planar_vtk_{mode}_{uid}")
             os.makedirs(out_dir, exist_ok=True)
             self.current_output_dir = out_dir
-            img_path = os.path.join(out_dir, "screenshot.png")
+            name = os.path.splitext(os.path.basename(self.current_path))[0]
+            img_path = os.path.join(out_dir, f"{name}.png")
             cv2.imwrite(img_path, bgr)
 
             # Call measurement function
@@ -1354,6 +1358,10 @@ class MainWindow(QMainWindow):
                 self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim,
                     kernel_size=self.kernel_size, lgi=lGI)
                 print(f"[Planar VTK lGI] GI={lGI:.2f}")
+            elif mode == "compactness":
+                self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim,
+                    kernel_size=self.kernel_size, compactness=compactness)
+                print(f"[Planar VTK compactness] Compactness={compactness:.2f}")
             elif mode == "sulci_depth":
                 self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim, sulci_depth=depth)
                 if isinstance(depth, (list, tuple)) and len(depth) > 0:
@@ -1789,123 +1797,151 @@ class MainWindow(QMainWindow):
         else:
             return
 
+    def on_measure_compactness(self):
+        """Compute compactness for current image or 3D mesh, reusing saved metrics when available."""
+        if not self.current_path or not os.path.isfile(self.current_path):
+            print("[Compactness] No file is loaded."); return
+
+        # ── 3D mesh  ──────────────────────────────────────────────
+        if self.current_kind == "stl" or (self.is_vtk and self._flat_axis is None):
+            try:
+                t0 = time.time()
+                rows = self.metrics.get(self.current_path, []) if isinstance(getattr(self, "metrics", None), dict) else []
+                if isinstance(rows, dict):
+                    rows = [rows]
+                last_row = rows[-1] if rows else None
+
+                volume = float(last_row["Volume"]) if last_row and last_row.get("Volume") is not None else None
+                area = float(last_row["Area"]) if last_row and last_row.get("Area") is not None else None
+
+                if volume is not None and area is not None:
+                    comp = compactness_3D(volume, area)
+                else:
+                    uid = uuid.uuid4().hex[:8]
+                    out_dir = os.path.join(self.temp_dir, f"3D_compactness_{uid}")
+                    os.makedirs(out_dir, exist_ok=True)
+                    self.current_output_dir = out_dir
+
+                    if self.current_kind == "stl":
+                        return 
+                        # source_label, dims, comp, saved_pngs, valid_slices = compute_compactness_stl(
+                        # self, file_path=self.current_path, out_dir=out_dir,
+                        # min_contour_area=self.cnt_threshold, slice_thickness=self.slice_thickness)
+
+                    elif self.is_vtk:
+                        if all(v == 0 for v in self.physical_dim):
+                            self.load_mesh_and_ask_geometry()
+                        comp, saved_pngs, valid_slices = compute_compactness_vtk(self, file_path=self.current_path,
+                        out_dir=out_dir, min_contour_area=self.cnt_threshold,
+                        Slice_direction=self.slice_direction, Physical_dim=self.physical_dim,
+                        unit=self.units_length, slice_thickness=self.slice_thickness)
+
+                    if comp is None:
+                        return
+
+                    self.two_mode_view(out_dir, saved_pngs, valid_slices)
+
+                self._record_metric_for(
+                    self.current_path,
+                    slice_thickness=self.slice_thickness, 
+                    compactness=comp)
+
+                base_name = os.path.basename(self.current_path)
+                print(f"[Compactness] for {base_name}: Compactness(3D)={comp:.4f}")
+                if comp > 1.0:
+                    QMessageBox.warning(self, "Compactness Warning",
+                        f"Compactness = {comp:.4f} exceeds 1.0.\n"
+                        "The expected range is [0, 1]. This may indicate incorrect "
+                        "physical dimensions or unit settings.")
+                dt = time.time() - t0
+                print(f"[Compactness] Done in {dt:.2f}s.")
+
+            except Exception as ex:
+                print(f"[Compactness] ERROR: {ex}")
+                QMessageBox.critical(self, "Compactness Failed", f"{type(ex).__name__}: {ex}")
+            return
+
+        # ── 2D image ───────────────────────────────────────────────────
+        if self.current_kind == "image":
+            try:
+                image_path = self.current_path
+                if self.last_annotated_path is not None:
+                    image_path = self.last_annotated_path
+                label_text = self.get_label_for_cropped_path(image_path)
+
+                rows = self.metrics.get(self.current_path, []) if isinstance(getattr(self, "metrics", None), dict) else []
+                if isinstance(rows, dict):
+                    rows = [rows]
+                last_row = next((r for r in reversed(rows) if r.get("Annotation") == label_text), None)
+
+                area = last_row.get("Area") if last_row else None
+                perimeter = last_row.get("Perimeter") if last_row else None
+
+                if area is not None and perimeter is not None:
+                    area = float(area)
+                    perimeter = float(perimeter)
+                    compactness_2D_value = compactness_2D(area, perimeter)
+                else:
+                    compactness_2D_value, annotated_bgr = compute_compactness_2D(image_path, cnt_threshold=self.cnt_threshold)
+                    pm = self._np_bgr_to_qpixmap(annotated_bgr)
+                    self.image_label.setImage(pm)
+                    self.image_label.remove_last_annotation()
+                    self._show_widget(self.image_label)
+                    self._active_view = "image"
+
+                base_name = os.path.basename(image_path)
+                print(f"[Compactness] for {base_name}: Compactness={compactness_2D_value:.4f}")
+                if compactness_2D_value > 1.0:
+                    QMessageBox.warning(self, "Compactness Warning",
+                        f"Compactness = {compactness_2D_value:.4f} exceeds 1.0.\n"
+                        "The expected range is [0, 1]. This may indicate an issue "
+                        "with contour detection or image quality.")
+                self._set_current("image", self.current_path)
+
+            except Exception as ex:
+                print(f"[Compactness] ERROR: {ex}")
+                QMessageBox.critical(self, "Compactness Failed", f"{type(ex).__name__}: {ex}")
+        else:
+            QMessageBox.information(self, "Compactness", "Compactness measurement is currently only supported for 2D images and 3D meshes. Please open an image or 3D mesh file.")      
+            print("[Compactness] Unsupported current kind. Open an image or 3D mesh file.")
+            return
+
     def on_measure_straight(self):
         """Process → Measures → Straight Line: interactive two-click distance measurement."""
         if not self.current_path or not os.path.isfile(self.current_path):
             print("[Straight line] No file is loaded."); return
 
-        if self.current_kind == "image":
-            # ensure calibration
-            while True:
-                if not self.units_length or self.current_path not in self.image_scales:
-                    ok = self.set_image_scale()
-                    if ok:
-                        break
-                    else:
-                        return
-                else:
+        if self.current_kind != "image":
+            print("[Straight line] Only supported for images."); return
+
+        # ensure calibration
+        while True:
+            if not self.units_length or self.current_path not in self.image_scales:
+                ok = self.set_image_scale()
+                if ok:
                     break
-
-            u = self.ensure_units()
-            px_size = self.image_scales.get(self.current_path, self.pixel_size)
-            record_path = self.current_path
-
-            print(f"[Straight line] Click two points on the image to measure distance.")
-
-            def _finish(pixel_length, p1, p2):
-                distance = pixel_length * px_size
-                self.image_label.add_line_annotation(
-                    p1, p2, label=f"{distance:.2f} {u}", color=QColor(0, 200, 255))
-                self._record_metric_for(
-                    record_path,
-                    unite=u,
-                    pixel_size=px_size,
-                    straight_line_distance=distance)
-                print(f"[Straight line] Distance = {distance:.2f} {u}")
-
-            self.image_label.start_line_measure(_finish)
-
-        elif self.is_vtk:
-            if self._flat_axis is not None:
-                self._measure_straight_planar_vtk()
-                return
-            print("[Straight line] Not supported for 3D VTK meshes.")
-            return
-
-        else:
-            print("[Straight line] Unsupported file type."); return
-
-    def _measure_straight_planar_vtk(self):
-        """Capture planar VTK as 2D image and launch interactive straight-line measure."""
-        import pyvista as pv
-
-        try:
-            if all(v == 0 for v in self.physical_dim):
-                self.load_mesh_and_ask_geometry()
-
-            u = self.units_length
-            mesh = pv.read(str(self.current_path))
-            xmin, xmax, ymin, ymax, zmin, zmax = mesh.bounds
-            mesh_dim = (xmax - xmin, ymax - ymin, zmax - zmin)
-
-            flat = self._flat_axis
-            if flat == 0:
-                vert_axis, horiz_axis = 1, 2
-            elif flat == 1:
-                vert_axis, horiz_axis = 2, 0
+                else:
+                    return
             else:
-                vert_axis, horiz_axis = 1, 0
+                break
 
-            bgr, world_per_px = self.vtk_view.capture_polydata2d_screenshot()
+        u = self.ensure_units()
+        px_size = self.image_scales.get(self.current_path, self.pixel_size)
 
-            md = mesh_dim[vert_axis]
-            if md < 1e-12:
-                md = mesh_dim[horiz_axis]
-            scale_factor = self.physical_dim[vert_axis] / max(md, 1e-12)
-            pixel_size = world_per_px * scale_factor
+        print(f"[Straight line] Click two points on the image to measure distance.")
 
-            # Add scale bar to the screenshot
-            image_width_phys = bgr.shape[1] * pixel_size
-            target = image_width_phys * 0.2
-            magnitude = 10 ** int(np.floor(np.log10(max(target, 1e-9))))
-            bar_phys = next((magnitude * n for n in [1, 2, 5, 10] if magnitude * n >= target * 0.7), magnitude * 10)
-            bar_px = int(round(bar_phys / pixel_size))
-            bgr = draw_new_scale_bar(bgr, bar_px, text=f"{bar_phys:g} {u}")
+        def _finish(pixel_length, p1, p2):
+            distance = pixel_length * px_size
+            self.image_label.add_line_annotation(
+                p1, p2, label=f"{distance:.2f} {u}", color=QColor(0, 200, 255))
+            self._record_metric_for(
+                self.current_path,
+                unite=u,
+                pixel_size=px_size,
+                straight_line_distance=distance)
+            print(f"[Straight line] Distance = {distance:.2f} {u}")
 
-            # Display the screenshot as an image
-            pm = self._np_bgr_to_qpixmap(bgr)
-            self.image_label.setImage(pm)
-            self._show_widget(self.image_label)
-            self._active_view = "image"
-
-            # Register scale for the captured image
-            uid = uuid.uuid4().hex[:8]
-            out_dir = os.path.join(self.temp_dir, f"planar_vtk_straight_{uid}")
-            os.makedirs(out_dir, exist_ok=True)
-            img_path = os.path.join(out_dir, "screenshot.png")
-            cv2.imwrite(img_path, bgr)
-            self.image_scales[img_path] = pixel_size
-            self._set_current("image", img_path)
-
-            print(f"[Straight line VTK] Click two points on the image to measure distance.")
-
-            def _finish(pixel_length, p1, p2):
-                distance = pixel_length * pixel_size
-                self.image_label.add_line_annotation(
-                    p1, p2, label=f"{distance:.2f} {u}", color=QColor(0, 200, 255))
-                self._record_metric_for(
-                    img_path,
-                    unite=u,
-                    pixel_size=pixel_size,
-                    dimensions=self.physical_dim,
-                    straight_line_distance=distance)
-                print(f"[Straight line VTK] Distance = {distance:.2f} {u}")
-
-            self.image_label.start_line_measure(_finish)
-
-        except Exception as ex:
-            print(f"[Straight line VTK] ERROR: {ex}")
-            QMessageBox.critical(self, "Straight Line VTK Failed", f"{type(ex).__name__}: {ex}")
+        self.image_label.start_line_measure(_finish)
     
     def on_measure_lgi(self):
         """Process → Measures → lGI: compute and show annotated result WITHOUT saving."""
@@ -2726,7 +2762,7 @@ class MainWindow(QMainWindow):
                         "max_min_d_value": "MinDepth",
                         "mean_d_value": "MeanDepth",
                         "max_d_value": "MaxDepth",
-                        "area": "area",
+                        "area": "area", 
                     }
                     objective_cols = []
                     for obj in self.optimization_objectives:
@@ -2787,7 +2823,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Optimization Failed", f"{type(ex).__name__}: {ex}")
             return  
         
-
+    
     def on_measure_hausdorff(self):
         """Pick first & second images, convert and save in TEMP, compute hausdorff distance and show the plot."""
 
@@ -3552,6 +3588,7 @@ class MainWindow(QMainWindow):
                 self.act_meas_volumes,
                 self.act_meas_area,
                 self.act_meas_perimeter,
+                self.act_meas_compactness,
                 self.act_meas_lgi,
                 self.act_meas_sulci,
                 self.act_optimization,
@@ -3575,6 +3612,7 @@ class MainWindow(QMainWindow):
             is_planar = self._flat_axis is not None
             self.act_meas_area.setEnabled(True)
             self.act_meas_perimeter.setEnabled(is_planar)
+            self.act_meas_compactness.setEnabled(True)
             self.act_meas_lgi.setEnabled(True)
             self.act_meas_sulci.setEnabled(True)
             self.act_meas_volumes.setEnabled(not is_planar)
@@ -3596,6 +3634,7 @@ class MainWindow(QMainWindow):
         if kind == "nifti":
             self.act_meas_area.setEnabled(True)
             self.act_meas_perimeter.setEnabled(False)
+            self.act_meas_compactness.setEnabled(False)
             self.act_meas_lgi.setEnabled(True)
             self.act_meas_sulci.setEnabled(True)
             self.act_meas_volumes.setEnabled(True)
@@ -3618,6 +3657,7 @@ class MainWindow(QMainWindow):
         elif kind == "image":
             self.act_meas_area.setEnabled(True)
             self.act_meas_perimeter.setEnabled(True)
+            self.act_meas_compactness.setEnabled(True)
             self.act_meas_lgi.setEnabled(True)
             self.act_meas_volumes.setEnabled(False)
             self.act_meas_sulci.setEnabled(True)
@@ -3750,8 +3790,7 @@ class MainWindow(QMainWindow):
     
     def reset_view(self):
         """Reload the original file, clear all on-screen annotations, and reset navigation."""
-        for meth in ("cancel_square_selection", "cancel_scalebar_measure", "cancel_line_measure",
-                     "clear_annotations", "clear_line_annotations"):
+        for meth in ("cancel_square_selection", "cancel_scalebar_measure", "clear_annotations"):
             if hasattr(self.image_label, meth):
                 getattr(self.image_label, meth)()
 
@@ -4255,7 +4294,7 @@ class MainWindow(QMainWindow):
             "Length(PA)", "Width(LR)", "Hight(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "MinDepth", "MaxDepth","MeanDepth",
-            "LGI"
+            "LGI", "Compactness", 
         ]
 
     def show_results_dock(self):

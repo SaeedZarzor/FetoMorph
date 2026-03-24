@@ -10,7 +10,7 @@ All pixel → physical-unit conversions use ``pixel_size`` (mm/px).
 import cv2
 import numpy as np
 from typing import Tuple, Union
-from helpers.Helpers import text_thickness, compute_kernel_convex
+from helpers.Helpers import text_thickness, compute_kernel_convex, compactness_2D
 from constants import BINARY_THRESHOLD_DEFAULT, DEFECT_FIXED_POINT
 
 
@@ -393,6 +393,35 @@ def measure_image_sulci_depth(    file_path: str,
     return depth, annotated  # BGR ndarray
 
 
+def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> (float, 'Annotated Image'):
+    margin = 6
+    image = cv2.imread(file_path)
+    if image is None:
+        raise ValueError(f"Could not read image: {file_path}")
+    
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+
+    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    filtered = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
+
+    annotated = image.copy()
+    W, H = annotated.shape[:2]
+    thickness = text_thickness(H, style="regular")
+    
+    if filtered:
+        cv2.drawContours(annotated, filtered, -1, (0, 0, 255), thickness)
+
+    perimeter = sum(cv2.arcLength(cnt, True) for cnt in filtered)
+    area = float(sum(cv2.contourArea(c) for c in filtered))
+    compactness_2D_value = compactness_2D(area, perimeter)
+
+    if filtered and len(filtered[0]) > 0:
+        x1, y1 = filtered[0][0][0]
+    else:
+        x1, y1 = 15, 40
+        
+    return compactness_2D_value, annotated  # BGR ndarray
 
 def put_label_on_bgr(
     bgr: np.ndarray,

@@ -340,3 +340,12 @@ def make_scale_cube(Slice_direction: str, cube_len: float, origin, s: float, off
 
     return cube
 
+def compactness_2D(area, perimeter) -> float:
+    if perimeter == 0:
+        return 0
+    return (4 * 3.141592653589793 * area) / (perimeter ** 2)
+
+def compactness_3D(volume, surface_area):
+    if surface_area == 0:
+        return 0
+    return (36 * 3.141592653589793 * (volume ** 2)) / (surface_area ** 3)

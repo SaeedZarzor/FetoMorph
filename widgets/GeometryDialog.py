@@ -153,6 +153,8 @@ class GeometryDialogWithAspect(QDialog):
 
     def _highlight_axis(self, axis: str):
         """Brighten the selected axis arrow and dim the others."""
+        if not hasattr(self, "plot"):
+            return
         axis = axis.upper()
         for k in ("X", "Y", "Z"):
             actor = self.plot.renderer._actors.get(f"axis_{k}")
