@@ -18,6 +18,7 @@ import pyvista as pv
 from helpers.Helpers import compute_kernel_convex, contours_exclude, clac_scale, get_red_rect_offset, make_scale_cube
 from helpers.check_mesh import check_brain
 from constants import BINARY_THRESHOLD_DEFAULT, RED_CHANNEL_MIN, GREEN_CHANNEL_MAX, DEFECT_FIXED_POINT
+from helpers.Helpers import compactness_2D, compactness_3D
 
 # ----------------- main API -----------------
 def compute_stl_allmarks(
@@ -1067,3 +1068,189 @@ def compute_stl_sulci_depth(
 
     # Always return a 3-tuple
     return dic["label"], brain_dim_cm, total_depth ,saved_pngs, valid_slices
+
+
+def compute_compactness_stl(
+    parent,
+    file_path: str,
+    out_dir: str,
+    min_contour_area: float = 20.0,
+    slice_thickness: float = 0.5):
+    """Compute 3D compactness (sphericity) from an STL mesh.
+
+    Combines per-slice area and perimeter accumulation to derive volume (cm³)
+    and surface area (cm²), then applies ``compactness_3D(V, SA)``.
+
+    Args:
+        parent: Qt parent widget for message boxes.
+        file_path: Path to the ``.stl`` file.
+        out_dir: Output directory.
+        min_contour_area: Minimum contour area (pixels) to keep.
+        slice_thickness: Distance between slices (mm).
+
+    Returns:
+        Tuple of ``(label, dims_cm, compactness, saved_pngs, valid_slices)``.
+    """
+    # --- Load mesh
+    dic = check_brain(file_path)
+
+    if dic["label"] == "not_brain":
+        reply = QMessageBox.question(parent, "Check measurement",
+            "The imported mesh does not represent a human brain. Do you want to continue processing it?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if reply == QMessageBox.No:
+            return dic["label"], [], 0, [], []
+
+    mesh = pv.read(str(file_path))
+    print(f"[STL Compactness] Loaded mesh: {mesh}")
+
+    # --- Bounds / dims (mm)
+    x_min, x_max, y_min, y_max, z_min, z_max = mesh.bounds
+    brain_dim = [x_max - x_min, y_max - y_min, z_max - z_min]
+    print(f"[STL Compactness] mesh dimensions (mm): {brain_dim}")
+
+    brain_dim_cm = [dim / 10 for dim in brain_dim]
+    brain_dim_cm = sorted(brain_dim_cm, reverse=True)
+
+    # --- Slice positions along Y
+    if slice_thickness <= 0:
+        slice_thickness = 0.5
+    slice_positions = np.arange(y_min, y_max, slice_thickness)
+    N = len(slice_positions)
+    if N == 0:
+        print("[STL Compactness] No slices to process (thickness too large vs. Y range).")
+        return dic["label"], [], 0, [], []
+
+    # Effective thickness to exactly span Y-extent
+    slice_thickness_eff = brain_dim[1] / N
+    print(f"[STL Compactness] Effective slice thickness (mm): {slice_thickness_eff}")
+
+    # --- Outputs
+    os.makedirs(out_dir, exist_ok=True)
+    out_dir_slices = os.path.join(out_dir, "stl_slices")
+    os.makedirs(out_dir_slices, exist_ok=True)
+
+    out_dir_origin = os.path.join(out_dir, "stl_orgin")
+    os.makedirs(out_dir_origin, exist_ok=True)
+
+    print(f"[STL Compactness] Temp output dir: {out_dir}")
+
+    # --- Screenshot resolution via target mm/px spacing
+    pixel_spacing = 0.1  # mm per pixel
+    image_width = int(np.clip(np.ceil(brain_dim[0] / pixel_spacing), 64, 4096))
+    image_height = int(np.clip(np.ceil(brain_dim[2] / pixel_spacing), 64, 4096))
+    window_size = (image_width, image_height)
+
+    # --- Camera (look along +Y onto XZ)
+    center = [(x_min + x_max) / 2.0, (y_min + y_max) / 2.0, (z_min + z_max) / 2.0]
+    cam_position = [
+        (center[0], y_max + 100.0, center[2]),  # camera position
+        (center[0], center[1], center[2]),       # focal point
+        (0.0, 0.0, 1.0),                         # view up
+    ]
+
+    saved_pngs: list[str] = []
+    valid_slices: list[int] = []
+    rows = []
+    sections_list: list[pv.PolyData] = []
+    sum_area_mm2 = 0.0
+    sum_inner_mm = 0.0
+
+    # --- Plotter
+    p = pv.Plotter(off_screen=True, window_size=window_size)
+    p.set_background("white")
+    p.camera_position = cam_position
+    cube_len = max(1e-6, brain_dim[1] / 10.0)
+
+    for idx, y in enumerate(slice_positions):
+        # Cross-section slice
+        origin = mesh.center
+        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[2]])
+        if section.n_points == 0:
+            continue
+
+        # Red cube reference (10% of Y extent)
+        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0], brain_dim[2]))
+        plane = pv.Plane(center=(0, float(y), 0),
+                         direction=(0, 1, 0),
+                         i_size=brain_dim[0] * 1.5, j_size=brain_dim[2] * 1.5,
+                         i_resolution=1, j_resolution=1)
+        # Render: section + scale cube
+        p.clear()
+        p.add_mesh(scale_cube, color="red")
+        p.add_mesh(section, color="black")
+        p.view_xz()
+
+        # Screenshot
+        img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
+
+        # Compute mm/px scale from the red cube
+        mm_per_px = clac_scale(img_rgb, cube_len)
+
+        # Prepare masks / contours (pixel space)
+        bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
+
+        # Binary for contours
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+        contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+
+        # Inner contours: exclude red ref + area filter
+        inner_candidates = contours_exclude(contours, red_rect, bw.shape)
+        inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+
+        # Convert pixel measurements to physical units
+        area_px = sum(cv2.contourArea(c) for c in inner_filtered)
+        inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
+        area_mm2 = area_px * (mm_per_px ** 2)
+        inner_perim_mm = inner_perim_px * mm_per_px
+        comp_2D = compactness_2D(area_mm2, inner_perim_mm)
+
+        # Accumulate
+        sum_area_mm2 += area_mm2
+        sum_inner_mm += inner_perim_mm
+
+        # Save annotated slice
+        slice_path = os.path.join(out_dir_slices, f"slice_{idx:03d}.png")
+        cv2.imwrite(slice_path, bgr)
+        saved_pngs.append(slice_path)
+        valid_slices.append(idx)
+        rows.append([idx, len(inner_filtered), comp_2D])
+        plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
+        section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
+        sections_list.append(section)
+        sections_list.append(plane)
+
+    # ---- end of slice loop ----
+
+    # Totals (mm → cm conversions)
+    Volume = sum_area_mm2 * slice_thickness_eff / 1000   # cm³
+    Area = sum_inner_mm * slice_thickness_eff / 100       # cm²
+    comp_3D = compactness_3D(Volume, Area)
+
+    if sections_list:
+        all_slices_mesh = pv.merge(sections_list)
+        slice_mesh_path = os.path.join(out_dir, "all_slices_mesh.vtk")
+        all_slices_mesh.save(slice_mesh_path)
+    else:
+        all_slices_mesh = pv.PolyData()
+
+    # Save per-slice + total to Excel
+    try:
+        rows.append(["Compactness", round(comp_3D, 2)])
+        rows.append([f"Volume cm^3", round(Volume, 2)])
+        rows.append([f"Area cm^2", round(Area, 2)])
+        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", "Slice_compactness"])
+
+        xlsx_path = os.path.join(out_dir, "Mesh_Compactness.xlsx")
+        df.to_excel(xlsx_path, index=False)
+        print(f"[STL Compactness] Saved Excel → {xlsx_path}")
+    except Exception as ex:
+        print(f"[STL Compactness] WARN: could not save Excel: {ex}")
+
+    # Always return a 5-tuple
+    return dic["label"], brain_dim_cm, comp_3D, saved_pngs, valid_slices

@@ -1823,10 +1823,11 @@ class MainWindow(QMainWindow):
                     self.current_output_dir = out_dir
 
                     if self.current_kind == "stl":
-                        return 
-                        # source_label, dims, comp, saved_pngs, valid_slices = compute_compactness_stl(
-                        # self, file_path=self.current_path, out_dir=out_dir,
-                        # min_contour_area=self.cnt_threshold, slice_thickness=self.slice_thickness)
+                        source_label, dims, comp, saved_pngs, valid_slices = compute_compactness_stl(
+                            self, file_path=self.current_path, out_dir=out_dir,
+                            min_contour_area=self.cnt_threshold, slice_thickness=self.slice_thickness)
+                        if source_label == "not_brain":
+                            return
 
                     elif self.is_vtk:
                         if all(v == 0 for v in self.physical_dim):
