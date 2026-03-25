@@ -119,7 +119,7 @@ def process_on_images_batch(directory_path,
             perimeter_convex_sum = sum(cv2.arcLength(cnt, True) for cnt in filtered_conv_contours)
             perimeter_convex = perimeter_convex_sum * pixel_size
             perimeter_rate = perimeter / perimeter_convex if perimeter_convex else float("inf")
-            compactness = compactness_2D(filtered_conv_contours, perimeter_convex)
+            compactness = compactness_2D(area, perimeter)
             if perimeter_rate < 1:
                 cnt_threshold += 500
                 continue  # retry with higher threshold
@@ -146,7 +146,6 @@ def process_on_images_batch(directory_path,
 
                 depth.sort(reverse=True)
 
-        comp = compactness_2D(area, perimeter)
         new_name= f"{file_name}_measured.png"
         new_path = os.path.join(out_dir_Batch, new_name)
         cv2.imwrite(new_path, annotated)
@@ -157,7 +156,7 @@ def process_on_images_batch(directory_path,
         
         mean_depth = (sum(depth)/len(depth)) if depth else None
 
-        sheet1.append([file_name,area, perimeter, perimeter_convex, perimeter_rate, comp, len(depth), (max(depth) if depth else None), (min(depth) if depth else None), mean_depth])
+        sheet1.append([file_name,area, perimeter, perimeter_convex, perimeter_rate, compactness, len(depth), (max(depth) if depth else None), (min(depth) if depth else None), mean_depth])
 
 
     sheet1.append(['PixelSize:', pixel_size])
