@@ -245,6 +245,7 @@ class MainWindow(QMainWindow):
         self.pixel_size_default = 0.01
         self.pixel_size = self.pixel_size_default       # current working scale (units/pixel)
         self.image_scales = {}                          # per-file scale: {path: float}
+        self.image_scale_from_scalebar = {}             # per-file: {path: bool}
         self.cnt_threshold = 100
         self.kernel_size = 5  # default (pixels)
         self.slice_thickness = 0.5
@@ -1304,7 +1305,7 @@ class MainWindow(QMainWindow):
             if mode == "allmarks":
                 area, perimeter, perimeter_convex, lGI, comp, depth, annotated_bgr = measure_image_allmarks(
                     img_path, pixel_size=pixel_size, kernel_size=self.kernel_size,
-                    cnt_threshold=self.cnt_threshold, unit=u)
+                    cnt_threshold=self.cnt_threshold, unit=u, add_scalebar=False)
             elif mode == "perimeter":
                 perimeter, annotated_bgr = measure_image_perimeter(
                     img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u)
@@ -1412,6 +1413,7 @@ class MainWindow(QMainWindow):
                     kernel_size= self.kernel_size,
                     cnt_threshold=self.cnt_threshold,
                     unit = u,
+                    add_scalebar=not bool(self.image_scale_from_scalebar.get(self.current_path, False)),
                 )
                 
                 print(f"[All hallmarks] Results:")
@@ -3172,6 +3174,7 @@ class MainWindow(QMainWindow):
         # Store for this file and as current
         self.units_length = unit
         self.image_scales[self.current_path] = scale
+        self.image_scale_from_scalebar[self.current_path] = False
         self.pixel_size = scale
 
         # Track in metrics (so Excel shows context)
@@ -3237,6 +3240,7 @@ class MainWindow(QMainWindow):
             mm_per_px = 1.0 / px_per_unit
             self.pixel_size = mm_per_px
             self.image_scales[self.current_path] = float(mm_per_px)      # unit/px
+            self.image_scale_from_scalebar[self.current_path] = True
 
 
             # Record in metrics

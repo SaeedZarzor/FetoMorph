@@ -10,7 +10,7 @@ All pixel → physical-unit conversions use ``pixel_size`` (mm/px).
 import cv2
 import numpy as np
 from typing import Optional, Tuple, Union
-from helpers.Helpers import text_thickness, compute_kernel_convex, compactness_2D
+from helpers.Helpers import text_thickness, compute_kernel_convex, compactness_2D, _add_scalebar_on_annotated
 from constants import BINARY_THRESHOLD_DEFAULT, DEFECT_FIXED_POINT
 
 
@@ -20,6 +20,7 @@ def measure_image_allmarks(
     kernel_size: int = 5,
     cnt_threshold: float = 20,
     unit: str = "mm",
+    add_scalebar: bool = True,
 ) -> Tuple[float, float, float, float, float, list, np.ndarray]:
     """Compute all hallmarks (area, perimeters, GI, sulci depths) from an image.
 
@@ -35,6 +36,7 @@ def measure_image_allmarks(
         kernel_size: Diameter of the elliptical kernel for morph close.
         cnt_threshold: Minimum contour area (pixels) to keep.
         unit: Label for output units.
+        add_scalebar: If True, overlay a new scale bar on the annotated output.
 
     Returns:
         Tuple of ``(area, perimeter, perimeter_convex, GI, depths, annotated_bgr)``.
@@ -113,6 +115,9 @@ def measure_image_allmarks(
                         depth.append(d * pixel_size / DEFECT_FIXED_POINT )
 
             depth.sort(reverse=True)
+
+    annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
+
     return area, perimeter, perimeter_convex ,perimeter_Rate, comp, depth, annotated  # BGR ndarray
 
 
@@ -121,6 +126,7 @@ def measure_image_perimeter(
     pixel_size: float = 0.01,
     cnt_threshold: float = 20,
     unit: str = "mm",
+    add_scalebar: bool = True,
 ) -> Tuple[float, np.ndarray]:
     """
     Compute foreground perimeter from a 2D image by thresholding & contour filtering.
@@ -176,6 +182,7 @@ def measure_image_perimeter(
         thickness,
         cv2.LINE_AA,
     )
+    annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
     return perimeter, annotated  # BGR ndarray
 
 
@@ -184,6 +191,7 @@ def measure_image_area(
     pixel_size: float = 0.01,
     cnt_threshold: float = 20,
     unit: str = "mm",
+    add_scalebar: bool = True,
 ) -> Tuple[float, np.ndarray]:
     """
     Compute foreground area from a 2D image by thresholding & contour filtering.
@@ -239,6 +247,7 @@ def measure_image_area(
 #        thickness,
 #        cv2.LINE_AA,
 #    )
+    annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
     return area_units2, annotated  # BGR ndarray
 
 def measure_image_lGI(
@@ -247,6 +256,7 @@ def measure_image_lGI(
     kernel_size: int = 5,
     cnt_threshold: float = 20,
     unit: str = "mm",
+    add_scalebar: bool = True,
 ) -> Tuple[float, float, float, np.ndarray]:
     """Compute the local Gyrification Index from a 2-D brain-slice image.
 
@@ -327,6 +337,7 @@ def measure_image_lGI(
 #        cv2.LINE_AA,
 #    )
     
+    annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
     return perimeter_Rate, perimeter*pixel_size, perimeter_convex*pixel_size, annotated  # BGR ndarray
 
         
@@ -335,6 +346,7 @@ def measure_image_sulci_depth(
     pixel_size: float,
     cnt_threshold: float,
     unit: str = "mm",
+    add_scalebar: bool = True,
 ) -> Tuple[list, np.ndarray]:
     """Compute sulci depths from convexity defects on a 2-D brain-slice image.
 
@@ -394,6 +406,7 @@ def measure_image_sulci_depth(
                         depth.append(d * pixel_size / DEFECT_FIXED_POINT )
 
             depth.sort(reverse=True)
+    annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
     return depth, annotated  # BGR ndarray
 
 

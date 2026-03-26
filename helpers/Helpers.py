@@ -8,6 +8,7 @@ drawing, and PyVista slice geometry.
 from deps import *
 import pyvista as pv
 import math
+from functions.Nifti2image import draw_new_scale_bar
 
 
 def text_thickness(H, style="regular", cap=10):
@@ -211,6 +212,27 @@ def add_scalebar(qimg: QImage, zooms, ax) -> QImage:
 
     painter.end()
     return qimg, mm_per_px, bar_mm
+
+
+def _add_scalebar_on_annotated(
+    annotated: np.ndarray,
+    pixel_size: float,
+    unit: str,
+    add_scalebar: bool = True,
+) -> np.ndarray:
+    """Optionally draw a physical scale bar on an annotated BGR image."""
+    if not add_scalebar or pixel_size <= 0:
+        return annotated
+
+    image_width_phys = annotated.shape[1] * pixel_size
+    target = image_width_phys * 0.2
+    magnitude = 10 ** int(np.floor(np.log10(max(target, 1e-9))))
+    bar_phys = next(
+        (magnitude * n for n in [1, 2, 5, 10] if magnitude * n >= target * 0.7),
+        magnitude * 10,
+    )
+    bar_px = max(1, int(round(bar_phys / pixel_size)))
+    return draw_new_scale_bar(annotated, bar_px, text=f"{bar_phys:g} {unit}")
 
 
 def get_max_slice_thinckness(path: str):
