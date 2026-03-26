@@ -1244,6 +1244,12 @@ class MainWindow(QMainWindow):
             print(f"ERROR exporting metrics: {ex}")
             QMessageBox.critical(self, "Export Failed", f"{type(ex).__name__}: {ex}")
 
+    @staticmethod
+    def _depth_summary(vals, unit: str) -> str:
+        if not isinstance(vals, (list, tuple)) or len(vals) == 0:
+            return "No sulci are identified; the profile appears less lissencephalic."
+        return ", ".join(f"{float(v):.2f}" for v in vals[:3]) + f" {unit}"
+
     # ---------- Planar VTK measurement via screenshot ----------
     def _measure_planar_vtk(self, mode: str = "allmarks"):
         """Measure a planar VTK mesh by capturing a 2D screenshot and running image measurements.
@@ -1296,7 +1302,7 @@ class MainWindow(QMainWindow):
 
             # Call measurement function
             if mode == "allmarks":
-                area, perimeter, perimeter_convex, lGI, depth, annotated_bgr = measure_image_allmarks(
+                area, perimeter, perimeter_convex, lGI, comp, depth, annotated_bgr = measure_image_allmarks(
                     img_path, pixel_size=pixel_size, kernel_size=self.kernel_size,
                     cnt_threshold=self.cnt_threshold, unit=u)
             elif mode == "perimeter":
@@ -1344,10 +1350,10 @@ class MainWindow(QMainWindow):
             if mode == "allmarks":
                 self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim,
                     kernel_size=self.kernel_size, area=area, perimeter=perimeter,
-                    perimeter_convex=perimeter_convex, lgi=lGI, sulci_depth=depth)
+                    perimeter_convex=perimeter_convex, lgi=lGI, compactness=comp, sulci_depth=depth)
                 print(f"[Planar VTK allmarks] area={area:.2f} {u}^2, perimeter={perimeter:.2f} {u}, GI={lGI:.2f}")
-                if isinstance(depth, (list, tuple)) and len(depth) >= 3:
-                    print(f"  Max sulci depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} {u}")
+                print(f"[Planar VTK allmarks] Maximum Sulci Depth = {self._depth_summary(depth, u)}")
+
             elif mode == "perimeter":
                 self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim, perimeter=perimeter)
                 print(f"[Planar VTK perimeter] perimeter={perimeter:.2f} {u}")
@@ -1364,9 +1370,8 @@ class MainWindow(QMainWindow):
                 print(f"[Planar VTK compactness] Compactness={compactness:.2f}")
             elif mode == "sulci_depth":
                 self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim, sulci_depth=depth)
-                if isinstance(depth, (list, tuple)) and len(depth) > 0:
-                    summary = ", ".join(f"{float(v):.2f}" for v in depth[:3])
-                    print(f"[Planar VTK sulci depth] max depths = {summary} {u}")
+                print(f"[Planar VTK sulci depth] Maximum Sulci Depth = {self._depth_summary(depth, u)}")
+
 
             dt = time.time() - t0
             print(f"[Planar VTK {mode}] Done in {dt:.2f}s.")
@@ -1401,7 +1406,7 @@ class MainWindow(QMainWindow):
                 if self.last_annotated_path is not None:
                     image_path = self.last_annotated_path
                     
-                area, perimeter, perimeter_convex, lGI, depth, annotated_bgr = measure_image_allmarks(
+                area, perimeter, perimeter_convex, lGI, comp, depth, annotated_bgr = measure_image_allmarks(
                     image_path,
                     pixel_size=px_size,
                     kernel_size= self.kernel_size,
@@ -1409,11 +1414,14 @@ class MainWindow(QMainWindow):
                     unit = u,
                 )
                 
+                print(f"[All hallmarks] Results:")
                 print(f"Annotated area = {area:.2f} {u}^2.")
                 print(f"Annotated Perimeter = {perimeter:.2f} {u}.")
                 print(f"Convex Perimeter = {perimeter_convex:.2f} {u}.")
                 print(f"LGI (Convex Perimeter/ Perimeter) = {lGI:.2f} .")
-                print(f"Sulci Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} {u}.")
+                print(f"Compactness = {comp:.2f} .")
+                print(f"Maximum Sulci Depth = {self._depth_summary(depth, u)}")
+ 
                 
                 # Convert BGR ndarray → QPixmap and show (no disk write)
                 label_text = self.get_label_for_cropped_path(image_path)
@@ -1441,6 +1449,7 @@ class MainWindow(QMainWindow):
                     perimeter=perimeter,
                     perimeter_convex = perimeter_convex,
                     lgi=lGI,
+                    compactness=comp,
                     sulci_depth = depth)
                     
             except Exception as ex:
@@ -1480,11 +1489,13 @@ class MainWindow(QMainWindow):
                 mid = len(saved_pngs) // 2
                 self.on_slice_slider_changed(mid)
                 
-                print(f"[NIfTI hallmarks]:")
+                print(f"[NIfTI hallmarks] Results:")
                 print("The Brain Volume Result = {volume:.2f} cm^3.")
                 print(f"The Brain Outer Surface Area Result = {area:.2f} cm^2.")
                 print(f"The Brain GI (Convex surface area/ surfacearea) = {gi:.2f} .")
-                print(f"The Maximum Sulci Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} cm.")
+                print(f"Maximum Sulci Depth = {self._depth_summary(depth, 'cm')}")
+
+                    
                 dt = time.time() - t0
                 print(f"[NIfTI hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
@@ -1527,11 +1538,11 @@ class MainWindow(QMainWindow):
                 self.two_mode_view(out_dir, saved_pngs, valid_slices)
 
                 
-                print(f"[STL hallmarks]:")
+                print(f"[STL hallmarks] Results:")
                 print(f"STL mesh Volume Result = {volume:.2f} cm^3.")
                 print(f"STL mesh Outer Surface Area Result = {area:.2f} cm^2.")
                 print(f"STL mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
-                print(f"The Maximum Grooves Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} cm.")
+                print(f"STL mesh Maximum Grooves Depth = {self._depth_summary(depth, 'cm')}")
 
                 dt = time.time() - t0
                 print(f"[STL hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
@@ -1580,12 +1591,11 @@ class MainWindow(QMainWindow):
                 
                 self.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
-                print(f"[VTK hallmarks]:")
+                print(f"[VTK hallmarks] Results:")
                 print(f"VTK mesh Volume Result = {volume:.2f} {u}^3.")
                 print(f"VTK mesh Outer Surface Area Result = {area:.2f} {u}^2.")
                 print(f"VTK mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
-                if len(depth)>=3:
-                    print(f"The Maximum Grooves Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} {u}.")
+                print(f"VTK mesh Maximum Sulci Depth = {self._depth_summary(depth, u)}")
 
                 dt = time.time() - t0
                 print(f"[VTK hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
@@ -2194,11 +2204,6 @@ class MainWindow(QMainWindow):
     
     def on_measure_sulci_depth(self):
         """Process → Measures → All hallmarks for 2D images: compute and show annotated result WITHOUT saving."""
-        def _depth_summary(vals, unit: str) -> str:
-            if not isinstance(vals, (list, tuple)) or len(vals) == 0:
-                return f"No sulci depth detected ({unit})."
-            return ", ".join(f"{float(v):.2f}" for v in vals[:3]) + f" {unit}"
-
         if not self.current_path or not os.path.isfile(self.current_path):
             print("[Sulci depth] No file is loaded."); return
             
@@ -2228,7 +2233,7 @@ class MainWindow(QMainWindow):
                     cnt_threshold=self.cnt_threshold,
                     unit = u,
                 )
-                print(f"Sulci Depth = {_depth_summary(depth, u)}")
+                print(f"[Sulci depth] Maximum Sulci Depth = {self._depth_summary(depth, u)}")
                 
                 label_text = self.get_label_for_cropped_path(image_path)
                 if label_text:
@@ -2281,7 +2286,7 @@ class MainWindow(QMainWindow):
                 mid = len(saved_pngs) // 2
                 self.on_slice_slider_changed(mid)
                 
-                print(f"[NIfTI Sulci depth] The max Brain Sulci depth across slices = {_depth_summary(depth, 'mm')}")
+                print(f"[NIfTI Sulci depth] The max Brain Sulci depth across slices = {self._depth_summary(depth, 'mm')}")
                 dt = time.time() - t0
                 print(f"[NIfTI Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
@@ -2313,7 +2318,7 @@ class MainWindow(QMainWindow):
 
                 self.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
-                print(f"[STL Sulci depth] The max Brain Sulci depth across slices = {_depth_summary(depth, 'mm')}")
+                print(f"[STL Sulci depth] The max Brain Sulci depth across slices = {self._depth_summary(depth, 'mm')}")
                 dt = time.time() - t0
                 print(f"[STL Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
@@ -2358,7 +2363,7 @@ class MainWindow(QMainWindow):
                 
                 if isinstance(depth, (list, tuple)) and len(depth) > 0:
                     print("[VTK Sulci depth]")
-                    print(f"The Maximum Grooves Depth = {_depth_summary(depth, u)}")
+                    print(f"The Maximum Grooves Depth = {self._depth_summary(depth, u)}")
 
                 dt = time.time() - t0
                 print(f"[VTK Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
