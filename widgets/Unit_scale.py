@@ -5,9 +5,18 @@ physical size of one pixel in that unit, either manually or by launching
 a scale-bar measurement workflow.
 """
 
+import math
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QDialog, QFormLayout, QComboBox, QDoubleSpinBox,
-                                QDialogButtonBox)
+from PySide6.QtWidgets import (
+    QDialog,
+    QFormLayout,
+    QComboBox,
+    QDialogButtonBox,
+    QSpinBox,
+    QLabel,
+    QWidget,
+    QHBoxLayout,
+)
 
 class UnitScaleDialog(QDialog):
     """Dialog for setting the length unit and pixel size.
