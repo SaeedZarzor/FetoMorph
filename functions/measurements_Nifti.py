@@ -12,8 +12,17 @@ voxels can be anisotropic, depth conversion uses
 physical coordinate system.
 """
 
-from deps import *
+import os
+import logging
+from typing import Optional, Tuple
+
+import numpy as np
+import cv2
+import pandas as pd
 import nibabel as nib
+from PySide6.QtWidgets import QMessageBox
+
+logger = logging.getLogger("fetomorph.nifti")
 from scipy.ndimage import binary_opening, binary_closing, label
 from helpers.Helpers import compute_kernel_convex, defect_mm_per_px_and_fixed
 from nibabel.affines import apply_affine

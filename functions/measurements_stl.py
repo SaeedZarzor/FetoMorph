@@ -13,12 +13,20 @@ Unit conversions:
     * ``/10``:   mm  → cm   (depth)
 """
 
-from deps import *
+import os
+import logging
+from typing import Optional, Tuple
+
+import numpy as np
+import cv2
+import pandas as pd
 import pyvista as pv
-from helpers.Helpers import compute_kernel_convex, contours_exclude, clac_scale, get_red_rect_offset, make_scale_cube
+from PySide6.QtWidgets import QMessageBox
+
+logger = logging.getLogger("fetomorph.stl")
+from helpers.Helpers import compute_kernel_convex, contours_exclude, calc_scale, get_red_rect_offset, make_scale_cube, compactness_2D, compactness_3D
 from helpers.check_mesh import check_brain
 from constants import BINARY_THRESHOLD_DEFAULT, RED_CHANNEL_MIN, GREEN_CHANNEL_MAX, DEFECT_FIXED_POINT
-from helpers.Helpers import compactness_2D, compactness_3D
 
 # ----------------- main API -----------------
 def compute_stl_allmarks(
@@ -144,7 +152,7 @@ def compute_stl_allmarks(
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = clac_scale(img_rgb, cube_len)
+        mm_per_px = calc_scale(img_rgb, cube_len)
 
 
         # Prepare masks / contours (pixel space)
@@ -172,13 +180,12 @@ def compute_stl_allmarks(
         cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), 1)
 
         # Perimeters (mm)
-        area_perim_px  = sum(cv2.contourArea(c)     for c in inner_filtered)
+        area_px        = sum(cv2.contourArea(c)     for c in inner_filtered)
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
         outer_perim_px = sum(cv2.arcLength(c, True) for c in outer_filtered)
         inner_perim_mm = inner_perim_px * mm_per_px
         outer_perim_mm = outer_perim_px * mm_per_px
-        area_perim_mm  = area_perim_px * (mm_per_px ** 2)
-
+        area_mm        = area_px * (mm_per_px ** 2)
 
         depth = []
         if inner_filtered:
@@ -201,7 +208,7 @@ def compute_stl_allmarks(
                 
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
-        rows.append([idx, len(inner_filtered), area_perim_mm, inner_perim_mm, outer_perim_mm,
+        rows.append([idx, len(inner_filtered), area_mm, inner_perim_mm, outer_perim_mm,
             len(depth),                         # n_defects
             (min(depth) if depth else None),    # min_depth_mm
             (max(depth) if depth else None),    # max_depth_mm
@@ -229,6 +236,7 @@ def compute_stl_allmarks(
     brain_volume = (sum_area * slice_thickness_eff)/1000
     Area = sum_inner_mm * slice_thickness_eff /100
     GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
+    comp_3D  = compactness_3D(brain_volume, Area) 
     
     total_depth = [x/10 for x in total_depth]
 
@@ -246,6 +254,7 @@ def compute_stl_allmarks(
     
         rows.append(["Volume cm^3",round(brain_volume,2), "Surface Area cm^2",round(Area,2)])
         rows.append(["GI",round(GI_total,2)])
+        rows.append(["Compactness", round(comp_3D, 2)])
         rows.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices_cm",(round(mean_total, 2) if mean_total is not None else None)])
         rows.append(["Max_sulci_across_slices_cm",(round(max(total_depth),2) if total_depth else None),
         "Min_sulci_across_slices_cm",(round(min(total_depth),2) if total_depth else None)])
@@ -261,7 +270,7 @@ def compute_stl_allmarks(
 
 
     # Always return a 3-tuple
-    return dic["label"], brain_dim_cm, Area, brain_volume, GI_total, total_depth ,saved_pngs, valid_slices 
+    return dic["label"], brain_dim_cm, Area, brain_volume, GI_total, comp_3D ,total_depth ,saved_pngs, valid_slices 
 
 
 def compute_stl_lGI(
@@ -388,7 +397,7 @@ def compute_stl_lGI(
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = clac_scale(img_rgb, cube_len)
+        mm_per_px = calc_scale(img_rgb, cube_len)
 
 
         # Prepare masks / contours (pixel space)
@@ -613,7 +622,7 @@ def compute_stl_volume(
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = clac_scale(img_rgb, cube_len)
+        mm_per_px = calc_scale(img_rgb, cube_len)
 
 
         # Prepare masks / contours (pixel space)
@@ -798,7 +807,7 @@ def compute_stl_area(
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = clac_scale(img_rgb, cube_len)
+        mm_per_px = calc_scale(img_rgb, cube_len)
 
 
         # Prepare masks / contours (pixel space)
@@ -980,7 +989,7 @@ def compute_stl_sulci_depth(
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = clac_scale(img_rgb, cube_len)
+        mm_per_px = calc_scale(img_rgb, cube_len)
 
 
         # Prepare masks / contours (pixel space)
@@ -1185,7 +1194,7 @@ def compute_compactness_stl(
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = clac_scale(img_rgb, cube_len)
+        mm_per_px = calc_scale(img_rgb, cube_len)
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)

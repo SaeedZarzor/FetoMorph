@@ -4,7 +4,9 @@ Provides a slider-and-spinbox dialog that constrains the user to odd
 kernel sizes, which is required by most OpenCV morphology operations.
 """
 
-from deps import *
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QDialog, QFormLayout, QSlider, QSpinBox,
+                                QDialogButtonBox)
 
 class KernelSizeDialog(QDialog):
     """Dialog for picking an odd kernel size for morphological operations.

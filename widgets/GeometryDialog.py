@@ -6,7 +6,10 @@ in an embedded PyVista viewer.
 """
 
 # add to imports
-from deps import *
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QDialog, QWidget, QVBoxLayout, QHBoxLayout,
+                                QFormLayout, QDoubleSpinBox, QComboBox,
+                                QPushButton)
 from pyvistaqt import QtInteractor
 import pyvista as pv
 

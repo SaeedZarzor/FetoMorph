@@ -5,13 +5,22 @@ defect depth conversion (pixel ↔ mm), red-cube scale calibration, scalebar
 drawing, and PyVista slice geometry.
 """
 
-from deps import *
-import pyvista as pv
+import os
 import math
+import logging
+from pathlib import Path
+from typing import Optional, Tuple
+
+import numpy as np
+import cv2
+import pyvista as pv
+from PySide6.QtCore import Qt, QRectF
+from PySide6.QtGui import QImage, QPainter, QColor, QPen
 from functions.Nifti2image import draw_new_scale_bar
+import math
 
 
-def text_thickness(H, style="regular", cap=10):
+def text_thickness(H: int, style: str = "regular", cap: int = 10) -> int:
     """Compute an OpenCV line thickness that scales with image height.
 
     Args:
@@ -27,7 +36,7 @@ def text_thickness(H, style="regular", cap=10):
     return max(1, min(t, cap))
     
     
-def compute_kernel_convex(kernel_size):
+def compute_kernel_convex(kernel_size: int) -> np.ndarray:
     """Create an elliptical morphological structuring element.
 
     Used by the GI (gyrification index) pipeline to morphologically close
@@ -76,7 +85,7 @@ def defect_mm_per_px_and_fixed(
     mm_per_fixed = mm_per_px / 256.0  # because OpenCV stores d in 8.8 fixed-point
     return mm_per_px, mm_per_fixed
 
-def contours_exclude(contours, excluded_space, image_shape):
+def contours_exclude(contours: list, excluded_space: np.ndarray, image_shape: Tuple[int, int]) -> list:
     # Needed to remove the red reference-cube contour from the brain contours
     # so that it does not pollute area / perimeter measurements.
     """
@@ -90,7 +99,7 @@ def contours_exclude(contours, excluded_space, image_shape):
             filtered.append(cnt)
     return filtered
     
-def clac_scale(image_rgb, cube_length):
+def calc_scale(image_rgb: np.ndarray, cube_length: float) -> Optional[float]:
     """
     Compute mm-per-pixel from a red reference cube drawn in the render.
     cube_length_mm: the real cube side length (x_length) in mm.
@@ -110,7 +119,7 @@ def clac_scale(image_rgb, cube_length):
         return None
     return scale
     
-def get_red_rect_offset(image_rgb):
+def get_red_rect_offset(image_rgb: np.ndarray) -> np.ndarray:
     """
     Detect red rectangle and return its center (x,y) in pixels — used to zero-align contours.
     """
@@ -122,7 +131,7 @@ def get_red_rect_offset(image_rgb):
     y_max, x_max = coords.max(axis=0)
     return np.array([(x_min + x_max) // 2, (y_min + y_max) // 2])
 
-def get_nifti_present_labels(path: str, cap: int = 5000)-> list[int]:
+def get_nifti_present_labels(path: str, cap: int = 5000) -> Optional[set[int]]:
     """Return the set of unique integer labels present in a NIfTI file.
 
     Args:
@@ -133,12 +142,10 @@ def get_nifti_present_labels(path: str, cap: int = 5000)-> list[int]:
         A set of integer labels, or ``None`` on failure.
     """
     try:
-        if path is not None or data is None:
-            import nibabel as nib
-            img = nib.load(path or self.current_path)
-            # Use dataobj (lazy) but rounding requires actual values; this will page from disk
-            data = img.get_fdata(dtype=float)
-            
+        import nibabel as nib
+        img = nib.load(path)
+        data = img.get_fdata(dtype=float)
+
         arr_i = np.rint(data).astype(np.int32)
         uniq = np.unique(arr_i)
         uniq = uniq[(uniq >= 0) & (uniq <= cap)]
@@ -146,7 +153,7 @@ def get_nifti_present_labels(path: str, cap: int = 5000)-> list[int]:
         print(f"Region labels: \n {uniq_list} \n")
         return uniq_list
     except Exception as ex:
-        print(f"[Regions] Could not detect labels: {ex}")
+        logger.warning("Could not detect labels: %s", ex)
         # Fall back to defaults
         return None
         
@@ -160,7 +167,7 @@ def _mm_per_pixel_x_for_axis(zooms, ax):
     else:                     # ax == 2: slice is a[:, :, i]
         return float(zooms[1])  # X shows axis 1
 
-def add_scalebar(qimg: QImage, zooms, ax) -> QImage:
+def add_scalebar(qimg: QImage, zooms: np.ndarray, ax: int) -> Tuple[QImage, float, float]:
     """Draw a scalebar (mm) at the bottom-right of qimg and return it."""
     # QPainter needs a 32-bit RGB(A) surface for best compatibility
     if qimg.format() not in (QImage.Format_RGB32, QImage.Format_ARGB32):
@@ -235,7 +242,7 @@ def _add_scalebar_on_annotated(
     return draw_new_scale_bar(annotated, bar_px, text=f"{bar_phys:g} {unit}")
 
 
-def get_max_slice_thinckness(path: str):
+def get_max_slice_thickness(path: str) -> Optional[float]:
     """Return the smallest bounding-box dimension of an STL/VTK mesh.
 
     This gives the maximum sensible slice thickness for the mesh — slicing
@@ -367,7 +374,7 @@ def compactness_2D(area, perimeter) -> float:
         return 0
     return (4 * 3.141592653589793 * area) / (perimeter ** 2)
 
-def compactness_3D(volume, surface_area):
+def compactness_3D(volume: float, surface_area: float) -> float:
     if surface_area == 0:
         return 0
     return (36 * 3.141592653589793 * (volume ** 2)) / (surface_area ** 3)

@@ -6,7 +6,7 @@ termination-criterion slider so the user can fully configure an
 optimisation run before launching it.
 """
 
-from deps import *
+from PySide6 import QtWidgets, QtCore
 
 
 class OptimizationOptionsDialog(QtWidgets.QDialog):

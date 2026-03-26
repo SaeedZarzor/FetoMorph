@@ -20,7 +20,7 @@ def measure_image_allmarks(
     kernel_size: int = 5,
     cnt_threshold: float = 20,
     unit: str = "mm",
-    add_scalebar: bool = True,
+    add_scalebar: Optional[bool] = True,
 ) -> Tuple[float, float, float, float, float, list, np.ndarray]:
     """Compute all hallmarks (area, perimeters, GI, sulci depths) from an image.
 
@@ -115,9 +115,7 @@ def measure_image_allmarks(
                         depth.append(d * pixel_size / DEFECT_FIXED_POINT )
 
             depth.sort(reverse=True)
-
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
-
     return area, perimeter, perimeter_convex ,perimeter_Rate, comp, depth, annotated  # BGR ndarray
 
 
@@ -126,7 +124,7 @@ def measure_image_perimeter(
     pixel_size: float = 0.01,
     cnt_threshold: float = 20,
     unit: str = "mm",
-    add_scalebar: bool = True,
+    add_scalebar: Optional[bool] = True,
 ) -> Tuple[float, np.ndarray]:
     """
     Compute foreground perimeter from a 2D image by thresholding & contour filtering.
@@ -191,7 +189,7 @@ def measure_image_area(
     pixel_size: float = 0.01,
     cnt_threshold: float = 20,
     unit: str = "mm",
-    add_scalebar: bool = True,
+    add_scalebar: Optional[bool] = True,
 ) -> Tuple[float, np.ndarray]:
     """
     Compute foreground area from a 2D image by thresholding & contour filtering.
@@ -256,8 +254,8 @@ def measure_image_lGI(
     kernel_size: int = 5,
     cnt_threshold: float = 20,
     unit: str = "mm",
-    add_scalebar: bool = True,
-) -> Tuple[float, float, float, np.ndarray]:
+    add_scalebar: Optional[bool] = True,
+)  -> Tuple[float, float, float, np.ndarray]: 
     """Compute the local Gyrification Index from a 2-D brain-slice image.
 
     GI = inner perimeter / outer perimeter, where "outer" is derived by
@@ -346,7 +344,7 @@ def measure_image_sulci_depth(
     pixel_size: float,
     cnt_threshold: float,
     unit: str = "mm",
-    add_scalebar: bool = True,
+    add_scalebar: Optional[bool] = True,
 ) -> Tuple[list, np.ndarray]:
     """Compute sulci depths from convexity defects on a 2-D brain-slice image.
 
@@ -410,7 +408,7 @@ def measure_image_sulci_depth(
     return depth, annotated  # BGR ndarray
 
 
-def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> (float, 'Annotated Image'):
+def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> Tuple[float, np.ndarray]:
     margin = 6
     image = cv2.imread(file_path)
     if image is None:

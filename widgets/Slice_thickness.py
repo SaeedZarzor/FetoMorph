@@ -5,9 +5,11 @@ thickness value, mapping a continuous range onto an integer slider for
 smooth interaction.
 """
 
-from deps import *
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QDialog, QFormLayout, QSlider, QDoubleSpinBox,
+                                QDialogButtonBox)
 
-class SilceThicknessDialog(QDialog):
+class SliceThicknessDialog(QDialog):
     """Dialog for selecting a slice thickness as a floating-point value.
 
     An integer QSlider is internally mapped to the float range
