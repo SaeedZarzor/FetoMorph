@@ -10,7 +10,7 @@ import cv2
 import os
 import numpy as np
 from typing import Tuple, Union
-from helpers.Helpers import text_thickness, compute_kernel_convex, compactness_2D
+from helpers.Helpers import image_annotation_style, compute_kernel_convex, compactness_2D
 from constants import BINARY_THRESHOLD_DEFAULT, DEFECT_FIXED_POINT
 import pandas as pd
 
@@ -84,7 +84,7 @@ def process_on_images_batch(directory_path,
            
         annotated = image.copy()
         W, H = annotated.shape[:2]
-        thickness = text_thickness(H, style="thin")
+        thickness, _, _ = image_annotation_style(H, W, style="bold")
 
         if filtered_contours:
             cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)

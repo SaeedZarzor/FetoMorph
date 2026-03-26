@@ -21,20 +21,92 @@ from functions.Nifti2image import draw_new_scale_bar
 
 logger = logging.getLogger(__name__)
 
-def text_thickness(H: int, style: str = "regular", cap: int = 10) -> int:
-    """Compute an OpenCV line thickness that scales with image height.
+def image_annotation_style(
+    h: int,
+    w: int | None = None,
+    *,
+    style: str = "regular",
+    cap: int = 30,
+) -> tuple[int, float, int]:
+    """Return (thickness, font_scale, radius_px) based on image dimensions."""
+    h = max(1, int(h))
+    w = h if w is None else max(1, int(w))
+    base = min(h, w)
 
-    Args:
-        H: Image height in pixels.
-        style: One of ``"thin"``, ``"regular"``, ``"bold"``.
-        cap: Maximum thickness returned.
+    base_div = {"thin": 380, "regular": 320, "bold": 260}[style]
+    thickness = max(1, min(int(round(h / base_div)), cap))
+    font_scale = float(np.clip(base / 500.0, 0.9, 3.8))
+    radius_px = int(np.clip(round(base / 150.0), 3, 22))
+    return thickness, font_scale, radius_px
 
-    Returns:
-        Integer thickness clamped to ``[1, cap]``.
-    """
-    base_div = {"thin": 380, "regular": 320, "bold": 260}[style]  # ↑ bigger divisors = thinner
-    t = int(round(H / base_div))
-    return max(1, min(t, cap))
+def draw_hallmarks_values_on_image(
+    bgr: np.ndarray,
+    thickness: int | None = None,
+    font_scale: float | None = None,
+    *,
+    area: float | None = None,
+    perimeter: float | None = None,
+    lgi: float | None = None,
+    compactness: float | None = None,
+    unit: str = "mm",
+    anchor_ratio: tuple[float, float] = (0.02, 0.05),
+    anchor_px: tuple[int, int] | None = None,
+    margin: int | None = None,
+    margin_ratio: float = 0.012,
+) -> np.ndarray:
+    """Draw Area/Perimeter/LGI/Compactness as a non-overlapping text block."""
+    if bgr is None or not isinstance(bgr, np.ndarray) or bgr.ndim != 3:
+        return bgr
+
+    out = bgr.copy()
+    h, w = out.shape[:2]
+    if margin is None:
+        margin = int(np.clip(round(w * float(margin_ratio)), 3, 24))
+    else:
+        margin = max(0, int(margin))
+    if thickness is None or font_scale is None:
+        t_auto, f_auto, _ = image_annotation_style(h, w, style="regular")
+        if thickness is None:
+            thickness = t_auto
+        if font_scale is None:
+            font_scale = f_auto
+    font = cv2.FONT_HERSHEY_SIMPLEX
+
+    lines = []
+    if area is not None:
+        lines.append(f"Area: {area:.2f} {unit}^2")
+    if perimeter is not None:
+        lines.append(f"Perimeter: {perimeter:.2f} {unit}")
+    if lgi is not None:
+        lines.append(f"lGI: {lgi:.2f}")
+    if compactness is not None:
+        lines.append(f"Compactness: {compactness:.2f}")
+    if not lines:
+        return out
+
+    sizes = [cv2.getTextSize(t, font, font_scale, thickness) for t in lines]
+    text_w = max(s[0][0] for s in sizes)
+    line_h = max(s[0][1] + s[1] for s in sizes)
+    line_gap = max(2, int(round(line_h * 0.25)))
+
+    box_w = text_w + 2 * margin
+    box_h = (line_h * len(lines)) + (line_gap * (len(lines) - 1)) + 2 * margin
+
+    if anchor_px is not None:
+        x1, y1 = int(anchor_px[0]), int(anchor_px[1])
+    else:
+        rx = float(np.clip(anchor_ratio[0], 0.0, 1.0))
+        ry = float(np.clip(anchor_ratio[1], 0.0, 1.0))
+        x1, y1 = int(round(w * rx)), int(round(h * ry))
+    x1 = min(max(0, x1), max(0, w - box_w))
+    y1 = min(max(0, y1), max(0, h - box_h))
+
+    cv2.rectangle(out, (x1, y1), (x1 + box_w, y1 + box_h), (0, 0, 0), -1)
+    y_base = y1 + margin + line_h
+    for i, txt in enumerate(lines):
+        y = y_base + i * (line_h + line_gap)
+        cv2.putText(out, txt, (x1 + margin, y), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+    return out
     
     
 def compute_kernel_convex(kernel_size: int) -> np.ndarray:

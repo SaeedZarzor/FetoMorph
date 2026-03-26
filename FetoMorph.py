@@ -253,6 +253,7 @@ class MainWindow(QMainWindow):
         self.pixel_size = self.pixel_size_default       # current working scale (units/pixel)
         self.image_scales = {}                          # per-file scale: {path: float}
         self.image_scale_from_scalebar = {}                       # {path: bool} whether the scale was set from scalebar (vs. manual entry)
+        self.draw_hallmarks_on_image = True
         self.cnt_threshold = DEFAULT_CNT_THRESHOLD
         self.kernel_size = DEFAULT_KERNEL_SIZE
         self.slice_thickness = DEFAULT_SLICE_THICKNESS
@@ -366,6 +367,7 @@ class MainWindow(QMainWindow):
         self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.set_kernel_dialog); Setting_menu.addAction(self.act_kernel_size)
         self.act_slice_thickness = QAction("Set Slice Thickness…", self); self.act_slice_thickness.triggered.connect(self.set_slice_thickness_dialog); Setting_menu.addAction(self.act_slice_thickness); self.act_slice_thickness.setToolTip("Set the distance between slices")
         self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
+        self.act_draw_hallmarks = QAction("Draw hallmarks values on image", self); self.act_draw_hallmarks.setCheckable(True); self.act_draw_hallmarks.setChecked(True); self.act_draw_hallmarks.toggled.connect(lambda checked: setattr(self, "draw_hallmarks_on_image", bool(checked))); Setting_menu.addAction(self.act_draw_hallmarks)
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Setting_menu.addAction(self.act_annotate_square)
         self.act_choose_regions = QAction("ROI selection…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
         self.act_set_physical_dim = QAction("Mesh dimensions…", self);self.act_set_physical_dim.setToolTip("Define the physical dimensions of the VTK mesh."); self.act_set_physical_dim.triggered.connect(self.load_mesh_and_ask_geometry);Setting_menu.addAction(self.act_set_physical_dim)
@@ -1317,20 +1319,24 @@ class MainWindow(QMainWindow):
             if mode == "allmarks":
                 area, perimeter, perimeter_convex, lGI, compactness, depth, annotated_bgr = compute_image_allmarks(
                     img_path, pixel_size=pixel_size, kernel_size=self.kernel_size,
-                    cnt_threshold=self.cnt_threshold, unit=u, add_scalebar=False)
+                    cnt_threshold=self.cnt_threshold, unit=u, add_scalebar=False,
+                    draw_hallmarks=self.draw_hallmarks_on_image)
             elif mode == "perimeter":
                 perimeter, annotated_bgr = compute_image_perimeter(
-                    img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u)
+                    img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u, add_scalebar=False,
+                    draw_hallmarks=self.draw_hallmarks_on_image)
             elif mode == "area":
                 area, annotated_bgr = compute_image_area(
-                    img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u)
+                    img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u, add_scalebar=False,
+                    draw_hallmarks=self.draw_hallmarks_on_image)
             elif mode == "lGI":
                 lGI, perimeter, perimeter_convex, annotated_bgr = compute_image_lGI(
                     img_path, pixel_size=pixel_size, kernel_size=self.kernel_size,
-                    cnt_threshold=self.cnt_threshold, unit=u)
+                    cnt_threshold=self.cnt_threshold, unit=u, add_scalebar=False,
+                    draw_hallmarks=self.draw_hallmarks_on_image)
             elif mode == "sulci_depth":
                 depth, annotated_bgr = compute_image_sulci_depth(
-                    img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u)
+                    img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u, add_scalebar=False)
             else:
                 print(f"[Planar VTK] Unknown mode: {mode}")
                 return
@@ -1420,6 +1426,7 @@ class MainWindow(QMainWindow):
                     cnt_threshold=self.cnt_threshold,
                     unit = u,
                     add_scalebar=not bool(self.image_scale_from_scalebar.get(self.current_path, False)),
+                    draw_hallmarks=self.draw_hallmarks_on_image,
                 )
                 
                 print(f"[All hallmarks] Results:")
@@ -1776,6 +1783,8 @@ class MainWindow(QMainWindow):
                     pixel_size = px_size,
                     cnt_threshold = self.cnt_threshold,
                     unit = u,
+                    add_scalebar=not bool(self.image_scale_from_scalebar.get(self.current_path, False)),
+                    draw_hallmarks=self.draw_hallmarks_on_image,
                 )
                 print(f"Annotated perimeter = {perimeter:.2f} {u}.")
                 
@@ -1972,7 +1981,9 @@ class MainWindow(QMainWindow):
                     pixel_size = px_size,
                     kernel_size= self.kernel_size,
                     cnt_threshold=self.cnt_threshold,
-                    unit = u
+                    unit = u,
+                    add_scalebar=not bool(self.image_scale_from_scalebar.get(self.current_path, False)),
+                    draw_hallmarks=self.draw_hallmarks_on_image,
                 )
                 print(f"lGI = {lGI:.2f}.")
 
@@ -2214,6 +2225,7 @@ class MainWindow(QMainWindow):
                     pixel_size = px_size,
                     cnt_threshold=self.cnt_threshold,
                     unit = u,
+                    add_scalebar=not bool(self.image_scale_from_scalebar.get(self.current_path, False))
                 )
                 print(f"[Sulci depth] Maximum Sulci Depth = {self._depth_summary(depth, u)}")
                 
@@ -2388,6 +2400,8 @@ class MainWindow(QMainWindow):
                     pixel_size=px_size,
                     cnt_threshold=self.cnt_threshold,
                     unit = u,
+                    add_scalebar=not bool(self.image_scale_from_scalebar.get(self.current_path, False)),
+                    draw_hallmarks=self.draw_hallmarks_on_image,
                 )
                 
                 label_text = self.get_label_for_cropped_path(image_path)
@@ -3651,6 +3665,7 @@ class MainWindow(QMainWindow):
             self.act_nitfi2png.setEnabled(False)
             self.act_hausdorf.setEnabled(True)
             self.act_meas_curvature.setEnabled(True)
+            self.act_meas_stright.setEnabled(True)
             self.act_slice_thickness.setEnabled(False)
             self.act_niftiextractor.setEnabled(False)
             self.slice_slider.setEnabled(False)

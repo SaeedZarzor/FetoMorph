@@ -22,7 +22,7 @@ from PIL import Image
 from pathlib import Path
 from scipy.spatial.distance import directed_hausdorff, cdist
 import matplotlib.pyplot as plt
-from helpers.Helpers import text_thickness
+from helpers.Helpers import image_annotation_style
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 
@@ -103,7 +103,7 @@ def convert_image(
     
     annotated = image.copy()
     W, H = annotated.shape[:2]
-    thickness = text_thickness(H, style="thin")
+    thickness, _, _ = image_annotation_style(H, W, style="bold")
     
     if len(filtered_contours) > 0:
 

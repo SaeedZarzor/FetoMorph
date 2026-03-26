@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from helpers.Helpers import text_thickness, compute_kernel_convex, compactness_2D, _add_scalebar_on_annotated
+from helpers.Helpers import image_annotation_style, compute_kernel_convex, compactness_2D, _add_scalebar_on_annotated, draw_hallmarks_values_on_image
 from constants import BINARY_THRESHOLD_DEFAULT, DEFECT_FIXED_POINT
 
 
@@ -22,6 +22,7 @@ def compute_image_allmarks(
     cnt_threshold: float = 20,
     unit: str = "mm",
     add_scalebar: bool | None = True,
+    draw_hallmarks: bool = True,
 ) -> tuple[float, float, float, float, float, list, np.ndarray]:
     """Compute all hallmarks (area, perimeters, GI, sulci depths) from an image.
 
@@ -38,14 +39,12 @@ def compute_image_allmarks(
         cnt_threshold: Minimum contour area (pixels) to keep.
         unit: Label for output units.
         add_scalebar: If True, overlay a new scale bar on the annotated output.
+        draw_hallmarks: If True, draw hallmark numeric values on the image.
 
     Returns:
         Tuple of ``(area, perimeter, perimeter_convex, GI, depths, annotated_bgr)``.
     """
-    # font_scale is normalised so that text is ~1 mm tall on-screen
-    font_scale = 0.01/pixel_size
     margin = 6
-    radius_px = int(round(0.1 / pixel_size))
 
     image = cv2.imread(file_path)
     if image is None:
@@ -60,7 +59,7 @@ def compute_image_allmarks(
    
     annotated = image.copy()
     W, H = annotated.shape[:2]
-    thickness = text_thickness(H, style="bold")
+    thickness, font_scale, radius_px = image_annotation_style(H, W, style="bold")
 
     if filtered_contours:
         cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
@@ -111,11 +110,39 @@ def compute_image_allmarks(
                     far = tuple(cnt[f][0])
                     annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
                     # Convert fixed-point depth to mm; keep only defects > 0.5 mm
-                    if (d * pixel_size / DEFECT_FIXED_POINT) > 0.5:
+                    depth_value = d * pixel_size / DEFECT_FIXED_POINT
+                    if (depth_value) > 0.5:
                         annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
-                        depth.append(d * pixel_size / DEFECT_FIXED_POINT )
+                        depth.append(depth_value)
+                        label = f"{depth_value:.2f} {unit}"
+                        tx = min(max(0, int(far[0] + radius_px + 4)), max(0, W - 1))
+                        ty = min(max(0, int(far[1] - radius_px - 4)), max(0, H - 1))
+                        cv2.putText(
+                            annotated,
+                            label,
+                            (tx, ty),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            font_scale * 0.75,
+                            (255, 255, 0),
+                            max(1, thickness - 1),
+                            cv2.LINE_AA,
+                        )
+
 
             depth.sort(reverse=True)
+
+    if draw_hallmarks:
+        annotated = draw_hallmarks_values_on_image(
+            annotated,
+            thickness=thickness,
+            font_scale=font_scale,
+            area=area,
+            perimeter=perimeter,
+            lgi=perimeter_Rate,
+            compactness=comp,
+            unit=unit,
+            anchor_ratio=(0.02, 0.05),
+        )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
     return area, perimeter, perimeter_convex ,perimeter_Rate, comp, depth, annotated  # BGR ndarray
 
@@ -126,6 +153,7 @@ def compute_image_perimeter(
     cnt_threshold: float = 20,
     unit: str = "mm",
     add_scalebar: bool | None = True,
+    draw_hallmarks: bool = True,
 ) -> tuple[float, np.ndarray]:
     """
     Compute foreground perimeter from a 2D image by thresholding & contour filtering.
@@ -133,7 +161,6 @@ def compute_image_perimeter(
 
     No files are written here.
     """
-    font_scale = 0.01/pixel_size
     margin = 6
 
     image = cv2.imread(file_path)
@@ -150,7 +177,7 @@ def compute_image_perimeter(
 
     annotated = image.copy()
     W, H = annotated.shape[:2]
-    thickness = text_thickness(H, style="regular")
+    thickness, font_scale, _ = image_annotation_style(H, W, style="regular")
     
     if filtered:
         cv2.drawContours(annotated, filtered, -1, (0, 0, 255), thickness)
@@ -158,29 +185,16 @@ def compute_image_perimeter(
     perimeter_sum = sum(cv2.arcLength(cnt, True) for cnt in filtered)
     perimeter = perimeter_sum * pixel_size
 
-    if filtered and len(filtered[0]) > 0:
-        x1, y1 = filtered[0][0][0]
-    else:
-        x1, y1 = 15, 40
-        
-    text_Perimeter= f"Perimeter_unite:{perimeter:.2f} {unit}"
-    (tw, th), baseline = cv2.getTextSize(text_Perimeter, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
-    
-    inside = (0 <= x1 <= max(0, W - bw)) and (0 <= y1 <= max(0, H - bh))
-    x1 = min(max(0, x1), max(0, W - bw))
-    y1 = min(max(0, y1), max(0, H - bh))
-
-    cv2.putText(
-        annotated,
-        text_Perimeter,
-        (int(x1 + margin), int(y1 + margin + th)),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        font_scale,
-        (255, 0, 200),
-        thickness,
-        cv2.LINE_AA,
-    )
+    if draw_hallmarks:
+        annotated = draw_hallmarks_values_on_image(
+            annotated,
+            thickness=thickness,
+            font_scale=font_scale,
+            perimeter=perimeter,
+            lgi=None,
+            unit=unit,
+            anchor_ratio=(0.02, 0.05),
+        )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
     return perimeter, annotated  # BGR ndarray
 
@@ -191,6 +205,7 @@ def compute_image_area(
     cnt_threshold: float = 20,
     unit: str = "mm",
     add_scalebar: bool | None = True,
+    draw_hallmarks: bool = True,
 ) -> tuple[float, np.ndarray]:
     """
     Compute foreground area from a 2D image by thresholding & contour filtering.
@@ -198,7 +213,6 @@ def compute_image_area(
 
     No files are written here.
     """
-    font_scale = 0.01/pixel_size
     margin = 6
 
     image = cv2.imread(file_path)
@@ -215,7 +229,7 @@ def compute_image_area(
 
     annotated = image.copy()
     W, H = annotated.shape[:2]
-    thickness = text_thickness(H, style="regular")
+    thickness, _, _ = image_annotation_style(H, W, style="regular")
     
     if filtered:
         cv2.drawContours(annotated, filtered, -1, (0, 0, 255), thickness)
@@ -228,24 +242,16 @@ def compute_image_area(
     else:
         x1, y1 = 15, 40
 
-#    text_area =  f"Area: {area_units2:.3f} {unit}^2"
-#    (tw, th), baseline = cv2.getTextSize(text_area, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-#    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
-    
-#    inside = (0 <= x1 <= max(0, W - bw)) and (0 <= y1 <= max(0, H - bh))
-#    x1 = min(max(0, x1), max(0, W - bw))
-#    y1 = min(max(0, y1), max(0, H - bh))
-#    
-#    cv2.putText(
-#        annotated,
-#        text_area,
-#        (int(x1 + margin), int(y1 + margin + th)),
-#        cv2.FONT_HERSHEY_SIMPLEX,
-#        font_scale,
-#        (255, 0, 100),
-#        thickness,
-#        cv2.LINE_AA,
-#    )
+
+    if draw_hallmarks:
+        annotated = draw_hallmarks_values_on_image(
+            annotated,
+            thickness=thickness,
+            area=area_units2,
+            lgi=None,
+            unit=unit,
+            anchor_ratio=(0.02, 0.05),
+        )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
     return area_units2, annotated  # BGR ndarray
 
@@ -256,6 +262,7 @@ def compute_image_lGI(
     cnt_threshold: float = 20,
     unit: str = "mm",
     add_scalebar: bool | None = True,
+    draw_hallmarks: bool = True,
 )  -> tuple[float, float, float, np.ndarray]: 
     """Compute the local Gyrification Index from a 2-D brain-slice image.
 
@@ -272,7 +279,6 @@ def compute_image_lGI(
     Returns:
         Tuple of ``(GI_ratio, inner_perim_mm, outer_perim_mm, annotated_bgr)``.
     """
-    font_scale = 0.01/pixel_size
     margin =6
 
     image = cv2.imread(file_path)
@@ -288,7 +294,7 @@ def compute_image_lGI(
    
     annotated = image.copy()
     W, H = annotated.shape[:2]
-    thickness = text_thickness(H, style="regular")
+    thickness, _, _ = image_annotation_style(H, W, style="regular")
     
     if filtered_contours:
         cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
@@ -310,6 +316,8 @@ def compute_image_lGI(
         
 
     perimeter_Rate = perimeter / perimeter_convex
+    perimeter_u = perimeter * pixel_size
+    perimeter_convex_u = perimeter_convex * pixel_size
     
 
     if filtered_contours and len(filtered_contours[0]) > 0:
@@ -336,8 +344,16 @@ def compute_image_lGI(
 #        cv2.LINE_AA,
 #    )
     
+    if draw_hallmarks:
+        annotated = draw_hallmarks_values_on_image(
+            annotated,
+            thickness=thickness,
+            lgi=perimeter_Rate,
+            unit=unit,
+            anchor_ratio=(0.02, 0.05),
+        )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
-    return perimeter_Rate, perimeter*pixel_size, perimeter_convex*pixel_size, annotated  # BGR ndarray
+    return perimeter_Rate, perimeter_u, perimeter_convex_u, annotated  # BGR ndarray
 
         
 def compute_image_sulci_depth(
@@ -362,9 +378,6 @@ def compute_image_sulci_depth(
     Returns:
         Tuple of ``(depth_list_mm, annotated_bgr)``.
     """
-    font_scale = 0.01/pixel_size
-    radius_px = int(round(0.1 / pixel_size))
-
     image = cv2.imread(file_path)
     if image is None:
         raise ValueError(f"Could not read image: {file_path}")
@@ -378,7 +391,7 @@ def compute_image_sulci_depth(
    
     annotated = image.copy()
     W, H = annotated.shape[:2]
-    thickness = text_thickness(H, style="regular")
+    thickness, font_scale, radius_px = image_annotation_style(H, W, style="regular")
     
     if filtered_contours:
         cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
@@ -401,10 +414,25 @@ def compute_image_sulci_depth(
                     annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
                     # Convert fixed-point depth to mm; keep defects > 0.5 mm
                     if (d * pixel_size / DEFECT_FIXED_POINT) > 0.5:
+                        depth_value = d * pixel_size / DEFECT_FIXED_POINT
                         annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
-                        depth.append(d * pixel_size / DEFECT_FIXED_POINT )
+                        depth.append(depth_value)
+                        label = f"{depth_value:.2f} {unit}"
+                        tx = min(max(0, int(far[0] + radius_px + 4)), max(0, W - 1))
+                        ty = min(max(0, int(far[1] - radius_px - 4)), max(0, H - 1))
+                        cv2.putText(
+                            annotated,
+                            label,
+                            (tx, ty),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            font_scale * 0.75,
+                            (255, 255, 0),
+                            max(1, thickness - 1),
+                            cv2.LINE_AA,
+                        )
 
             depth.sort(reverse=True)
+
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
     return depth, annotated  # BGR ndarray
 
@@ -423,7 +451,7 @@ def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> tuple
 
     annotated = image.copy()
     W, H = annotated.shape[:2]
-    thickness = text_thickness(H, style="regular")
+    thickness, _, _ = image_annotation_style(H, W, style="regular")
     
     if filtered:
         cv2.drawContours(annotated, filtered, -1, (0, 0, 255), thickness)
@@ -437,6 +465,13 @@ def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> tuple
     else:
         x1, y1 = 15, 40
         
+    annotated = draw_hallmarks_values_on_image(
+        annotated,
+        thickness=thickness,
+        compactness=compactness_2D_value,
+        anchor_ratio=(0.02, 0.05),
+    )
+
     return compactness_2D_value, annotated  # BGR ndarray
 
 def put_label_on_bgr(
