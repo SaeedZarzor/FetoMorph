@@ -214,6 +214,7 @@ def compute_vtk_allmarks(
     Volume = (sum_area * slice_thickness_eff)
     Area = sum_inner_mm * slice_thickness_eff
     GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
+    comp = compactness_3D(Volume, Area)
     
     mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
     if sections_list:
@@ -228,6 +229,7 @@ def compute_vtk_allmarks(
     try:
         rows.append([f"Volume {unit}^3", Volume, f"Surface Area {unit}^2", Area])
         rows.append(["GI",round(GI_total,2)])
+        rows.append(["Compactness", round(comp, 2)])
         rows.append(["Total_Number_of_Sluci",len(total_depth), f"Mean_value_across_slices_{unit}",(round(mean_total, 2) if mean_total is not None else None)])
         rows.append([f"Max_sulci_across_slices_{unit}",(round(max(total_depth),2) if total_depth else None),
         f"Min_sulci_across_slices_{unit}",(round(min(total_depth),2) if total_depth else None)])
@@ -243,7 +245,7 @@ def compute_vtk_allmarks(
 
 
     # Always return a 3-tuple
-    return Area, Volume, GI_total, total_depth ,saved_pngs, valid_slices
+    return Area, Volume, GI_total, comp ,total_depth ,saved_pngs, valid_slices
 
 
 def compute_vtk_lGI(

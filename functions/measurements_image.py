@@ -89,6 +89,7 @@ def measure_image_allmarks(
 
     perimeter_convex = perimeter_convex_sum * pixel_size
     perimeter_Rate = perimeter / perimeter_convex  # GI ratio
+    comp = compactness_2D(area, perimeter) 
 
     # --- Sulci depth via convexity defects ---
     depth = []
@@ -112,7 +113,7 @@ def measure_image_allmarks(
                         depth.append(d * pixel_size / DEFECT_FIXED_POINT )
 
             depth.sort(reverse=True)
-    return area, perimeter, perimeter_convex ,perimeter_Rate, depth, annotated  # BGR ndarray
+    return area, perimeter, perimeter_convex ,perimeter_Rate, comp, depth, annotated  # BGR ndarray
 
 
 def measure_image_perimeter (file_path: str,

@@ -32,3 +32,15 @@ DEFECT_FIXED_POINT = 256
 # segmentation masks.  The set is passed to region-filtering routines so that
 # only these labels contribute to area / volume / GI calculations.
 DEFAULT_NIFTI_REGIONS = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}
+
+# ---------------------------------------------------------------------------
+# Application defaults
+# ---------------------------------------------------------------------------
+WINDOW_WIDTH = 1200
+WINDOW_HEIGHT = 900
+DEFAULT_PIXEL_SIZE = 0.01        # mm/px fallback when user has not calibrated
+DEFAULT_CNT_THRESHOLD = 100      # contour detection threshold (0-255)
+DEFAULT_KERNEL_SIZE = 5          # morphological kernel size in pixels
+DEFAULT_SLICE_THICKNESS = 0.5    # mm between slices
+DEFAULT_SCALEBAR_MM = 25         # default scale-bar length in mm
+CONSOLE_MAX_BLOCKS = 10000       # max lines in the output console

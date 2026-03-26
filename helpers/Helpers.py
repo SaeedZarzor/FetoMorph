@@ -89,7 +89,7 @@ def contours_exclude(contours, excluded_space, image_shape):
             filtered.append(cnt)
     return filtered
     
-def clac_scale(image_rgb, cube_length):
+def calc_scale(image_rgb, cube_length):
     """
     Compute mm-per-pixel from a red reference cube drawn in the render.
     cube_length_mm: the real cube side length (x_length) in mm.
@@ -132,12 +132,10 @@ def get_nifti_present_labels(path: str, cap: int = 5000)-> list[int]:
         A set of integer labels, or ``None`` on failure.
     """
     try:
-        if path is not None or data is None:
-            import nibabel as nib
-            img = nib.load(path or self.current_path)
-            # Use dataobj (lazy) but rounding requires actual values; this will page from disk
-            data = img.get_fdata(dtype=float)
-            
+        import nibabel as nib
+        img = nib.load(path)
+        data = img.get_fdata(dtype=float)
+
         arr_i = np.rint(data).astype(np.int32)
         uniq = np.unique(arr_i)
         uniq = uniq[(uniq >= 0) & (uniq <= cap)]
@@ -213,7 +211,7 @@ def add_scalebar(qimg: QImage, zooms, ax) -> QImage:
     return qimg, mm_per_px, bar_mm
 
 
-def get_max_slice_thinckness(path: str):
+def get_max_slice_thickness(path: str):
     """Return the smallest bounding-box dimension of an STL/VTK mesh.
 
     This gives the maximum sensible slice thickness for the mesh — slicing

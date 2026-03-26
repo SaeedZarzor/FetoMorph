@@ -15,7 +15,10 @@ Typical workflow:
 """
 
 from deps import *
-from constants import DEFAULT_NIFTI_REGIONS
+from constants import (DEFAULT_NIFTI_REGIONS, WINDOW_WIDTH, WINDOW_HEIGHT,
+                       DEFAULT_PIXEL_SIZE, DEFAULT_CNT_THRESHOLD,
+                       DEFAULT_KERNEL_SIZE, DEFAULT_SLICE_THICKNESS,
+                       DEFAULT_SCALEBAR_MM, CONSOLE_MAX_BLOCKS)
 from functions.measurements_image import *
 from functions.measurements_Nifti import *
 from functions.measurements_stl import *
@@ -28,7 +31,7 @@ from functions.hausdorff import calculate_hausdorff_distance, convert_image
 from functions.nii_extractor import nifti_extractor
 from functions.optimization import optimization
 from helpers.Read_Excel import conver_excel
-from helpers.Helpers import get_nifti_present_labels, add_scalebar, get_max_slice_thinckness,compactness_3D,compactness_2D
+from helpers.Helpers import get_nifti_present_labels, add_scalebar, get_max_slice_thickness,compactness_3D,compactness_2D
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.Contour_threshold import ContourThresholdDialog
 from widgets.Scalebar_set_scale import ScalebarSetScaleDialog
@@ -36,7 +39,7 @@ from widgets.Unit_scale import UnitScaleDialog
 from widgets.VTK_Viewer import VTKViewer
 from widgets.Kernel_size import KernelSizeDialog
 from widgets.optimization_widgets import OptimizationOptionsDialog
-from widgets.Slice_thickness import SilceThicknessDialog
+from widgets.Slice_thickness import SliceThicknessDialog
 from widgets.OptionsDialog import ProcessingOptionsDialog
 from widgets.Recent_paths import RecentPaths, populate_recent_menu
 from widgets.GeometryDialog import GeometryDialogWithAspect
@@ -200,7 +203,7 @@ class MainWindow(QMainWindow):
         """Initialise the main window, menus, toolbar, state variables, and console hooks."""
         super().__init__()
         self.setWindowTitle("Unified Image / VTK / NIfTI Viewer (PySide6 + VTK)")
-        self.resize(1200, 900)
+        self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
 
         # ---- Core state ----
         self.current_path: str | None = None
@@ -215,7 +218,7 @@ class MainWindow(QMainWindow):
         # Metrics store -- keyed by file path; each value is a list of row
         # dicts with columns: File, Kind, Label, Annotation, Source,
         # SliceDirection, PixelSize, PixelSizeUnits, KernelSize, LengthUnit,
-        # SliceThickness, Length(PA), Width(LR), Hight(IS), Area, Volume,
+        # SliceThickness, Length(PA), Width(LR), Height(IS), Area, Volume,
         # Perimeter, Perimeter_convex, SulciCount, MinDepth, MaxDepth,
         # MeanDepth, LGI.  Multiple rows per path arise when measurement
         # parameters change.
@@ -231,25 +234,24 @@ class MainWindow(QMainWindow):
         self.nifti_axis: int = 1         # default = coronal
         self.nifti_depth: int = 0        # number of slices along current axis
         self.nifti_selected_regions_default = DEFAULT_NIFTI_REGIONS
-        self.labels_available : set[int] ={}
+        self.labels_available: set[int] = set()
         self.nifti_label_lut: dict[int, QColor] = {}   # label -> color
         self.nifti_selected_regions: set[int] = set()
         self.Freesurfer_record: List[Dict[str, str]] = []
         self.label_overlay_enabled: bool = True
-#        self.label_overlay_alpha: float = 0.5
         
         # Params for measurements
         self.units_length = None          # e.g., "mm" (set by user prompt)
         # Default physical size of one pixel in length-units (e.g. 0.01 mm/px).
         # Acts as a fallback when the user has not yet calibrated the image.
-        self.pixel_size_default = 0.01
+        self.pixel_size_default = DEFAULT_PIXEL_SIZE
         self.pixel_size = self.pixel_size_default       # current working scale (units/pixel)
         self.image_scales = {}                          # per-file scale: {path: float}
-        self.cnt_threshold = 100
-        self.kernel_size = 5  # default (pixels)
-        self.slice_thickness = 0.5
+        self.cnt_threshold = DEFAULT_CNT_THRESHOLD
+        self.kernel_size = DEFAULT_KERNEL_SIZE
+        self.slice_thickness = DEFAULT_SLICE_THICKNESS
         self.mm_per_px_bar = 0
-        self.bar_mm = 25
+        self.bar_mm = DEFAULT_SCALEBAR_MM
         self.custom_label: str = None
         self.physical_dim: tuple[int, int, int] = (0, 0, 0)
         self.slice_direction: Literal["X", "Y", "Z"] = "Y"
@@ -290,7 +292,7 @@ class MainWindow(QMainWindow):
         # Progress console
         self.progress_group = QGroupBox("Progress"); pg = QVBoxLayout(self.progress_group)
         self.progress_edit = QPlainTextEdit(); self.progress_edit.setReadOnly(True)
-        self.progress_edit.setMaximumBlockCount(10000); self.progress_edit.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.progress_edit.setMaximumBlockCount(CONSOLE_MAX_BLOCKS); self.progress_edit.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.progress_edit.setStyleSheet("background:#0b0b0b; color:#d0d0d0; border:1px solid #333;")
         pg.addWidget(self.progress_edit)
 
@@ -356,7 +358,7 @@ class MainWindow(QMainWindow):
         self.act_set_scale = QAction("Set Scale From Scalebar…", self);self.act_set_scale.triggered.connect(self.set_scale_from_scalebar);
         Setting_menu.addAction(self.act_set_scale)
         self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.set_kernel_dialog); Setting_menu.addAction(self.act_kernel_size)
-        self.act_slice_thickness = QAction("Set Slice Thikcness…", self); self.act_slice_thickness.triggered.connect(self.set_slice_thickness_dialog); Setting_menu.addAction(self.act_slice_thickness); self.act_slice_thickness.setToolTip("Set the distance between slices")
+        self.act_slice_thickness = QAction("Set Slice Thickness…", self); self.act_slice_thickness.triggered.connect(self.set_slice_thickness_dialog); Setting_menu.addAction(self.act_slice_thickness); self.act_slice_thickness.setToolTip("Set the distance between slices")
         self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Setting_menu.addAction(self.act_annotate_square)
         self.act_choose_regions = QAction("ROI selection…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
@@ -506,20 +508,17 @@ class MainWindow(QMainWindow):
         self.orient_combo.addItems(["Axial (Z)", "Coronal (Y)", "Sagittal (X)"])
         self.orient_combo.currentTextChanged.connect(self._on_orientation_changed)
         self.nav_tb.addWidget(self.orient_combo)
-#        self.orient_combo.setVisible(False)
         
         self.view_mode = QComboBox()
         self.view_mode.addItems(["2D", "3D"])
         self.view_mode.setCurrentText("2D")
         self.view_mode.currentTextChanged.connect(self._on_view_changed)
         self.nav_tb.addWidget(self.view_mode)
-#        self.view_mode.setVisible(False)
         
         self.nav_tb.addSeparator()
 
         self.slice_caption = QLabel("Section:")
         self.nav_tb.addWidget(self.slice_caption)
-#        self.slice_caption.setVisible(False)
 
         self.slice_slider = QSlider(Qt.Horizontal)
         self.slice_slider.setMinimum(0)
@@ -528,11 +527,9 @@ class MainWindow(QMainWindow):
         self.slice_slider.setPageStep(5)
         self.slice_slider.valueChanged.connect(self.on_slice_slider_changed)
         self.nav_tb.addWidget(self.slice_slider)
-#        self.slice_slider.setVisible(False)
 
         self.slice_value_label = QLabel("—")
         self.nav_tb.addWidget(self.slice_value_label)
-#        self.slice_value_label.setVisible(False)
 
     @property
     def is_vtk(self) -> bool:
@@ -777,7 +774,7 @@ class MainWindow(QMainWindow):
         pixel_size: Optional[float] = None,
         pixel_size_units: Optional[str] = None,
         kernel_size: Optional[float] = None,
-        unite:  Optional[str] = None,
+        unit:  Optional[str] = None,
         slice_thickness: Optional[float] = None,
         new_on_param_change: bool = False,
     ):
@@ -799,7 +796,7 @@ class MainWindow(QMainWindow):
             pixel_size: Physical size per pixel.
             pixel_size_units: Unit string for pixel size (e.g. "mm/pixel").
             kernel_size: Morphological kernel size in pixels.
-            unite: Length unit string (e.g. "mm", "cm").
+            unit: Length unit string (e.g. "mm", "cm").
             slice_thickness: Distance between slices.
             new_on_param_change: If True, create a new row when any
                 parameter differs from the latest row.
@@ -841,7 +838,7 @@ class MainWindow(QMainWindow):
                 differs("PixelSizeUnits",  pixel_size_units),
                 differs("KernelSize",      kernel_size),
                 differs("SliceThickness",  slice_thickness),
-                differs("LengthUnit",      unite),
+                differs("LengthUnit",      unit),
                 differs("SliceDirection",  direction),
             ]))
         )
@@ -858,11 +855,11 @@ class MainWindow(QMainWindow):
                 "PixelSize":       pixel_size if pixel_size is not None else (last.get("PixelSize") if last else None),
                 "PixelSizeUnits":  pixel_size_units if pixel_size_units is not None else (last.get("PixelSizeUnits") if last else None),
                 "KernelSize":      kernel_size if kernel_size is not None else (last.get("KernelSize") if last else None),
-                "LengthUnit":      unite if unite is not None else (last.get("LengthUnit") if last else None),
+                "LengthUnit":      unit if unit is not None else (last.get("LengthUnit") if last else None),
                 "SliceThickness":  slice_thickness if slice_thickness is not None else (last.get("SliceThickness") if last else None),
                 "Length(PA)": None,
                 "Width(LR)": None,
-                "Hight(IS)": None,
+                "Height(IS)": None,
                 "Volume": None,
                 "Perimeter": None,
                 "Perimeter_convex": None,
@@ -889,8 +886,8 @@ class MainWindow(QMainWindow):
             last["PixelSizeUnits"] = pixel_size_units
         if kernel_size is not None:
             last["KernelSize"] = kernel_size
-        if unite is not None:
-            last["LengthUnit"] = unite
+        if unit is not None:
+            last["LengthUnit"] = unit
         if slice_thickness is not None:
             last["SliceThickness"] = slice_thickness
         if direction is not None:
@@ -914,7 +911,7 @@ class MainWindow(QMainWindow):
                 include ``sulci_depth`` (list/tuple), ``dimensions``
                 (3-tuple), ``pixel_size``, ``pixel_size_units``,
                 ``kernel_size``, ``slice_thickness``, ``direction``,
-                and ``unite``.
+                and ``unit``.
         """
         if not path:
             return
@@ -927,14 +924,14 @@ class MainWindow(QMainWindow):
         ksize = vals.pop("kernel_size", None)
         thicsl = vals.pop("slice_thickness", None) 
         direction = vals.pop("direction", None)
-        uni = vals.pop("unite", None)
+        uni = vals.pop("unit", None)
         row = self._ensure_metric_row(
             path, kind, label, annotation,
             source, direction,
             pixel_size=psize,
             pixel_size_units=punit,
             kernel_size=ksize,
-            unite = uni,
+            unit = uni,
             slice_thickness = thicsl,
             new_on_param_change=True,
         )
@@ -962,7 +959,7 @@ class MainWindow(QMainWindow):
                 if nl == 3:
                     row["Length(PA)"] = ld[0]
                     row["Width(LR)"] = ld[1]
-                    row["Hight(IS)"] = ld[2]
+                    row["Height(IS)"] = ld[2]
                 else:
                     raise ValueError("one or more dimensions are missing")
                     
@@ -1149,7 +1146,7 @@ class MainWindow(QMainWindow):
         metric_cols = [
             "Label", "Annotation", "Source", "SliceDirection",
             "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit", "SliceThickness",
-            "Length(PA)", "Width(LR)", "Hight(IS)",
+            "Length(PA)", "Width(LR)", "Height(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "MinDepth", "MaxDepth","MeanDepth",
             "LGI", "Compactness",
@@ -1189,7 +1186,7 @@ class MainWindow(QMainWindow):
         # (exclude Label and PixelSizeUnits; keep PixelSize/KernelSize and numeric metrics)
         real_metric_cols = [
             "PixelSize", "KernelSize", "SliceThickness",
-            "Length(PA)", "Width(LR)", "Hight(IS)",
+            "Length(PA)", "Width(LR)", "Height(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "MinDepth", "MaxDepth","MeanDepth",
             "LGI","Compactness",
@@ -1296,7 +1293,7 @@ class MainWindow(QMainWindow):
 
             # Call measurement function
             if mode == "allmarks":
-                area, perimeter, perimeter_convex, lGI, depth, annotated_bgr = measure_image_allmarks(
+                area, perimeter, perimeter_convex, lGI, compactness, depth, annotated_bgr = measure_image_allmarks(
                     img_path, pixel_size=pixel_size, kernel_size=self.kernel_size,
                     cnt_threshold=self.cnt_threshold, unit=u)
             elif mode == "perimeter":
@@ -1342,28 +1339,28 @@ class MainWindow(QMainWindow):
 
             # Record metrics and print
             if mode == "allmarks":
-                self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim,
+                self._record_metric_for(img_path, unit=u, dimensions=self.physical_dim,
                     kernel_size=self.kernel_size, area=area, perimeter=perimeter,
                     perimeter_convex=perimeter_convex, lgi=lGI, sulci_depth=depth)
                 print(f"[Planar VTK allmarks] area={area:.2f} {u}^2, perimeter={perimeter:.2f} {u}, GI={lGI:.2f}")
                 if isinstance(depth, (list, tuple)) and len(depth) >= 3:
                     print(f"  Max sulci depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} {u}")
             elif mode == "perimeter":
-                self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim, perimeter=perimeter)
+                self._record_metric_for(img_path, unit=u, dimensions=self.physical_dim, perimeter=perimeter)
                 print(f"[Planar VTK perimeter] perimeter={perimeter:.2f} {u}")
             elif mode == "area":
-                self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim, area=area)
+                self._record_metric_for(img_path, unit=u, dimensions=self.physical_dim, area=area)
                 print(f"[Planar VTK area] area={area:.2f} {u}^2")
             elif mode == "lGI":
-                self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim,
+                self._record_metric_for(img_path, unit=u, dimensions=self.physical_dim,
                     kernel_size=self.kernel_size, lgi=lGI)
                 print(f"[Planar VTK lGI] GI={lGI:.2f}")
             elif mode == "compactness":
-                self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim,
+                self._record_metric_for(img_path, unit=u, dimensions=self.physical_dim,
                     kernel_size=self.kernel_size, compactness=compactness)
                 print(f"[Planar VTK compactness] Compactness={compactness:.2f}")
             elif mode == "sulci_depth":
-                self._record_metric_for(img_path, unite=u, dimensions=self.physical_dim, sulci_depth=depth)
+                self._record_metric_for(img_path, unit=u, dimensions=self.physical_dim, sulci_depth=depth)
                 if isinstance(depth, (list, tuple)) and len(depth) > 0:
                     summary = ", ".join(f"{float(v):.2f}" for v in depth[:3])
                     print(f"[Planar VTK sulci depth] max depths = {summary} {u}")
@@ -1382,17 +1379,10 @@ class MainWindow(QMainWindow):
             print("[All hallmarks] No image file is loaded."); return
         if self.current_kind == "image":
             try:
-                while True:
-                    if not self.units_length or self.current_path not in self.image_scales:
-                        ok = self.set_image_scale()  # pops the single dialog
-                        if ok:
-                            break
-                        else:
-                            return
-                    else:
-                        break
-                u = self.ensure_units()                # <-- get unit (e.g., 'mm')
-                px_size = self.image_scales.get(self.current_path, self.pixel_size)
+                result = self._ensure_calibrated()
+                if result is None:
+                    return
+                u, px_size = result
 
                 print(f"[All hallmarks] Measuring: {self.current_path}")
                 print(f"[All hallmarks] Measuring with pixel size = {px_size} {u}/pixel")
@@ -1401,7 +1391,7 @@ class MainWindow(QMainWindow):
                 if self.last_annotated_path is not None:
                     image_path = self.last_annotated_path
                     
-                area, perimeter, perimeter_convex, lGI, depth, annotated_bgr = measure_image_allmarks(
+                area, perimeter, perimeter_convex, lGI, compactness, depth, annotated_bgr = measure_image_allmarks(
                     image_path,
                     pixel_size=px_size,
                     kernel_size= self.kernel_size,
@@ -1413,6 +1403,7 @@ class MainWindow(QMainWindow):
                 print(f"Annotated Perimeter = {perimeter:.2f} {u}.")
                 print(f"Convex Perimeter = {perimeter_convex:.2f} {u}.")
                 print(f"LGI (Convex Perimeter/ Perimeter) = {lGI:.2f} .")
+                print(f"Compactness = {compactness:.2f} .")
                 print(f"Sulci Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} {u}.")
                 
                 # Convert BGR ndarray → QPixmap and show (no disk write)
@@ -1434,13 +1425,14 @@ class MainWindow(QMainWindow):
                     self.current_path,
                     annotation = label_text,
                     pixel_size_units = f"{self.units_length}/pixel",
-                    unite = self.units_length,
+                    unit = self.units_length,
                     pixel_size = self.pixel_size,
                     kernel_size = self.kernel_size,
                     area=area,
                     perimeter=perimeter,
                     perimeter_convex = perimeter_convex,
                     lgi=lGI,
+                    compactness=compactness,
                     sulci_depth = depth)
                     
             except Exception as ex:
@@ -1470,7 +1462,7 @@ class MainWindow(QMainWindow):
                     self.current_path,
                     kernel_size = self.kernel_size,
                     dimensions = dims,
-                    unite = "cm",
+                    unit = "cm",
                     volume=volume,
                     area=area,
                     lgi=gi,
@@ -1502,7 +1494,7 @@ class MainWindow(QMainWindow):
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.current_output_dir = out_dir
-                source_label, dims, area, volume, gi, depth, saved_pngs, valid_slices = compute_stl_allmarks(self, file_path=self.current_path,     out_dir=out_dir, min_contour_area=self.cnt_threshold,
+                source_label, dims, area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_stl_allmarks(self, file_path=self.current_path,     out_dir=out_dir, min_contour_area=self.cnt_threshold,
                 kernel_size = self.kernel_size, slice_thickness=self.slice_thickness)
             
                 if source_label == "not_brain":
@@ -1517,10 +1509,11 @@ class MainWindow(QMainWindow):
                     source = source_label,
                     kernel_size = self.kernel_size,
                     dimensions = dims,
-                    unite = "cm",
+                    unit = "cm",
                     slice_thickness= self.slice_thickness,
                     volume=volume,
                     area=area,
+                    compactness=compactness,
                     sulci_depth = depth,
                     lgi=gi)
 
@@ -1531,6 +1524,7 @@ class MainWindow(QMainWindow):
                 print(f"STL mesh Volume Result = {volume:.2f} cm^3.")
                 print(f"STL mesh Outer Surface Area Result = {area:.2f} cm^2.")
                 print(f"STL mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
+                print(f"STL mesh Compactness = {compactness:.2f} .")
                 print(f"The Maximum Grooves Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} cm.")
 
                 dt = time.time() - t0
@@ -1558,7 +1552,7 @@ class MainWindow(QMainWindow):
                     self.load_mesh_and_ask_geometry()
 
                 u = self.units_length
-                area, volume, gi, depth, saved_pngs, valid_slices = compute_vtk_allmarks(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,
+                area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_vtk_allmarks(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,
                     kernel_size = self.kernel_size, Slice_direction = self.slice_direction, Physical_dim= self.physical_dim, unit = u, slice_thickness=self.slice_thickness)
             
                 if area is None:
@@ -1569,11 +1563,12 @@ class MainWindow(QMainWindow):
                     self.current_path,
                     direction = self.slice_direction,
                     kernel_size = self.kernel_size,
-                    unite = u,
+                    unit = u,
                     dimensions = self.physical_dim,
                     slice_thickness= self.slice_thickness,
                     volume=volume,
                     area=area,
+                    compactness=compactness,
                     sulci_depth = depth,
                     lgi=gi)
                     
@@ -1584,6 +1579,7 @@ class MainWindow(QMainWindow):
                 print(f"VTK mesh Volume Result = {volume:.2f} {u}^3.")
                 print(f"VTK mesh Outer Surface Area Result = {area:.2f} {u}^2.")
                 print(f"VTK mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
+                print(f"VTK mesh Compactness = {compactness:.2f} .")
                 if len(depth)>=3:
                     print(f"The Maximum Grooves Depth = {depth[0]:.2f}, {depth[1]:.2f}, {depth[2]:.2f} {u}.")
 
@@ -1627,7 +1623,7 @@ class MainWindow(QMainWindow):
                     return
 
                 # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path, unite="cm", dimensions = dims, volume = volume,)
+                self._record_metric_for(self.current_path, unit="cm", dimensions = dims, volume = volume,)
 
                 self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                 
@@ -1665,7 +1661,7 @@ class MainWindow(QMainWindow):
                     source = source_label,
                     slice_thickness= self.slice_thickness,
                     dimensions = dims,
-                    unite = "cm",
+                    unit = "cm",
                     volume=volume)
 
                 self.two_mode_view(out_dir, saved_pngs, valid_slices)
@@ -1710,7 +1706,7 @@ class MainWindow(QMainWindow):
                 self._record_metric_for(
                     self.current_path,
                     direction = self.slice_direction,
-                    unite = u,
+                    unit = u,
                     dimensions = self.physical_dim,
                     slice_thickness= self.slice_thickness,
                     volume=volume)
@@ -1738,18 +1734,11 @@ class MainWindow(QMainWindow):
         
         if self.current_kind == "image":
             try:
-                while True:
-                    if not self.units_length or self.current_path not in self.image_scales:
-                        ok = self.set_image_scale()  # pops the single dialog
-                        if ok:
-                            break
-                        else:
-                            return
-                    else:
-                        break
-                u = self.ensure_units()                # <-- get unit (e.g., 'mm')
-                px_size = self.image_scales.get(self.current_path, self.pixel_size)
-                
+                result = self._ensure_calibrated()
+                if result is None:
+                    return
+                u, px_size = result
+
                 print(f"[Perimeter] Measuring: {self.current_path}")
                 print(f"[Perimeter] Measuring with pixel size = {px_size} {u}/pixel")
 
@@ -1779,7 +1768,7 @@ class MainWindow(QMainWindow):
                 self._set_current("image", self.current_path)
                 self._record_metric_for(self.current_path,label=label_text,
                     pixel_size_units = f"{self.units_length}/pixel",
-                    unite= self.units_length,
+                    unit= self.units_length,
                     pixel_size = self.pixel_size,
                     perimeter=perimeter)
 
@@ -1916,18 +1905,10 @@ class MainWindow(QMainWindow):
             print("[Straight line] Only supported for images."); return
 
         # ensure calibration
-        while True:
-            if not self.units_length or self.current_path not in self.image_scales:
-                ok = self.set_image_scale()
-                if ok:
-                    break
-                else:
-                    return
-            else:
-                break
-
-        u = self.ensure_units()
-        px_size = self.image_scales.get(self.current_path, self.pixel_size)
+        result = self._ensure_calibrated()
+        if result is None:
+            return
+        u, px_size = result
 
         print(f"[Straight line] Click two points on the image to measure distance.")
 
@@ -1937,7 +1918,7 @@ class MainWindow(QMainWindow):
                 p1, p2, label=f"{distance:.2f} {u}", color=QColor(0, 200, 255))
             self._record_metric_for(
                 self.current_path,
-                unite=u,
+                unit=u,
                 pixel_size=px_size,
                 straight_line_distance=distance)
             print(f"[Straight line] Distance = {distance:.2f} {u}")
@@ -1951,18 +1932,11 @@ class MainWindow(QMainWindow):
             print("[lGI] No file is loaded."); return
         if self.current_kind == "image":
             try:
-                while True:
-                    if not self.units_length or self.current_path not in self.image_scales:
-                        ok = self.set_image_scale()  # pops the single dialog
-                        if ok:
-                            break
-                        else:
-                            return
-                    else:
-                        break
-                u = self.ensure_units()                # <-- get unit (e.g., 'mm')
-                px_size = self.image_scales.get(self.current_path, self.pixel_size)
-                
+                result = self._ensure_calibrated()
+                if result is None:
+                    return
+                u, px_size = result
+
                 print(f"[lGI] Measuring: {self.current_path}")
 
                 image_path = self.current_path
@@ -1991,7 +1965,7 @@ class MainWindow(QMainWindow):
                 self._set_current("image", self.current_path)
                 self._record_metric_for(self.current_path, annotation=label_text,
                     pixel_size_units = f"{self.units_length}/pixel",
-                    unite = self.units_length,
+                    unit = self.units_length,
                     pixel_size = self.pixel_size,
                     kernel_size = self.kernel_size,
                     perimeter=perimeter, perimeter_convex=perimeter_convex, lgi=lGI)
@@ -2079,7 +2053,7 @@ class MainWindow(QMainWindow):
                         source = source_label,
                         kernel_size = self.kernel_size,
                         dimensions = dims,
-                        unite = "cm",
+                        unit = "cm",
                         slice_thickness= self.slice_thickness,
                         lgi=gi)
                         
@@ -2122,7 +2096,7 @@ class MainWindow(QMainWindow):
                     source = source_label,
                     kernel_size = self.kernel_size,
                     dimensions = dims,
-                    unite = "cm",
+                    unit = "cm",
                     slice_thickness= self.slice_thickness,
                     lgi=gi)
 
@@ -2167,7 +2141,7 @@ class MainWindow(QMainWindow):
                     self.current_path,
                     direction = self.slice_direction,
                     kernel_size = self.kernel_size,
-                    unite = u,
+                    unit = u,
                     dimensions = self.physical_dim,
                     slice_thickness= self.slice_thickness,
                     lgi=gi)
@@ -2204,18 +2178,11 @@ class MainWindow(QMainWindow):
             
         if self.current_kind == "image":
             try:
-                while True:
-                    if not self.units_length or self.current_path not in self.image_scales:
-                        ok = self.set_image_scale()  # pops the single dialog
-                        if ok:
-                            break
-                        else:
-                            return
-                    else:
-                        break
-                u = self.ensure_units()                # <-- get unit (e.g., 'mm')
-                px_size = self.image_scales.get(self.current_path, self.pixel_size)
-                
+                result = self._ensure_calibrated()
+                if result is None:
+                    return
+                u, px_size = result
+
                 print(f"[Sulci depth] Measuring: {self.current_path}")
                 print(f"[Sulci depth] Measuring with pixel size = {px_size} {u}/pixel")
 
@@ -2246,7 +2213,7 @@ class MainWindow(QMainWindow):
                 self._set_current("image", self.current_path)
                 self._record_metric_for(self.current_path, annotation=label_text,
                     pixel_size_units = f"{self.units_length}/pixel",
-                    unite = self.units_length,
+                    unit = self.units_length,
                     pixel_size = self.pixel_size,
                     sulci_depth = depth)
 
@@ -2274,7 +2241,7 @@ class MainWindow(QMainWindow):
                     return
 
                 # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path, unite ="mm", dimensions = dims, sulci_depth = depth,)
+                self._record_metric_for(self.current_path, unit ="mm", dimensions = dims, sulci_depth = depth,)
 
                 self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                 
@@ -2309,7 +2276,7 @@ class MainWindow(QMainWindow):
 
                 # record metrics (consistent with your global export; units in mm unless noted)
                 self._record_metric_for(self.current_path, source = source_label, slice_thickness= self.slice_thickness,
-                    dimensions = dims,unite ="mm", sulci_depth = depth)
+                    dimensions = dims,unit ="mm", sulci_depth = depth)
 
                 self.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
@@ -2349,7 +2316,7 @@ class MainWindow(QMainWindow):
                 self._record_metric_for(
                     self.current_path,
                     direction = self.slice_direction,
-                    unite = u,
+                    unit = u,
                     dimensions = self.physical_dim,
                     slice_thickness= self.slice_thickness,
                     sulci_depth = depth)
@@ -2384,17 +2351,10 @@ class MainWindow(QMainWindow):
             if not self.current_path or not os.path.isfile(self.current_path):
                 print("[Area] No image file is loaded."); return
             try:
-                while True:
-                    if not self.units_length or self.current_path not in self.image_scales:
-                        ok = self.set_image_scale()  # pops the single dialog
-                        if ok:
-                            break
-                        else:
-                            return
-                    else:
-                        break
-                u = self.ensure_units()                # <-- get unit (e.g., 'mm')
-                px_size = self.image_scales.get(self.current_path, self.pixel_size)
+                result = self._ensure_calibrated()
+                if result is None:
+                    return
+                u, px_size = result
 
                 print(f"[Area] Measuring: {self.current_path}")
                 print(f"[Area] Measuring with pixel size = {px_size} {u}/pixel")
@@ -2427,7 +2387,7 @@ class MainWindow(QMainWindow):
                 self._record_metric_for(self.current_path, annotation=label_text ,
                 pixel_size_units = f"{self.units_length}/pixel",
                 pixel_size = self.pixel_size,
-                unite = self.units_length,
+                unit = self.units_length,
                 area=area)
                 
             except Exception as ex:
@@ -2454,7 +2414,7 @@ class MainWindow(QMainWindow):
                     return
 
                 # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path, unite="cm", dimensions = dims, area = area,)
+                self._record_metric_for(self.current_path, unit="cm", dimensions = dims, area = area,)
 
                 self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                 
@@ -2493,7 +2453,7 @@ class MainWindow(QMainWindow):
                     source = source_label,
                     slice_thickness= self.slice_thickness,
                     dimensions = dims,
-                    unite = "cm",
+                    unit = "cm",
                     area=area)
   
                 self.two_mode_view(out_dir, saved_pngs, valid_slices)
@@ -2536,7 +2496,7 @@ class MainWindow(QMainWindow):
                 self._record_metric_for(
                     self.current_path,
                     direction = self.slice_direction,
-                    unite = u,
+                    unit = u,
                     dimensions = self.physical_dim,
                     slice_thickness= self.slice_thickness,
                     area=area)
@@ -2608,16 +2568,10 @@ class MainWindow(QMainWindow):
         if btn == QMessageBox.Cancel:
             return
 
-        while True:
-            if not self.units_length or self.current_path not in self.image_scales:
-                ok = self.set_image_scale()  # pops the single dialog
-                if not ok:
-                    return
-                break
-            else:
-                break
-        u = self.ensure_units()                # <-- get unit (e.g., 'mm')
-        px_size = self.image_scales.get(self.current_path, self.pixel_size)
+        result = self._ensure_calibrated()
+        if result is None:
+            return
+        u, px_size = result
 
         uid = uuid.uuid4().hex[:8]
         out_dir = os.path.join(self.temp_dir, f"Process_images_{uid}")
@@ -2853,17 +2807,10 @@ class MainWindow(QMainWindow):
         self.wait_for_resume()   # blocks here; resumes after key press
         self.statusBar().clearMessage()
 
-        while True:
-            if not self.units_length or self.current_path not in self.image_scales:
-                ok = self.set_image_scale()  # pops the single dialog
-                if ok:
-                    break
-                else:
-                    return
-            else:
-                break
-        u1 = self.ensure_units()                # <-- get unit (e.g., 'mm')
-        px_size_1 = self.image_scales.get(self.current_path, self.pixel_size)
+        result = self._ensure_calibrated()
+        if result is None:
+            return
+        u1, px_size_1 = result
 
                         
         annotated1, basename1, First_array, label1 =self.annotation_con(out_dir)
@@ -2890,17 +2837,10 @@ class MainWindow(QMainWindow):
         self.wait_for_resume()   # blocks here; resumes after key press
         self.statusBar().clearMessage()
         
-        while True:
-            if not self.units_length or self.current_path not in self.image_scales:
-                ok = self.set_image_scale()  # pops the single dialog
-                if ok:
-                    break
-                else:
-                    return
-            else:
-                break
-        u2 = self.ensure_units()                # <-- get unit (e.g., 'mm')
-        px_size_2 = self.image_scales.get(self.current_path, self.pixel_size)
+        result = self._ensure_calibrated()
+        if result is None:
+            return
+        u2, px_size_2 = result
                 
         while True:
             if u1 == u2:
@@ -3082,7 +3022,24 @@ class MainWindow(QMainWindow):
             val = "mm"
         self.units_length = val.strip()
 
-        print(f"[Units] Using {self.units_length}")
+    def _ensure_calibrated(self) -> tuple[str, float] | None:
+        """Ensure units and pixel scale are set for the current file.
+
+        Returns:
+            ``(unit, px_size)`` on success, or ``None`` if the user cancelled.
+        """
+        while True:
+            if not self.units_length or self.current_path not in self.image_scales:
+                ok = self.set_image_scale()
+                if ok:
+                    break
+                else:
+                    return None
+            else:
+                break
+        u = self.ensure_units()
+        px_size = self.image_scales.get(self.current_path, self.pixel_size)
+        return (u, px_size)
         return self.units_length
         
 
@@ -3249,7 +3206,7 @@ class MainWindow(QMainWindow):
 
     def set_slice_thickness_dialog(self):
         """Open a dialog to set the inter-slice distance for 3-D measurements."""
-        dlg = SilceThicknessDialog(self, initial=getattr(self, "slice_thickness", 0.5), maximum=(get_max_slice_thinckness(self.current_path)/2))
+        dlg = SliceThicknessDialog(self, initial=getattr(self, "slice_thickness", 0.5), maximum=(get_max_slice_thickness(self.current_path)/2))
         if dlg.exec() == QDialog.Accepted:
             k = dlg.value()
             self.slice_thickness = k
@@ -4292,7 +4249,7 @@ class MainWindow(QMainWindow):
         return [
             "File", "Kind", "Label", "Annotation", "Source", "SliceDirection",
             "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit", "SliceThickness",
-            "Length(PA)", "Width(LR)", "Hight(IS)",
+            "Length(PA)", "Width(LR)", "Height(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "MinDepth", "MaxDepth","MeanDepth",
             "LGI", "Compactness", 
@@ -4479,7 +4436,7 @@ class MainWindow(QMainWindow):
         self._record_metric_for(self.current_path, label=label_text ,
                 pixel_size_units = f"{self.units_length}/pixel",
                 pixel_size = self.pixel_size,
-                unite = self.units_length)
+                unit = self.units_length)
         label = getattr(self, "custom_label", None)
         return annotated, basename, array, label
         

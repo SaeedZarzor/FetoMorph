@@ -7,7 +7,7 @@ smooth interaction.
 
 from deps import *
 
-class SilceThicknessDialog(QDialog):
+class SliceThicknessDialog(QDialog):
     """Dialog for selecting a slice thickness as a floating-point value.
 
     An integer QSlider is internally mapped to the float range
