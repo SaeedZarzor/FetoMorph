@@ -13,6 +13,8 @@ represent the same anatomy.  Alignment modes (``right_bottom``,
 reference corner or centroid matches the second.
 """
 
+from __future__ import annotations
+
 import cv2
 import numpy as np
 import os
@@ -24,14 +26,14 @@ from helpers.Helpers import text_thickness
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 
-def _to_xy2(a):
+def _to_xy2(a: np.ndarray) -> np.ndarray:
     """Ensure *a* is an ``(N, 2)`` float array."""
     a = np.squeeze(np.asarray(a)).astype(float)
     if a.ndim != 2 or a.shape[1] != 2:
         raise ValueError("Expected (N,2) array")
     return a
 
-def _align_points(c1, c2, mode="right_bottom"):
+def _align_points(c1: np.ndarray, c2: np.ndarray, mode: str = "right_bottom") -> tuple[np.ndarray, tuple[float, float]]:
     """Translate *c1* so that a reference anchor matches *c2*.
 
     Alignment modes:
@@ -57,9 +59,9 @@ def _align_points(c1, c2, mode="right_bottom"):
 
 
 def convert_image(
-        image_path, out_dir,
+        image_path: str, out_dir: str,
         pixel_spacing: float = 0.01,
-        min_contour_area: float =200):
+        min_contour_area: float = 200) -> tuple[np.ndarray, str, np.ndarray] | tuple[None, None]:
     """Extract contour coordinates from a brain-slice image.
 
     Thresholds the image, filters contours by area, scales to physical
@@ -142,10 +144,10 @@ def convert_image(
         
         
 def calculate_hausdorff_distance(
-    contours_coords_first, contours_coords_second,
-    First_label="First", Second_label="Second",
-    invert_y=True, align_mode="right_bottom",
-    out_dir=None, filename="Hausdorff_distance_plot.png"):
+    contours_coords_first: np.ndarray | None, contours_coords_second: np.ndarray | None,
+    First_label: str = "First", Second_label: str = "Second",
+    invert_y: bool = True, align_mode: str = "right_bottom",
+    out_dir: str | None = None, filename: str = "Hausdorff_distance_plot.png") -> tuple[np.ndarray | None, float | None, float | None, float | None]:
     """Compute symmetric Hausdorff distance between two 2-D contour sets.
 
     Optionally aligns the first contour to the second before measuring

@@ -12,9 +12,10 @@ voxels can be anisotropic, depth conversion uses
 physical coordinate system.
 """
 
+from __future__ import annotations
+
 import os
 import logging
-from typing import Optional, Tuple
 
 import numpy as np
 import cv2
@@ -30,7 +31,7 @@ from constants import DEFECT_FIXED_POINT
 
 
 
-def compute_nifti_dims(brain_mask: np.ndarray, affine: np.ndarray):
+def compute_nifti_dims(brain_mask: np.ndarray, affine: np.ndarray) -> list[float]:
     """
     Compute voxel-space bounding box, physical bbox (mm), extents (mm), and volume (ml)
     for a 3D brain mask. Assumes the affine is in mm (standard for NIfTI).

@@ -7,21 +7,22 @@ morphometric quantities (area, perimeter, GI, sulci depth).
 All pixel → physical-unit conversions use ``pixel_size`` (mm/px).
 """
 
+from __future__ import annotations
+
 import cv2
 import numpy as np
-from typing import Optional, Tuple, Union
 from helpers.Helpers import text_thickness, compute_kernel_convex, compactness_2D, _add_scalebar_on_annotated
 from constants import BINARY_THRESHOLD_DEFAULT, DEFECT_FIXED_POINT
 
 
-def measure_image_allmarks(
+def compute_image_allmarks(
     file_path: str,
     pixel_size: float = 0.01,
     kernel_size: int = 5,
     cnt_threshold: float = 20,
     unit: str = "mm",
-    add_scalebar: Optional[bool] = True,
-) -> Tuple[float, float, float, float, float, list, np.ndarray]:
+    add_scalebar: bool | None = True,
+) -> tuple[float, float, float, float, float, list, np.ndarray]:
     """Compute all hallmarks (area, perimeters, GI, sulci depths) from an image.
 
     Pipeline:
@@ -119,13 +120,13 @@ def measure_image_allmarks(
     return area, perimeter, perimeter_convex ,perimeter_Rate, comp, depth, annotated  # BGR ndarray
 
 
-def measure_image_perimeter(
+def compute_image_perimeter(
     file_path: str,
     pixel_size: float = 0.01,
     cnt_threshold: float = 20,
     unit: str = "mm",
-    add_scalebar: Optional[bool] = True,
-) -> Tuple[float, np.ndarray]:
+    add_scalebar: bool | None = True,
+) -> tuple[float, np.ndarray]:
     """
     Compute foreground perimeter from a 2D image by thresholding & contour filtering.
     Returns the area (in pixel_size units) and an annotated BGR image (np.ndarray).
@@ -184,13 +185,13 @@ def measure_image_perimeter(
     return perimeter, annotated  # BGR ndarray
 
 
-def measure_image_area(
+def compute_image_area(
     file_path: str,
     pixel_size: float = 0.01,
     cnt_threshold: float = 20,
     unit: str = "mm",
-    add_scalebar: Optional[bool] = True,
-) -> Tuple[float, np.ndarray]:
+    add_scalebar: bool | None = True,
+) -> tuple[float, np.ndarray]:
     """
     Compute foreground area from a 2D image by thresholding & contour filtering.
     Returns the area (in pixel_size^2 units) and an annotated BGR image (np.ndarray).
@@ -248,14 +249,14 @@ def measure_image_area(
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
     return area_units2, annotated  # BGR ndarray
 
-def measure_image_lGI(
+def compute_image_lGI(
     file_path: str,
     pixel_size: float,
     kernel_size: int = 5,
     cnt_threshold: float = 20,
     unit: str = "mm",
-    add_scalebar: Optional[bool] = True,
-)  -> Tuple[float, float, float, np.ndarray]: 
+    add_scalebar: bool | None = True,
+)  -> tuple[float, float, float, np.ndarray]: 
     """Compute the local Gyrification Index from a 2-D brain-slice image.
 
     GI = inner perimeter / outer perimeter, where "outer" is derived by
@@ -339,13 +340,13 @@ def measure_image_lGI(
     return perimeter_Rate, perimeter*pixel_size, perimeter_convex*pixel_size, annotated  # BGR ndarray
 
         
-def measure_image_sulci_depth(
+def compute_image_sulci_depth(
     file_path: str,
     pixel_size: float,
     cnt_threshold: float,
     unit: str = "mm",
-    add_scalebar: Optional[bool] = True,
-) -> Tuple[list, np.ndarray]:
+    add_scalebar: bool | None = True,
+) -> tuple[list, np.ndarray]:
     """Compute sulci depths from convexity defects on a 2-D brain-slice image.
 
     For each contour, computes the convex hull and then identifies
@@ -408,7 +409,7 @@ def measure_image_sulci_depth(
     return depth, annotated  # BGR ndarray
 
 
-def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> Tuple[float, np.ndarray]:
+def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> tuple[float, np.ndarray]:
     margin = 6
     image = cv2.imread(file_path)
     if image is None:
@@ -441,14 +442,14 @@ def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> Tuple
 def put_label_on_bgr(
     bgr: np.ndarray,
     text: str,
-    pos: Union[str, Tuple[int, int]] = "topleft",  # 'topleft'|'topright'|'bottomleft'|'bottomright' or (x, y)
+    pos: str | tuple[int, int] = "topleft",  # 'topleft'|'topright'|'bottomleft'|'bottomright' or (x, y)
     *,
-    font_scale: float = None,     # auto if None
-    thickness: int = None,        # auto if None
+    font_scale: float | None = None,     # auto if None
+    thickness: int | None = None,        # auto if None
     margin: int = 6,
-    box_color: Tuple[int, int, int] = (0, 0, 0),      # BGR
+    box_color: tuple[int, int, int] = (0, 0, 0),      # BGR
     box_alpha: float = 0.55,                           # 0..1
-    text_color: Tuple[int, int, int] = (255, 255, 255) # BGR
+    text_color: tuple[int, int, int] = (255, 255, 255) # BGR
 ) -> np.ndarray:
     """
     Draw `text` with a translucent background box on a BGR image and return the result (BGR).

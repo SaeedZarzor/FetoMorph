@@ -14,6 +14,8 @@ For each contour point, the local curvature is estimated by:
 Author: Stefan Herdy (14.11.2023), adapted for FetoMorph.
 """
 
+from __future__ import annotations
+
 from skimage import measure
 import os
 import numpy as np
@@ -23,14 +25,14 @@ from shapely.geometry import Polygon
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 
-def rgb_to_bw_mask(img, threshold=128):
+def rgb_to_bw_mask(img: np.ndarray, threshold: int = 128) -> np.ndarray:
     """Convert a BGR image to a binary mask using Otsu thresholding."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     # Threshold to create mask
     _, mask = cv2.threshold(gray, 0, 255,  cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return mask
 
-def compute_curvature(point, i, contour, window_size):
+def compute_curvature(point: np.ndarray, i: int, contour: np.ndarray, window_size: int) -> float:
     """Compute local curvature at a contour point via rotated polynomial fitting.
 
     The neighbourhood is rotated so that the local tangent aligns with the
@@ -83,7 +85,7 @@ def compute_curvature(point, i, contour, window_size):
     # Return the mean curvature for the central point
     return np.mean(curvature)
 
-def filter_contours_by_area(mask, min_area=500):
+def filter_contours_by_area(mask: np.ndarray, min_area: float = 500) -> list[np.ndarray]:
     """Return contours whose enclosed polygon area exceeds *min_area*."""
     contours = measure.find_contours(mask, 0.5)
     filtered = []
@@ -94,7 +96,7 @@ def filter_contours_by_area(mask, min_area=500):
                 filtered.append(c)
     return filtered
 
-def compute_curvature_profile(path: str, window_size_ratio: int =5, second_derivative= True, min_area: float = 20):
+def compute_curvature_profile(path: str, window_size_ratio: int = 5, second_derivative: bool = True, min_area: float = 20) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[int]]:
     """Compute curvature at every contour point in a brain-slice image.
 
     Args:
@@ -139,7 +141,7 @@ def compute_curvature_profile(path: str, window_size_ratio: int =5, second_deriv
 
     return mask, edge_pixels, curvature_values, curvature_values_s
 
-def save_curvature_plot(out_dir, mask, edge_pixels, curvature_values, filename="curvature_plot.png"):
+def save_curvature_plot(out_dir: str, mask: np.ndarray, edge_pixels: np.ndarray, curvature_values: np.ndarray, filename: str = "curvature_plot.png") -> np.ndarray:
     """Render a jet-coloured curvature overlay on the mask and save to disk.
 
     Args:

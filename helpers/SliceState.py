@@ -79,13 +79,3 @@ def make_state(snorml: str, k: int, s_n: int,
             length=depth,
         )
     raise ValueError("snorml must be 'X', 'Y', or 'Z'.")
-
-# storage for all slices
-states: list[SliceState] = []
-for k in range(s_n + 1):
-    states.append(make_state(snorml, k, s_n, Xstart, Xend, Ystart, Yend, Zstart, Zend, depth))
-
-# example access
-# states[i].origin
-# states[i].normal
-# states[i].length

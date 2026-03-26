@@ -5,11 +5,12 @@ defect depth conversion (pixel ↔ mm), red-cube scale calibration, scalebar
 drawing, and PyVista slice geometry.
 """
 
+from __future__ import annotations
+
 import os
 import math
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
 
 import numpy as np
 import cv2
@@ -17,7 +18,7 @@ import pyvista as pv
 from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QImage, QPainter, QColor, QPen
 from functions.Nifti2image import draw_new_scale_bar
-import math
+
 logger = logging.getLogger(__name__)
 
 def text_thickness(H: int, style: str = "regular", cap: int = 10) -> int:
@@ -53,12 +54,12 @@ def compute_kernel_convex(kernel_size: int) -> np.ndarray:
     return kernel_convex
 
 def defect_mm_per_px_and_fixed(
-    start: Tuple[float, float],
-    end:   Tuple[float, float],
-    far:   Tuple[float, float],
+    start: tuple[float, float],
+    end:   tuple[float, float],
+    far:   tuple[float, float],
     sx: float,   # mm per pixel in x
     sz: float,   # mm per pixel in y (your z)
-) -> Tuple[Optional[float], Optional[float]]:
+) -> tuple[float | None, float | None]:
     """
     Returns:
         mm_per_px     : mm per 1 pixel along the defect's normal direction
@@ -85,7 +86,7 @@ def defect_mm_per_px_and_fixed(
     mm_per_fixed = mm_per_px / 256.0  # because OpenCV stores d in 8.8 fixed-point
     return mm_per_px, mm_per_fixed
 
-def contours_exclude(contours: list, excluded_space: np.ndarray, image_shape: Tuple[int, int]) -> list:
+def contours_exclude(contours: list, excluded_space: np.ndarray, image_shape: tuple[int, int]) -> list:
     # Needed to remove the red reference-cube contour from the brain contours
     # so that it does not pollute area / perimeter measurements.
     """
@@ -99,7 +100,7 @@ def contours_exclude(contours: list, excluded_space: np.ndarray, image_shape: Tu
             filtered.append(cnt)
     return filtered
     
-def calc_scale(image_rgb: np.ndarray, cube_length: float) -> Optional[float]:
+def calc_scale(image_rgb: np.ndarray, cube_length: float) -> float | None:
     """
     Compute mm-per-pixel from a red reference cube drawn in the render.
     cube_length_mm: the real cube side length (x_length) in mm.
@@ -119,7 +120,7 @@ def calc_scale(image_rgb: np.ndarray, cube_length: float) -> Optional[float]:
         return None
     return scale
     
-def get_red_rect_offset(image_rgb: np.ndarray) -> np.ndarray:
+def get_red_rect_offset(image_rgb: np.ndarray) -> np.ndarray:  # noqa: returning shape (2,)
     """
     Detect red rectangle and return its center (x,y) in pixels — used to zero-align contours.
     """
@@ -131,7 +132,7 @@ def get_red_rect_offset(image_rgb: np.ndarray) -> np.ndarray:
     y_max, x_max = coords.max(axis=0)
     return np.array([(x_min + x_max) // 2, (y_min + y_max) // 2])
 
-def get_nifti_present_labels(path: str, cap: int = 5000) -> Optional[set[int]]:
+def get_nifti_present_labels(path: str, cap: int = 5000) -> set[int] | None:
     """Return the set of unique integer labels present in a NIfTI file.
 
     Args:
@@ -157,7 +158,7 @@ def get_nifti_present_labels(path: str, cap: int = 5000) -> Optional[set[int]]:
         # Fall back to defaults
         return None
         
-def _mm_per_pixel_x_for_axis(zooms, ax):
+def _mm_per_pixel_x_for_axis(zooms: tuple, ax: int) -> float:
     """Return the in-plane mm/px for the displayed X axis given the slice axis."""
     # zooms is (z0,z1,z2) == voxel size along axes 0,1,2 in mm
     if ax == 0:               # slice is a[i, :, :]
@@ -167,7 +168,7 @@ def _mm_per_pixel_x_for_axis(zooms, ax):
     else:                     # ax == 2: slice is a[:, :, i]
         return float(zooms[1])  # X shows axis 1
 
-def add_scalebar(qimg: QImage, zooms: np.ndarray, ax: int) -> Tuple[QImage, float, float]:
+def add_scalebar(qimg: QImage, zooms: np.ndarray, ax: int) -> tuple[QImage, float, float]:
     """Draw a scalebar (mm) at the bottom-right of qimg and return it."""
     # QPainter needs a 32-bit RGB(A) surface for best compatibility
     if qimg.format() not in (QImage.Format_RGB32, QImage.Format_ARGB32):
@@ -241,28 +242,7 @@ def _add_scalebar_on_annotated(
     return draw_new_scale_bar(annotated, bar_px, text=f"{bar_phys:g} {unit}")
 
 
-def _add_scalebar_on_annotated(
-    annotated: np.ndarray,
-    pixel_size: float,
-    unit: str,
-    add_scalebar: bool = True,
-) -> np.ndarray:
-    """Optionally draw a physical scale bar on an annotated BGR image."""
-    if not add_scalebar or pixel_size <= 0:
-        return annotated
-
-    image_width_phys = annotated.shape[1] * pixel_size
-    target = image_width_phys * 0.2
-    magnitude = 10 ** int(np.floor(np.log10(max(target, 1e-9))))
-    bar_phys = next(
-        (magnitude * n for n in [1, 2, 5, 10] if magnitude * n >= target * 0.7),
-        magnitude * 10,
-    )
-    bar_px = max(1, int(round(bar_phys / pixel_size)))
-    return draw_new_scale_bar(annotated, bar_px, text=f"{bar_phys:g} {unit}")
-
-
-def get_max_slice_thickness(path: str) -> Optional[float]:
+def get_max_slice_thickness(path: str) -> float | None:
     """Return the smallest bounding-box dimension of an STL/VTK mesh.
 
     This gives the maximum sensible slice thickness for the mesh — slicing
@@ -289,43 +269,7 @@ def get_max_slice_thickness(path: str) -> Optional[float]:
     return None
 
 
-#def view_params(Slice_direction, bounds, center, pixel_spacing, margin=100.0):
-#    x_min, x_max, y_min, y_max, z_min, z_max = bounds
-#    dx, dy, dz = x_max - x_min, y_max - y_min, z_max - z_min
-#
-#    axis = {"X": 0, "Y": 1, "Z": 2}.get(Slice_direction)
-#    if axis is None:
-#        raise ValueError("Slice_direction must be 'X','Y','Z'.")
-#
-#    # image size: plane orthogonal to the slice axis
-#    if axis == 0:   # X → YZ
-#        w_raw, h_raw = dy / pixel_spacing, dz / pixel_spacing
-#    elif axis == 1: # Y → XZ
-#        w_raw, h_raw = dx / pixel_spacing, dz / pixel_spacing
-#    else:           # Z → XY
-#        w_raw, h_raw = dx / pixel_spacing, dy / pixel_spacing
-#
-#    image_width  = int(np.clip(np.ceil(w_raw), 64, 4096))
-#    image_height = int(np.clip(np.ceil(h_raw), 64, 4096))
-#    window_size = (image_width, image_height)
-#
-#    # camera position along the slice axis at max+margin
-#    cam_pos = list(center)
-#    cam_pos[axis] = [x_max, y_max, z_max][axis] + margin
-#
-#    # view-up: keep Z-up for X,Y views; use Y-up for Z view
-#    view_up = (0.0, 0.0, 1.0) if axis in (0, 1) else (0.0, 1.0, 0.0)
-#
-#    cam_position = [
-#        tuple(cam_pos),               # camera
-#        (center[0], center[1], center[2]),  # focal point
-#        view_up,                      # view up
-#    ]
-#
-#    return window_size, cam_position
-
-
-def slice_at(mesh: pv.DataSet, Slice_direction: str, s: float):
+def slice_at(mesh: pv.DataSet, Slice_direction: str, s: float) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     """Compute the slicing normal and origin for a PyVista mesh.
 
     Args:
@@ -389,7 +333,7 @@ def make_scale_cube(Slice_direction: str, cube_len: float, origin, s: float, off
 
     return cube
 
-def compactness_2D(area, perimeter) -> float:
+def compactness_2D(area: float, perimeter: float) -> float:
     if perimeter == 0:
         return 0
     return (4 * 3.141592653589793 * area) / (perimeter ** 2)

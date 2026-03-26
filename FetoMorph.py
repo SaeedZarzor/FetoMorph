@@ -1315,21 +1315,21 @@ class MainWindow(QMainWindow):
 
             # Call measurement function
             if mode == "allmarks":
-                area, perimeter, perimeter_convex, lGI, compactness, depth, annotated_bgr = measure_image_allmarks(
+                area, perimeter, perimeter_convex, lGI, compactness, depth, annotated_bgr = compute_image_allmarks(
                     img_path, pixel_size=pixel_size, kernel_size=self.kernel_size,
                     cnt_threshold=self.cnt_threshold, unit=u, add_scalebar=False)
             elif mode == "perimeter":
-                perimeter, annotated_bgr = measure_image_perimeter(
+                perimeter, annotated_bgr = compute_image_perimeter(
                     img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u)
             elif mode == "area":
-                area, annotated_bgr = measure_image_area(
+                area, annotated_bgr = compute_image_area(
                     img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u)
             elif mode == "lGI":
-                lGI, perimeter, perimeter_convex, annotated_bgr = measure_image_lGI(
+                lGI, perimeter, perimeter_convex, annotated_bgr = compute_image_lGI(
                     img_path, pixel_size=pixel_size, kernel_size=self.kernel_size,
                     cnt_threshold=self.cnt_threshold, unit=u)
             elif mode == "sulci_depth":
-                depth, annotated_bgr = measure_image_sulci_depth(
+                depth, annotated_bgr = compute_image_sulci_depth(
                     img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u)
             else:
                 print(f"[Planar VTK] Unknown mode: {mode}")
@@ -1413,7 +1413,7 @@ class MainWindow(QMainWindow):
                 if self.last_annotated_path is not None:
                     image_path = self.last_annotated_path
                     
-                area, perimeter, perimeter_convex, lGI, compactness, depth, annotated_bgr = measure_image_allmarks(
+                area, perimeter, perimeter_convex, lGI, compactness, depth, annotated_bgr = compute_image_allmarks(
                     image_path,
                     pixel_size=px_size,
                     kernel_size= self.kernel_size,
@@ -1771,7 +1771,7 @@ class MainWindow(QMainWindow):
                 if self.last_annotated_path is not None:
                     image_path = self.last_annotated_path
                 
-                perimeter, annotated_bgr = measure_image_perimeter(
+                perimeter, annotated_bgr = compute_image_perimeter(
                     image_path,
                     pixel_size = px_size,
                     cnt_threshold = self.cnt_threshold,
@@ -1967,7 +1967,7 @@ class MainWindow(QMainWindow):
                 image_path = self.current_path
                 if self.last_annotated_path is not None:
                     image_path = self.last_annotated_path
-                lGI,perimeter, perimeter_convex, annotated_bgr = measure_image_lGI(
+                lGI,perimeter, perimeter_convex, annotated_bgr = compute_image_lGI(
                     image_path,
                     pixel_size = px_size,
                     kernel_size= self.kernel_size,
@@ -2209,7 +2209,7 @@ class MainWindow(QMainWindow):
                 image_path = self.current_path
                 if self.last_annotated_path is not None:
                     image_path = self.last_annotated_path
-                depth, annotated_bgr = measure_image_sulci_depth(
+                depth, annotated_bgr = compute_image_sulci_depth(
                     image_path,
                     pixel_size = px_size,
                     cnt_threshold=self.cnt_threshold,
@@ -2383,7 +2383,7 @@ class MainWindow(QMainWindow):
                 if self.last_annotated_path is not None:
                     image_path = self.last_annotated_path
                     
-                area, annotated_bgr = measure_image_area(
+                area, annotated_bgr = compute_image_area(
                     image_path,
                     pixel_size=px_size,
                     cnt_threshold=self.cnt_threshold,

@@ -13,8 +13,9 @@ Key concepts:
       ``cell_density - max_cell_density ≤ 0``.
 """
 
+from __future__ import annotations
+
 import os
-from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd

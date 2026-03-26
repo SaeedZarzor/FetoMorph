@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtGui import QIcon
 
 
-def set_icons(ui, assets: Path):
+def set_icons(ui, assets: Path) -> None:
     """Assign icon files to every toolbar QAction on *ui*.
 
     Args:

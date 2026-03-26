@@ -12,8 +12,8 @@ from PySide6.QtGui import (QPixmap, QAction, QPainter, QTextCursor, QImage, QKey
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QFileDialog,QRubberBand,
     QVBoxLayout, QHBoxLayout, QToolBar, QSlider, QComboBox,QDockWidget,
-    QMessageBox, QSizePolicy, QGroupBox, QPlainTextEdit, QSplitter, QInputDialog, QDialog, QFormLayout, QSizePolicy,
-    QDoubleSpinBox, QDialogButtonBox, QSpinBox, QStyle, QTabWidget, QGroupBox, QToolButton,QMenu,
+    QMessageBox, QSizePolicy, QGroupBox, QPlainTextEdit, QSplitter, QInputDialog, QDialog, QFormLayout,
+    QDoubleSpinBox, QDialogButtonBox, QSpinBox, QStyle, QTabWidget, QToolButton,QMenu,
     QWidgetItem, QListWidget,QListWidgetItem, QLineEdit, QPushButton, QTableView, QHeaderView,
 )
 
@@ -54,16 +54,16 @@ import numpy as np
 import cv2
 try:
     import pandas as pd
-except Exception:  # keep optional
+except ImportError:  # keep optional
     pd = None
 
 try:
     import nibabel as nib
-except Exception:
+except ImportError:
     nib = None
     
     
-import os, sys, math, tempfile, shutil, pathlib, uuid, time, shutil, re, trimesh
+import os, sys, math, tempfile, shutil, pathlib, uuid, time, re, trimesh
 from datetime import datetime
 from typing import Optional, Tuple, List
 from pathlib import Path
@@ -85,7 +85,7 @@ def qt_icon(style: QStyle, rel_path: str | None = None) -> QIcon:
             p = os.path.join(base, "icons", rel_path)
             if os.path.isfile(p):
                 return QIcon(p)
-        except Exception:
+        except (OSError, TypeError):
             pass
     # If rel_path is not a file, treat it as a StandardPixmap enum
     sp = rel_path if isinstance(rel_path, QStyle.StandardPixmap) else QStyle.SP_FileIcon
@@ -110,7 +110,7 @@ __all__ = [
     "vtkOrientationMarkerWidget", "vtkPoints", "vtkCellArray", "vtkFloatArray","vtkScalarBarActor",
     "vtkAppendPolyData",
     # Sci/IO
-    "np","cv2","pd","os","sys","math","tempfile","shutil","pathlib","datetime","Optional","Tuple","Path","re", "List",
+    "np","cv2","pd","os","sys","math","tempfile","shutil","pathlib","uuid","time","datetime","Optional","Tuple","Path","re", "List",
     "trimesh", "plt",
     # helpers
     "qt_icon",

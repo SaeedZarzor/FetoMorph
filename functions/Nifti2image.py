@@ -10,7 +10,6 @@ from __future__ import annotations
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import Tuple, Optional
 
 
 # ---------- Background cleanup (preserve colored regions) ----------
@@ -19,7 +18,7 @@ def clean_background_keep_colored(
     img_bgr: np.ndarray,
     s_thresh: int = 60,
     v_thresh: int = 40,
-    unify_color: Optional[Tuple[int, int, int]] = None  # (B, G, R)
+    unify_color: tuple[int, int, int] | None = None  # (B, G, R)
 ) -> np.ndarray:
     """Replace non-coloured pixels with white, preserving coloured regions.
 
@@ -56,7 +55,7 @@ def clean_background_keep_colored(
 
 # ---------- Scale-bar detection & measurement ----------
 
-def detect_scale_bar_length(img_bgr: np.ndarray) -> tuple[Optional[int], Optional[Tuple[int,int,int,int]]]:
+def detect_scale_bar_length(img_bgr: np.ndarray) -> tuple[int | None, tuple[int,int,int,int] | None]:
     """Detect the original scale bar in an image and measure its length.
 
     Uses heuristics based on near-white colour, position in the bottom
@@ -125,10 +124,10 @@ def draw_new_scale_bar(
     length_px: int,
     *,
     where: str | Tuple[int, int] = "bottom_right",
-    color: Tuple[int, int, int] = (0, 0, 0),  # black in BGR
+    color: tuple[int, int, int] = (0, 0, 0),  # black in BGR
     thickness_ratio: float = 0.007,
     margin_ratio: float = 0.08,
-    text: Optional[str] = None,
+    text: str | None = None,
     font_scale_ratio: float = 0.9,
     font_thickness: int = 2
 ) -> np.ndarray:
@@ -197,12 +196,12 @@ def nifti_slice_to_image(
     in_path: str,
     out_path: str,
     *,
-    unify_color: Optional[Tuple[int, int, int]] = None,    # (B,G,R), e.g., (255,0,0)
-#    new_bar_color: Tuple[int, int, int] = None,
-    label_text: Optional[str] = None,
+    unify_color: tuple[int, int, int] | None = None,    # (B,G,R), e.g., (255,0,0)
+#    new_bar_color: tuple[int, int, int] = None,
+    label_text: str | None = None,
     scale_bar:bool = True,
-#    match_fraction_of_width: Optional[float] = None
-    smooth: Optional[str] = "median",   # "gaussian", "median", "bilateral"
+#    match_fraction_of_width: float | None = None
+    smooth: str | None = "median",   # "gaussian", "median", "bilateral"
     smooth_strength: int = 5        # kernel size or strength parameter
 ) -> int:
     """Clean a slice image, optionally smooth it, and redraw the scale bar.

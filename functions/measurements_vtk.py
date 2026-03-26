@@ -12,9 +12,10 @@ Key differences from the STL pipeline:
       ``pre_axis = (axis_index - 1) % 3``, ``next_axis = (axis_index + 1) % 3``.
 """
 
+from __future__ import annotations
+
 import os
 import logging
-from typing import Tuple
 
 import numpy as np
 import cv2
