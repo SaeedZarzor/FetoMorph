@@ -14,7 +14,7 @@ Key differences from the STL pipeline:
 
 from deps import *
 import pyvista as pv
-from helpers.Helpers import compute_kernel_convex, contours_exclude, clac_scale, get_red_rect_offset, slice_at, make_scale_cube, compactness_3D, compactness_2D
+from helpers.Helpers import compute_kernel_convex, contours_exclude, calc_scale, get_red_rect_offset, slice_at, make_scale_cube, compactness_3D, compactness_2D
 from helpers.check_mesh import check_brain
 from typing import Any, Literal, Sequence
 from constants import BINARY_THRESHOLD_VTK, RED_CHANNEL_MIN, GREEN_CHANNEL_MAX, DEFECT_FIXED_POINT
@@ -134,7 +134,7 @@ def compute_vtk_allmarks(
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Scale cube is rendered in physical mm (cube_len × mesh_dim_scaled[0]).
-        mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[0])
+        mm_per_px = calc_scale(img_rgb, cube_len*mesh_dim_scaled[0])
 
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
@@ -357,7 +357,7 @@ def compute_vtk_lGI(
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[0])
+        mm_per_px = calc_scale(img_rgb, cube_len*mesh_dim_scaled[0])
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
@@ -541,7 +541,7 @@ def compute_vtk_volume(
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[0])
+        mm_per_px = calc_scale(img_rgb, cube_len*mesh_dim_scaled[0])
 
 
         # Prepare masks / contours (pixel space)
@@ -712,7 +712,7 @@ def compute_vtk_area(
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[0])
+        mm_per_px = calc_scale(img_rgb, cube_len*mesh_dim_scaled[0])
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
@@ -881,7 +881,7 @@ def compute_vtk_sulci_depth(
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[0])
+        mm_per_px = calc_scale(img_rgb, cube_len*mesh_dim_scaled[0])
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
@@ -1058,7 +1058,7 @@ def compute_compactness_vtk(parent,
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = clac_scale(img_rgb, cube_len*mesh_dim_scaled[0])
+        mm_per_px = calc_scale(img_rgb, cube_len*mesh_dim_scaled[0])
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
