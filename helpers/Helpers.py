@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QImage, QPainter, QColor, QPen
 from functions.Nifti2image import draw_new_scale_bar
 import math
-
+logger = logging.getLogger(__name__)
 
 def text_thickness(H: int, style: str = "regular", cap: int = 10) -> int:
     """Compute an OpenCV line thickness that scales with image height.
@@ -219,6 +219,26 @@ def add_scalebar(qimg: QImage, zooms: np.ndarray, ax: int) -> Tuple[QImage, floa
 
     painter.end()
     return qimg, mm_per_px, bar_mm
+
+def _add_scalebar_on_annotated(
+    annotated: np.ndarray,
+    pixel_size: float,
+    unit: str,
+    add_scalebar: bool = True,
+) -> np.ndarray:
+    """Optionally draw a physical scale bar on an annotated BGR image."""
+    if not add_scalebar or pixel_size <= 0:
+        return annotated
+
+    image_width_phys = annotated.shape[1] * pixel_size
+    target = image_width_phys * 0.2
+    magnitude = 10 ** int(np.floor(np.log10(max(target, 1e-9))))
+    bar_phys = next(
+        (magnitude * n for n in [1, 2, 5, 10] if magnitude * n >= target * 0.7),
+        magnitude * 10,
+    )
+    bar_px = max(1, int(round(bar_phys / pixel_size)))
+    return draw_new_scale_bar(annotated, bar_px, text=f"{bar_phys:g} {unit}")
 
 
 def _add_scalebar_on_annotated(
