@@ -6,7 +6,7 @@ and a rubber-band rectangle for region-of-interest selection.  Persistent
 rectangle annotations can also be added programmatically.
 """
 
-from PySide6.QtCore import Qt, QSize, QPoint, QRect
+from PySide6.QtCore import Qt, QSize, QPoint, QRect, Signal
 from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QPen
 from PySide6.QtWidgets import QLabel, QSizePolicy, QRubberBand
 
@@ -18,6 +18,8 @@ class ScaledImageLabel(QLabel):
       - square selection mode with QRubberBand, returns image-rect + cropped QImage
     It draws self._pix manually; QLabel's built-in pixmap is *not* used.
     """
+    zoomChanged = Signal(float)
+
     def __init__(self, parent=None):
         """Initialise the scaled image label.
 
@@ -34,6 +36,13 @@ class ScaledImageLabel(QLabel):
         self.setMouseTracking(True)            # we want move events while dragging
         self.setFocusPolicy(Qt.StrongFocus)    # so Esc cancels selection
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self._zoom_factor: float = 1.0
+        self._zoom_min: float = 0.1
+        self._zoom_max: float = 8.0
+        self._pan_active: bool = False
+        self._pan_last_pos: QPoint | None = None
+        self._pan_dx: int = 0
+        self._pan_dy: int = 0
 
         # ---- scalebar measurement state ----
         self._measure_active: bool = False
@@ -74,12 +83,32 @@ class ScaledImageLabel(QLabel):
             pm: New pixmap, or None to clear.
         """
         self._pix = pm if pm is not None else QPixmap()
+        self._zoom_factor = 1.0
+        self._pan_dx = 0
+        self._pan_dy = 0
         self.update()
 
     def clearImage(self):
         """Remove the displayed pixmap and repaint."""
         self._pix = QPixmap()
+        self._zoom_factor = 1.0
+        self._pan_dx = 0
+        self._pan_dy = 0
         self.update()
+
+    def set_zoom_factor(self, z: float):
+        """Set absolute zoom factor."""
+        self._zoom_factor = max(self._zoom_min, min(self._zoom_max, float(z)))
+        if self._zoom_factor <= 1.0:
+            self._pan_dx = 0
+            self._pan_dy = 0
+        self._clamp_pan_offsets()
+        self.zoomChanged.emit(float(self._zoom_factor))
+        self.update()
+
+    def zoom_factor(self) -> float:
+        """Return current zoom factor."""
+        return float(self._zoom_factor)
 
     # --- scalebar measure mode ---
     def start_scalebar_measure(self, finished_cb):
@@ -220,15 +249,15 @@ class ScaledImageLabel(QLabel):
         if self._pix.isNull():
             return
 
-        rect: QRect = self.contentsRect()
-        scaled = self._pix.scaled(rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        x = rect.x() + (rect.width() - scaled.width()) // 2
-        y = rect.y() + (rect.height() - scaled.height()) // 2
+        tgt = self._scaled_target_rect()
+        if tgt.width() <= 0 or tgt.height() <= 0:
+            return
+        scaled = self._pix.scaled(tgt.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
 
         p = QPainter(self)
         
         try:
-            p.drawPixmap(x, y, scaled)
+            p.drawPixmap(tgt.topLeft(), scaled)
 
             # overlay the scalebar measurement line
             if self._measure_active and self._measure_p1_img is not None and self._measure_p2_img is not None:
@@ -336,11 +365,31 @@ class ScaledImageLabel(QLabel):
         iw, ih = self._pix.width(), self._pix.height()
         if iw <= 0 or ih <= 0:
             return rect
-        s = min(rect.width() / iw, rect.height() / ih)
+        s = min(rect.width() / iw, rect.height() / ih) * self._zoom_factor
         sw, sh = int(iw * s), int(ih * s)
-        x = rect.x() + (rect.width() - sw) // 2
-        y = rect.y() + (rect.height() - sh) // 2
+        self._clamp_pan_offsets(sw=sw, sh=sh)
+        x = rect.x() + (rect.width() - sw) // 2 + self._pan_dx
+        y = rect.y() + (rect.height() - sh) // 2 + self._pan_dy
         return QRect(x, y, sw, sh)
+
+    def _clamp_pan_offsets(self, sw: int | None = None, sh: int | None = None):
+        """Clamp pan offsets so zoomed image always covers the viewport."""
+        rect = self.contentsRect()
+        if sw is None or sh is None:
+            if self._pix.isNull():
+                self._pan_dx = self._pan_dy = 0
+                return
+            iw, ih = self._pix.width(), self._pix.height()
+            if iw <= 0 or ih <= 0:
+                self._pan_dx = self._pan_dy = 0
+                return
+            s = min(rect.width() / iw, rect.height() / ih) * self._zoom_factor
+            sw, sh = int(iw * s), int(ih * s)
+
+        max_dx = max(0, (sw - rect.width()) // 2)
+        max_dy = max(0, (sh - rect.height()) // 2)
+        self._pan_dx = max(-max_dx, min(max_dx, int(self._pan_dx)))
+        self._pan_dy = max(-max_dy, min(max_dy, int(self._pan_dy)))
 
     def _widget_to_image(self, pt: QPoint) -> QPoint | None:
         """Map widget point -> image pixel coords (int), or None if outside the drawn image."""
@@ -370,6 +419,20 @@ class ScaledImageLabel(QLabel):
 
     # ---------------- mouse / key handling ----------------
     def mousePressEvent(self, e):
+        # pan start (only when zoomed in and no active measurement/selection mode)
+        if (
+            e.button() == Qt.LeftButton
+            and self._zoom_factor > 1.0
+            and not self._line_measure_active
+            and not self._measure_active
+            and not self._sel_active
+        ):
+            self._pan_active = True
+            self._pan_last_pos = QPoint(e.pos())
+            self.setCursor(Qt.ClosedHandCursor)
+            e.accept()
+            return
+
         # straight-line measure (two-click)
         if self._line_measure_active and e.button() == Qt.LeftButton:
             pt = self._widget_to_image(e.pos())
@@ -416,6 +479,17 @@ class ScaledImageLabel(QLabel):
         super().mousePressEvent(e)
 
     def mouseMoveEvent(self, e):
+        # pan update
+        if self._pan_active and self._pan_last_pos is not None:
+            delta = e.pos() - self._pan_last_pos
+            self._pan_dx += int(delta.x())
+            self._pan_dy += int(delta.y())
+            self._pan_last_pos = QPoint(e.pos())
+            self._clamp_pan_offsets()
+            self.update()
+            e.accept()
+            return
+
         # straight-line live tracking
         if self._line_measure_active and self._line_p1_img is not None:
             pt = self._widget_to_image(e.pos())
@@ -459,6 +533,13 @@ class ScaledImageLabel(QLabel):
         super().mouseMoveEvent(e)
 
     def mouseReleaseEvent(self, e):
+        if self._pan_active and e.button() == Qt.LeftButton:
+            self._pan_active = False
+            self._pan_last_pos = None
+            self.setCursor(Qt.ArrowCursor)
+            e.accept()
+            return
+
         # scalebar finish
         if self._measure_active and e.button() == Qt.LeftButton:    
             pt = self._widget_to_image(e.pos())
@@ -520,6 +601,5 @@ class ScaledImageLabel(QLabel):
         if self._rubber and self._rubber.isVisible():
             r = self._scaled_target_rect()
             self._rubber.setGeometry(self._rubber.geometry().intersected(r))
+        self._clamp_pan_offsets()
         super().resizeEvent(e)
-        
-    

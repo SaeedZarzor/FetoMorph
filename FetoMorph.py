@@ -46,6 +46,7 @@ from widgets.GeometryDialog import GeometryDialogWithAspect
 from widgets.RegionDock import *
 from widgets.GestationalWeeksDialog import GestationalWeeksDialog
 from widgets.ImageBrowserDialog import ImageBrowserDialog
+from widgets.ZoomControls import ZoomControlsWidget
 from ribbon import *
 from icons import set_icons
 
@@ -535,6 +536,14 @@ class MainWindow(QMainWindow):
 
         self.slice_value_label = QLabel("—")
         self.nav_tb.addWidget(self.slice_value_label)
+
+        self.nav_tb.addSeparator()
+
+        self.zoom_controls = ZoomControlsWidget(self)
+        self.zoom_controls.bind_image_label(self.image_label)
+        self.nav_tb.addWidget(self.zoom_controls)
+
+        self._set_zoom_controls_visible(False)
 
     @property
     def is_vtk(self) -> bool:
@@ -1028,6 +1037,8 @@ class MainWindow(QMainWindow):
         pm = QPixmap(path)
         if pm.isNull(): QMessageBox.critical(self, "Open Failed", "Could not read image file."); return
         self.image_label.setImage(pm); self._show_widget(self.image_label); self._set_slice_controls(False)
+        if hasattr(self, "zoom_controls"):
+            self.zoom_controls.set_zoom_text("Fit")
         print(f"Loaded image: {path}  size={pm.width()}x{pm.height()}"); self._set_current("image", path)
         self.statusBar().showMessage(f"{self.current_path} image is loaded", 5000)
 
@@ -3598,6 +3609,7 @@ class MainWindow(QMainWindow):
             self.act_set_image_scale.setEnabled(False)
             self.act_set_scale.setEnabled(False)
             self.nav_tb.hide()
+            self._set_zoom_controls_visible(False)
 
             
         if kind == "nifti":
@@ -3622,6 +3634,9 @@ class MainWindow(QMainWindow):
             self.act_set_image_scale.setEnabled(False)
             self.act_set_scale.setEnabled(False)
             self.nav_tb.show()
+            self._set_zoom_controls_visible(False)
+            for w in (self.orient_combo, self.view_mode, self.slice_caption, self.slice_slider, self.slice_value_label):
+                w.setVisible(True)
 
         elif kind == "image":
             self.act_meas_area.setEnabled(True)
@@ -3643,14 +3658,21 @@ class MainWindow(QMainWindow):
             self.view_mode.setEnabled(False)
             self.act_set_image_scale.setEnabled(True)
             self.act_set_scale.setEnabled(True)
-            self.nav_tb.hide()
+            self.nav_tb.show()
+            for w in (self.orient_combo, self.view_mode, self.slice_caption, self.slice_slider, self.slice_value_label):
+                w.setVisible(False)
+            self._set_zoom_controls_visible(True)
 
         if kind is not None and kind.startswith("vtk"):
             self.act_set_physical_dim.setEnabled(True)
         
         else:
             self.act_set_physical_dim.setEnabled(False)
-            
+
+    def _set_zoom_controls_visible(self, visible: bool):
+        """Show or hide image zoom controls in the navigation toolbar."""
+        self.zoom_controls.setVisible(bool(visible))
+
             
 
     def enable_png_navigation(self, png_paths: list[str], slice_indices: list[int] | None = None, start_index: int | None = None):
