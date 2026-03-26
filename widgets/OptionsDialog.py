@@ -4,7 +4,8 @@ Collects user preferences for colour unification, scale bar insertion,
 and smoothing (type and strength) before a batch processing run.
 """
 
-from deps import *
+from typing import Optional, Tuple
+from PySide6 import QtWidgets, QtCore, QtGui
 
 class ProcessingOptionsDialog(QtWidgets.QDialog):
     """Dialog for configuring image processing options.

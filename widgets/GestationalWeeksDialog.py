@@ -5,7 +5,9 @@ in weeks, typically used to associate fetal brain data with a
 developmental time point.
 """
 
-from deps import *
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QDialog, QFormLayout, QSlider, QSpinBox,
+                                QDialogButtonBox, QComboBox)
 
 
 class GestationalWeeksDialog(QDialog):

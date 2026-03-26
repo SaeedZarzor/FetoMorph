@@ -49,6 +49,10 @@ from widgets.ImageBrowserDialog import ImageBrowserDialog
 from ribbon import *
 from icons import set_icons
 
+import logging
+
+logger = logging.getLogger("fetomorph")
+
 # ---------------------------
 # Supported extensions
 # ---------------------------
@@ -120,13 +124,13 @@ class TeeStream:
         """
         for t in (self.a, self.b):
             try: t.write(s)
-            except Exception: pass
+            except Exception: logger.debug("TeeStream write failed", exc_info=True)
 
     def flush(self):
         """Flush both underlying streams."""
         for t in (self.a, self.b):
             try: t.flush()
-            except Exception: pass
+            except Exception: logger.debug("TeeStream flush failed", exc_info=True)
 
 class QtVTKOutputWindow(vtkOutputWindow):
     """Redirect VTK's internal logging into the application's QtConsole.
@@ -590,7 +594,7 @@ class MainWindow(QMainWindow):
                                          QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
             if reply == QMessageBox.Yes:
                 try: os.makedirs(folder, exist_ok=True); print(f"Created folder: {folder}")
-                except Exception as ex: print(f"ERROR creating folder: {ex}"); QMessageBox.critical(self, "Save Failed", f"Could not create folder:\n{ex}"); return
+                except Exception as ex: logger.error("Error creating folder: %s", ex); QMessageBox.critical(self, "Save Failed", f"Could not create folder:\n{ex}"); return
             else: return
         self.last_dir = folder or self.last_dir
         try:
@@ -604,7 +608,7 @@ class MainWindow(QMainWindow):
                 writer.SetFileName(path); writer.SetInputConnection(w2i.GetOutputPort()); writer.Write()
             print(f"Saved view to: {path}")
         except Exception as ex:
-            print(f"ERROR saving view: {ex}"); QMessageBox.critical(self, "Save Failed", f"{type(ex).__name__}: {ex}")
+            logger.error("Error saving view: %s", ex); QMessageBox.critical(self, "Save Failed", f"{type(ex).__name__}: {ex}")
             
     def save_data_as(self):
         """Export the current results folder or the loaded data file.
@@ -1004,11 +1008,11 @@ class MainWindow(QMainWindow):
                 self.load_stl(path)
                 print(f"Importing STL: {path}")
             else:
-                print("The file type unknown")
+                logger.warning("Unknown file type: %s", ext(path))
            
             self.last_dir = os.path.dirname(path) or self.last_dir
         except Exception as e:
-            print("Failed to open", path, e)
+            logger.error("Failed to open %s: %s", path, e)
 
         # Update recent list + menu
         self.recent.add(path)
@@ -1225,7 +1229,7 @@ class MainWindow(QMainWindow):
                     os.makedirs(folder, exist_ok=True)
                     print(f"Created folder: {folder}")
                 except Exception as ex:
-                    print(f"ERROR creating folder: {ex}")
+                    logger.error("Error creating folder: %s", ex)
                     QMessageBox.critical(self, "Export Failed", f"Could not create folder:\n{ex}")
                     return
             else:
@@ -1238,7 +1242,7 @@ class MainWindow(QMainWindow):
             if folder:
                 self.last_dir = folder
         except Exception as ex:
-            print(f"ERROR exporting metrics: {ex}")
+            logger.error("Error exporting metrics: %s", ex)
             QMessageBox.critical(self, "Export Failed", f"{type(ex).__name__}: {ex}")
 
     # ---------- Planar VTK measurement via screenshot ----------
@@ -1369,7 +1373,7 @@ class MainWindow(QMainWindow):
             print(f"[Planar VTK {mode}] Done in {dt:.2f}s.")
 
         except Exception as ex:
-            print(f"[Planar VTK {mode}] ERROR: {ex}")
+            logger.error("Planar VTK {mode} failed: %s", ex)
             QMessageBox.critical(self, f"Planar VTK {mode} Failed", f"{type(ex).__name__}: {ex}")
 
     # ---------- Process menu (stubs) ----------
@@ -1436,7 +1440,7 @@ class MainWindow(QMainWindow):
                     sulci_depth = depth)
                     
             except Exception as ex:
-                print(f"[All hallmarks] ERROR: {ex}")
+                logger.error("All hallmarks failed: %s", ex)
                 QMessageBox.critical(self, "All hallmarks Failed", f"{type(ex).__name__}: {ex}")
         elif self.current_kind == "nifti":
             t0 = time.time()
@@ -1482,7 +1486,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
-                print(f"[NIfTI hallmarks] ERROR: {ex}")
+                logger.error("NIfTI hallmarks failed: %s", ex)
                 QMessageBox.critical(self, "NIfTI All hallmarks Failed", f"{type(ex).__name__}: {ex}")
             return
             
@@ -1532,7 +1536,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
             
             except Exception as ex:
-                print(f"[STL hallmarks] ERROR: {ex}")
+                logger.error("STL hallmarks failed: %s", ex)
                 QMessageBox.critical(self, "STL hallmarks Failed", f"{type(ex).__name__}: {ex}")
                 return
         
@@ -1588,7 +1592,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
                       
             except Exception as ex:
-                print(f"[VTK hallmarks] ERROR: {ex}")
+                logger.error("VTK hallmarks failed: %s", ex)
                 QMessageBox.critical(self, "VTK hallmarks Failed", f"{type(ex).__name__}: {ex}")
                 return
             
@@ -1636,7 +1640,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
-                print(f"ERROR (NIfTI Volume): {ex}")
+                logger.error("NIfTI volume failed: %s", ex)
                 QMessageBox.critical(self, "NIfTI Volume Failed", f"{type(ex).__name__}: {ex}")
             return
         elif self.current_kind == "stl":
@@ -1675,7 +1679,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
-                print(f"[STL Volume] ERROR: {ex}")
+                logger.error("STL Volume failed: %s", ex)
                 QMessageBox.critical(self, "STL Volume Failed", f"{type(ex).__name__}: {ex}")
             return
             
@@ -1720,7 +1724,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
                       
             except Exception as ex:
-                print(f"[VTK Volume] ERROR: {ex}")
+                logger.error("VTK Volume failed: %s", ex)
                 QMessageBox.critical(self, "VTK hallmarks Failed", f"{type(ex).__name__}: {ex}")
                 return
                 
@@ -1773,7 +1777,7 @@ class MainWindow(QMainWindow):
                     perimeter=perimeter)
 
             except Exception as ex:
-                print(f"[Perimeter] ERROR: {ex}")
+                logger.error("Perimeter failed: %s", ex)
                 QMessageBox.critical(self, "Perimeter Failed", f"{type(ex).__name__}: {ex}")
             
         elif self.is_vtk:
@@ -1847,7 +1851,7 @@ class MainWindow(QMainWindow):
                 print(f"[Compactness] Done in {dt:.2f}s.")
 
             except Exception as ex:
-                print(f"[Compactness] ERROR: {ex}")
+                logger.error("Compactness failed: %s", ex)
                 QMessageBox.critical(self, "Compactness Failed", f"{type(ex).__name__}: {ex}")
             return
 
@@ -1889,7 +1893,7 @@ class MainWindow(QMainWindow):
                 self._set_current("image", self.current_path)
 
             except Exception as ex:
-                print(f"[Compactness] ERROR: {ex}")
+                logger.error("Compactness failed: %s", ex)
                 QMessageBox.critical(self, "Compactness Failed", f"{type(ex).__name__}: {ex}")
         else:
             QMessageBox.information(self, "Compactness", "Compactness measurement is currently only supported for 2D images and 3D meshes. Please open an image or 3D mesh file.")      
@@ -1971,7 +1975,7 @@ class MainWindow(QMainWindow):
                     perimeter=perimeter, perimeter_convex=perimeter_convex, lgi=lGI)
 
             except Exception as ex:
-                print(f"[lGI] ERROR: {ex}")
+                logger.error("lGI failed: %s", ex)
                 QMessageBox.critical(self, "lGI Failed", f"{type(ex).__name__}: {ex}")
                 
         elif self.current_kind == "nifti":
@@ -2015,7 +2019,7 @@ class MainWindow(QMainWindow):
                           f"Use File → Save Data As… to copy outputs you want to keep.")
 
                 except Exception as ex:
-                    print(f"[NIfTI lGI] ERROR: {ex}")
+                    logger.error("NIfTI lGI failed: %s", ex)
                     QMessageBox.critical(self, "NIfTI lGI Failed", f"{type(ex).__name__}: {ex}")
                 return
         
@@ -2068,7 +2072,7 @@ class MainWindow(QMainWindow):
                           f"Use File → Save Data As… to copy outputs you want to keep.")
 
                 except Exception as ex:
-                    print(f"[STL lGI] ERROR: {ex}")
+                    logger.error("STL lGI failed: %s", ex)
                     QMessageBox.critical(self, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
                 return
                 
@@ -2110,7 +2114,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
-                print(f"[STL lGI] ERROR: {ex}")
+                logger.error("STL lGI failed: %s", ex)
                 QMessageBox.critical(self, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
             return
             
@@ -2156,7 +2160,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
                       
             except Exception as ex:
-                print(f"[VTK lGI] ERROR: {ex}")
+                logger.error("VTK lGI failed: %s", ex)
                 QMessageBox.critical(self, "VTK lGI Failed", f"{type(ex).__name__}: {ex}")
                 return
             
@@ -2218,7 +2222,7 @@ class MainWindow(QMainWindow):
                     sulci_depth = depth)
 
             except Exception as ex:
-                print(f"[Sulci depth] ERROR: {ex}")
+                logger.error("Sulci depth failed: %s", ex)
                 QMessageBox.critical(self, "Sulci depth Failed", f"{type(ex).__name__}: {ex}")
         
         elif self.current_kind == "nifti":
@@ -2254,7 +2258,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
-                print(f"[NIfTI Sulci depth] ERROR: {ex}")
+                logger.error("NIfTI Sulci depth failed: %s", ex)
                 QMessageBox.critical(self, "NIfTI Sulci depth Failed", f"{type(ex).__name__}: {ex}")
             return
             
@@ -2286,7 +2290,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
-                print(f"[STL Sulci depth] ERROR: {ex}")
+                logger.error("STL Sulci depth failed: %s", ex)
                 QMessageBox.critical(self, "STL Sulci depth Failed", f"{type(ex).__name__}: {ex}")
             return
             
@@ -2332,7 +2336,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
                       
             except Exception as ex:
-                print(f"[VTK Sulci depth] ERROR: {ex}")
+                logger.error("VTK Sulci depth failed: %s", ex)
                 QMessageBox.critical(self, "VTK Sulci depth Failed", f"{type(ex).__name__}: {ex}")
                 return
         else:
@@ -2427,7 +2431,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
-                print(f"[NIfTI Area] ERROR: {ex}")
+                logger.error("NIfTI Area failed: %s", ex)
                 QMessageBox.critical(self, "[NIfTI Area] Failed", f"{type(ex).__name__}: {ex}")
             return
             
@@ -2467,7 +2471,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
-                print(f"[STL Area] ERROR: {ex}")
+                logger.error("STL Area failed: %s", ex)
                 QMessageBox.critical(self, "STL Area Failed", f"{type(ex).__name__}: {ex}")
             return
         
@@ -2512,7 +2516,7 @@ class MainWindow(QMainWindow):
                       f"Use File → Save Data As… to copy outputs you want to keep.")
                       
             except Exception as ex:
-                print(f"[VTK Area] ERROR: {ex}")
+                logger.error("VTK Area failed: %s", ex)
                 QMessageBox.critical(self, "VTK area Failed", f"{type(ex).__name__}: {ex}")
                 return
     
@@ -2597,7 +2601,7 @@ class MainWindow(QMainWindow):
             self.on_slice_slider_changed(mid)
             
         except Exception as ex:
-            print(f"[Process Batch] ERROR: {ex}")
+            logger.error("Process Batch failed: %s", ex)
             QMessageBox.critical(self, "Process Batch Failed", f"{type(ex).__name__}: {ex}")
             return
 
@@ -2634,7 +2638,7 @@ class MainWindow(QMainWindow):
                 # Ensure File/Process actions stay enabled
                 self._set_current("image", self.current_path)
             except Exception as ex:
-                print(f"[Curvature] ERROR: {ex}")
+                logger.error("Curvature failed: %s", ex)
                 QMessageBox.critical(self, "[Curvature] Failed", f"{type(ex).__name__}: {ex}")
             return
             
@@ -2774,7 +2778,7 @@ class MainWindow(QMainWindow):
 
     
         except Exception as ex:
-            print(f"[Optimization] ERROR: {ex}")
+            logger.error("Optimization failed: %s", ex)
             QMessageBox.critical(self, "Optimization Failed", f"{type(ex).__name__}: {ex}")
             return  
         
@@ -2893,7 +2897,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Use Ctrl+M and Ctrl+Shift+M to switch between images.")
 
         except Exception as ex:
-            print(f"[Hausdorff] ERROR: {ex}")
+            logger.error("Hausdorff failed: %s", ex)
             QMessageBox.critical(self, "Hausdorff distance", f"{type(ex).__name__}: {ex}")
     
     def on_pial_to_stl(self):
@@ -2929,7 +2933,7 @@ class MainWindow(QMainWindow):
             self.load_stl(saved)                   # shows in VTK window
             print("[Pial → STL] Hint: use File → Save Data As… to keep a permanent copy.")
         except Exception as ex:
-            print(f"[Pial → STL] ERROR: {ex}")
+            logger.error("Pial → STL failed: %s", ex)
             QMessageBox.critical(self, "Pial → STL", f"{type(ex).__name__}: {ex}")
         
     def on_combined_stl(self):
@@ -2995,7 +2999,7 @@ class MainWindow(QMainWindow):
             self.load_stl(saved)
             print("[Combined STL] Combined STL loaded. Use File → Save Data As… to export.")
         except Exception as ex:
-            print(f"[Combined STL] ERROR: {ex}")
+            logger.error("Combined STL failed: %s", ex)
             QMessageBox.critical(self, "Pial (rh & lh) → Combined STL", f"{type(ex).__name__}: {ex}")
         
     # -------------- Setting functions ---------------
@@ -3199,7 +3203,7 @@ class MainWindow(QMainWindow):
             return True
                               
         except Exception as ex:
-            print(f"ERROR (Set Scale): {ex}")
+            logger.error("Set Scale failed: %s", ex)
             QMessageBox.critical(self, "Set Scale Failed", f"{type(ex).__name__}: {ex}")
             return False
 
@@ -4383,12 +4387,12 @@ class MainWindow(QMainWindow):
             self._resume_sc.activated.connect(loop.quit, Qt.UniqueConnection)
         except TypeError:
             try: self._resume_sc.activated.disconnect(loop.quit)
-            except Exception: pass
+            except Exception: logger.debug("disconnect before reconnect", exc_info=True)
             self._resume_sc.activated.connect(loop.quit)
         loop.exec()
         # cleanup for next time
         try: self._resume_sc.activated.disconnect(loop.quit)
-        except Exception: pass
+        except Exception: logger.debug("disconnect after exec", exc_info=True)
 
     def _enter_adjustment_mode(self):
         """Restrict the UI to annotation/scale/kernel actions only.
@@ -4735,6 +4739,11 @@ class MainWindow(QMainWindow):
 # ---------------------------
 def main():
     """Launch the FetoMorph application."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     app = QApplication(sys.argv)
     app.setApplicationName("FetoMorph")
     app.setApplicationDisplayName("FetoMorph")

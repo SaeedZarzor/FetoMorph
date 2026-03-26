@@ -6,7 +6,25 @@ volume renderings, and FreeSurfer surfaces with optional morphometric
 colour overlays.
 """
 
-from deps import *
+import os
+from typing import Tuple
+import numpy as np
+import cv2
+from PySide6.QtWidgets import QWidget, QVBoxLayout
+from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
+from vtkmodules.vtkRenderingCore import (
+    vtkRenderer, vtkPolyDataMapper, vtkActor,
+    vtkImageSliceMapper, vtkImageSlice, vtkVolume, vtkVolumeProperty,
+    vtkWindowToImageFilter,
+)
+from vtkmodules.vtkRenderingVolumeOpenGL2 import vtkSmartVolumeMapper
+from vtkmodules.vtkRenderingAnnotation import vtkAxesActor, vtkScalarBarActor
+from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
+from vtkmodules.vtkCommonDataModel import vtkImageData, vtkPolyData, vtkCellArray
+from vtkmodules.vtkCommonCore import vtkPoints, vtkFloatArray
+from vtkmodules.vtkFiltersCore import vtkAppendPolyData
+import vtkmodules.vtkInteractionStyle  # noqa: F401
+import vtkmodules.vtkRenderingOpenGL2  # noqa: F401
 import pyvista as pv
 import nibabel as nib
 

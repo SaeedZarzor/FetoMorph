@@ -12,8 +12,17 @@ Key differences from the STL pipeline:
       ``pre_axis = (axis_index - 1) % 3``, ``next_axis = (axis_index + 1) % 3``.
 """
 
-from deps import *
+import os
+import logging
+from typing import Tuple
+
+import numpy as np
+import cv2
+import pandas as pd
 import pyvista as pv
+from PySide6.QtWidgets import QMessageBox
+
+logger = logging.getLogger("fetomorph.vtk")
 from helpers.Helpers import compute_kernel_convex, contours_exclude, calc_scale, get_red_rect_offset, slice_at, make_scale_cube, compactness_3D, compactness_2D
 from helpers.check_mesh import check_brain
 from typing import Any, Literal, Sequence

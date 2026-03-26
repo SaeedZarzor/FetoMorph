@@ -6,7 +6,9 @@ and a rubber-band rectangle for region-of-interest selection.  Persistent
 rectangle annotations can also be added programmatically.
 """
 
-from deps import *
+from PySide6.QtCore import Qt, QSize, QPoint, QRect
+from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QPen
+from PySide6.QtWidgets import QLabel, QSizePolicy, QRubberBand
 
 
 class ScaledImageLabel(QLabel):

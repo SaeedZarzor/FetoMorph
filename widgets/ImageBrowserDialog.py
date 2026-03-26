@@ -4,7 +4,11 @@ Displays thumbnail previews of all images in a folder and lets the
 user select one.  Consistent with the dark-themed FetoMorph dialogs.
 """
 
-from deps import *
+import os
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QListWidget,
+                                QListWidgetItem, QDialogButtonBox)
 
 
 class ImageBrowserDialog(QDialog):
