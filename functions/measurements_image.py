@@ -9,8 +9,7 @@ All pixel → physical-unit conversions use ``pixel_size`` (mm/px).
 
 from __future__ import annotations
 
-import cv2
-import numpy as np
+from deps import *
 from helpers.helpers import image_annotation_style, compute_kernel_convex, compactness_2D, _add_scalebar_on_annotated, draw_hallmarks_values_on_image
 from constants import BINARY_THRESHOLD_DEFAULT, DEFECT_FIXED_POINT
 

@@ -5,16 +5,8 @@ Extracted from MainWindow to consolidate all view/display logic.
 
 from __future__ import annotations
 
-import os
-import logging
-from typing import TYPE_CHECKING, Optional
-
-import numpy as np
-from deps import (
-    QColor, QIcon, QImage, QPainter, QPen, QPixmap, QTextCursor,
-    QWidget, Qt,
-    vtkNIFTIImageReader,
-)
+from deps import *
+from typing import TYPE_CHECKING
 from helpers.helpers import add_scalebar
 
 if TYPE_CHECKING:

@@ -6,13 +6,8 @@ in a single, cohesive module.
 
 from __future__ import annotations
 
-import os
-import logging
-from typing import TYPE_CHECKING, Literal
-
-from deps import (
-    QDialog, QEventLoop, QInputDialog, QLineEdit, QMessageBox,
-)
+from deps import *
+from typing import TYPE_CHECKING
 from constants import (
     DEFAULT_PIXEL_SIZE, DEFAULT_CNT_THRESHOLD,
     DEFAULT_KERNEL_SIZE, DEFAULT_SLICE_THICKNESS,
@@ -120,7 +115,6 @@ class SettingsManager:
             True if the user accepted the dialog, False otherwise.
         """
         if self.mw.is_vtk:
-            import pyvista as pv
             mesh = pv.read(str(self.mw.current_path))
             xmin, xmax, ymin, ymax, zmin, zmax = mesh.bounds
             if all(abs(v) > 1e-9 for v in self.physical_dim):

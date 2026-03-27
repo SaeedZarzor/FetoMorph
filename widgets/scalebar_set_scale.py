@@ -5,8 +5,7 @@ distance in pixels, this dialog lets them enter the corresponding
 physical length and unit so the application can compute pixels-per-unit.
 """
 
-from PySide6.QtWidgets import (QDialog, QFormLayout, QLabel, QDoubleSpinBox,
-                                QComboBox, QDialogButtonBox)
+from deps import *
 
 class ScalebarSetScaleDialog(QDialog):
     """Dialog for setting the image scale from a measured pixel length.

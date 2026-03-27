@@ -5,13 +5,8 @@ choose a slicing direction and measurement unit, and preview the result
 in an embedded PyVista viewer.
 """
 
-# add to imports
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QDialog, QWidget, QVBoxLayout, QHBoxLayout,
-                                QFormLayout, QDoubleSpinBox, QComboBox,
-                                QPushButton)
+from deps import *
 from pyvistaqt import QtInteractor
-import pyvista as pv
 
 class GeometryDialogWithAspect(QDialog):
     """Dialog for editing mesh geometry dimensions with a live 3-D preview.

@@ -14,20 +14,13 @@ physical coordinate system.
 
 from __future__ import annotations
 
-import os
-import logging
-
-import numpy as np
-import cv2
-import pandas as pd
-import nibabel as nib
-from PySide6.QtWidgets import QMessageBox
+from deps import *
+from scipy.ndimage import binary_opening, binary_closing, label
+from nibabel.affines import apply_affine
+from helpers.helpers import compute_kernel_convex, defect_mm_per_px_and_fixed, image_annotation_style
+from constants import DEFECT_FIXED_POINT
 
 logger = logging.getLogger("fetomorph.nifti")
-from scipy.ndimage import binary_opening, binary_closing, label
-from helpers.helpers import compute_kernel_convex, defect_mm_per_px_and_fixed, image_annotation_style
-from nibabel.affines import apply_affine
-from constants import DEFECT_FIXED_POINT
 
 
 

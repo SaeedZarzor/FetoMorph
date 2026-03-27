@@ -6,13 +6,9 @@ convexity-defect depths, then writes annotated PNGs and an Excel
 summary.
 """
 
-import cv2
-import os
-import numpy as np
-from typing import Tuple, Union
+from deps import *
 from helpers.helpers import image_annotation_style, compute_kernel_convex, compactness_2D
 from constants import BINARY_THRESHOLD_DEFAULT, DEFECT_FIXED_POINT
-import pandas as pd
 
 def process_on_images_batch(directory_path,
     out_dir,

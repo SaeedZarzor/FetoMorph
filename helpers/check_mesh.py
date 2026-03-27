@@ -22,10 +22,7 @@ Weight rationale (see ``check_brain``):
       components; a clean brain mesh is typically one component.
 """
 
-import numpy as np
-import trimesh
-import pyvista as pv
-
+from deps import *
 from math import isfinite as _py_isfinite
 
 # Optional SciPy for faster symmetry

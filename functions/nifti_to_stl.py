@@ -4,11 +4,8 @@ Uses marching cubes to extract an iso-surface from selected label
 regions and exports the result as an STL file via trimesh.
 """
 
-import os
-import nibabel as nib
+from deps import *
 from skimage import measure
-import trimesh
-import numpy as np
 
 
 def nii_to_stl(file_path: str, out_dir: str, valid_labels: set[int], level: float = 0.5):

@@ -4,11 +4,7 @@ Persists a bounded list of recently-opened file paths using QSettings,
 and provides a helper to populate a QMenu with those paths.
 """
 
-from pathlib import Path
-from typing import List
-from PySide6.QtCore import QSettings
-from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QMenu
+from deps import *
 
 class RecentPaths:
     """Manage a most-recently-used list of file paths via QSettings.

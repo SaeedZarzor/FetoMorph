@@ -16,11 +16,8 @@ Author: Stefan Herdy (14.11.2023), adapted for FetoMorph.
 
 from __future__ import annotations
 
+from deps import *
 from skimage import measure
-import os
-import numpy as np
-import cv2
-import matplotlib.pyplot as plt
 from shapely.geometry import Polygon
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 

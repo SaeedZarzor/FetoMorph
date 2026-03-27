@@ -5,12 +5,7 @@ filters to slices that contain those labels along axis 1, and saves the
 result as a compressed NIfTI file.
 """
 
-import os
-from pathlib import Path
-
-import numpy as np
-import nibabel as nib
-from PySide6.QtWidgets import QMessageBox
+from deps import *
 
 def nifti_extractor(parent, file_path: str, out_dir: str, valid_labels: set[int]):
     """Extract labelled regions from a NIfTI segmentation and save them.

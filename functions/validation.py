@@ -5,12 +5,7 @@ convex hull) from intermediate outputs to help visually validate the
 morphometric pipeline.
 """
 
-import os
-import pandas as pd
-from pathlib import Path
-import matplotlib.pyplot as plt
-import numpy as np
-import nibabel as nib
+from deps import *
 
 def validate_nifti_area(out_dir: str):
     """Plot per-slice brain pixel counts from the extracted NIfTI volume.

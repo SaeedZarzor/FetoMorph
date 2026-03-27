@@ -7,9 +7,8 @@ chains these steps into a single call.
 """
 
 from __future__ import annotations
-import cv2
-import numpy as np
-from pathlib import Path
+
+from deps import *
 
 
 # ---------- Background cleanup (preserve colored regions) ----------

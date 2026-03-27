@@ -2,15 +2,8 @@
 
 from __future__ import annotations
 
-import os
-import logging
+from deps import *
 from typing import TYPE_CHECKING
-
-from deps import (
-    Qt, QDockWidget, QWidget, QVBoxLayout, QToolBar, QAction,
-    QKeySequence, QTableView, QHeaderView, QStandardItemModel,
-    QStandardItem, QFileDialog, QMessageBox, QApplication,
-)
 
 if TYPE_CHECKING:
     from FetoMorph import MainWindow

@@ -15,14 +15,7 @@ Key concepts:
 
 from __future__ import annotations
 
-import os
-
-import numpy as np
-import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from PySide6.QtWidgets import QMessageBox
+from deps import *
 from pymoo.core.problem import Problem
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.algorithms.moo.nsga3 import NSGA3

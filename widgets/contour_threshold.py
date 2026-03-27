@@ -4,9 +4,7 @@ Provides a slider-and-spinbox dialog for choosing a minimum contour area
 (in pixels) used to filter small or noisy contours during image processing.
 """
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QDialog, QFormLayout, QSlider, QDoubleSpinBox,
-                                QDialogButtonBox)
+from deps import *
 
 class ContourThresholdDialog(QDialog):
     """Dialog for selecting a contour area threshold in pixels.

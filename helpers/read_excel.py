@@ -6,10 +6,7 @@ strips metadata rows, and concatenates the results into a single
 ``pandas.DataFrame`` ready for the NSGA optimiser.
 """
 
-import os
-from typing import List, Tuple
-import pandas as pd
-from PySide6.QtWidgets import QMessageBox
+from deps import *
 
 
 STANDARD_METRIC_COLUMNS = [

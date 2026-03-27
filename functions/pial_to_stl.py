@@ -5,15 +5,7 @@ PolyData mesh, and exports as STL.  Supports single-hemisphere and
 merged bi-hemispheric exports.
 """
 
-import time
-import uuid
-try:
-    import nibabel as nib
-    import pyvista as pv
-    import numpy as np
-except Exception as ex:
-    print("[FreeSurfer] Missing dependency. Install with:\n  pip install nibabel pyvista")
-    raise
+from deps import *
 
 
 def _pial_to_pv_polydata(pial_path: str):

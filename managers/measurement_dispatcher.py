@@ -5,15 +5,8 @@ Extracted from MainWindow to consolidate measurement logic.
 
 from __future__ import annotations
 
-import os
-import time
-import uuid
-import logging
+from deps import *
 from typing import TYPE_CHECKING
-
-import cv2
-import numpy as np
-from deps import QColor, QFileDialog, QMessageBox, QPixmap, pd
 from functions.nifti_to_image import draw_new_scale_bar
 from functions.curvature import compute_curvature_profile, save_curvature_plot
 from functions.hausdorff import calculate_hausdorff_distance
@@ -48,8 +41,6 @@ class MeasurementDispatcher:
         Args:
             mode: One of "allmarks", "perimeter", "area", "lGI", "sulci_depth".
         """
-        import pyvista as pv
-
         t0 = time.time()
         try:
             # Ensure geometry
@@ -59,7 +50,6 @@ class MeasurementDispatcher:
             u = self.mw.units_length
 
             # Read mesh bounds
-            import pyvista as pv
             mesh = pv.read(str(self.mw.current_path))
             xmin, xmax, ymin, ymax, zmin, zmax = mesh.bounds
             mesh_dim = (xmax - xmin, ymax - ymin, zmax - zmin)

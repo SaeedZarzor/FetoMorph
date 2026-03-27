@@ -15,19 +15,12 @@ Unit conversions:
 
 from __future__ import annotations
 
-import os
-import logging
-
-import numpy as np
-import cv2
-import pandas as pd
-import pyvista as pv
-from PySide6.QtWidgets import QMessageBox
-
-logger = logging.getLogger("fetomorph.stl")
+from deps import *
 from helpers.helpers import compute_kernel_convex, contours_exclude, calc_scale, get_red_rect_offset, make_scale_cube, compactness_2D, compactness_3D, image_annotation_style
 from helpers.check_mesh import check_brain
 from constants import BINARY_THRESHOLD_DEFAULT, RED_CHANNEL_MIN, GREEN_CHANNEL_MAX, DEFECT_FIXED_POINT
+
+logger = logging.getLogger("fetomorph.stl")
 
 # ----------------- main API -----------------
 def compute_stl_allmarks(

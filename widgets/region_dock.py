@@ -5,11 +5,7 @@ Presents a checkable list of integer region labels, bulk-action buttons
 the user can type comma-separated label IDs directly.
 """
 
-import re
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
-                                QLabel, QListWidget, QListWidgetItem,
-                                QLineEdit, QPushButton)
+from deps import *
 
 class RegionsDock(QDockWidget):
     """Dock widget for selecting which segmentation region labels to include.

@@ -4,8 +4,7 @@ Maps each ``QAction`` attribute name on the main window to the relative
 path of its icon file under the *assets* directory.
 """
 
-from pathlib import Path
-from PySide6.QtGui import QIcon
+from deps import *
 
 
 def set_icons(ui, assets: Path) -> None:

@@ -6,19 +6,8 @@ in a single module.
 
 from __future__ import annotations
 
-import os
-import shutil
-import logging
-from pathlib import Path
+from deps import *
 from typing import TYPE_CHECKING
-
-from deps import (
-    QAction, QApplication, QDialog, QFileDialog, QMenu, QMessageBox,
-    QPixmap, QToolBar, Qt,
-    vtkDataSetReader, vtkDataSetSurfaceFilter, vtkGenericDataObjectReader,
-    vtkImageData, vtkJPEGWriter, vtkNIFTIImageReader, vtkPNGWriter,
-    vtkPolyData, vtkSTLReader, vtkWindowToImageFilter,
-)
 from helpers.helpers import get_nifti_present_labels
 from widgets.recent_paths import RecentPaths, populate_recent_menu
 

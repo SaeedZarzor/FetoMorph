@@ -15,15 +15,11 @@ reference corner or centroid matches the second.
 
 from __future__ import annotations
 
-import cv2
-import numpy as np
-import os
+from deps import *
 from PIL import Image
-from pathlib import Path
 from scipy.spatial.distance import directed_hausdorff, cdist
-import matplotlib.pyplot as plt
-from helpers.helpers import image_annotation_style
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from helpers.helpers import image_annotation_style
 
 
 def _to_xy2(a: np.ndarray) -> np.ndarray:

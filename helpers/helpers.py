@@ -7,16 +7,7 @@ drawing, and PyVista slice geometry.
 
 from __future__ import annotations
 
-import os
-import math
-import logging
-from pathlib import Path
-
-import numpy as np
-import cv2
-import pyvista as pv
-from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import QImage, QPainter, QColor, QPen
+from deps import *
 from functions.nifti_to_image import draw_new_scale_bar
 
 logger = logging.getLogger(__name__)
