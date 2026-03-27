@@ -18,13 +18,13 @@ from constants import (
     DEFAULT_KERNEL_SIZE, DEFAULT_SLICE_THICKNESS,
     DEFAULT_SCALEBAR_MM,
 )
-from helpers.Helpers import get_max_slice_thickness
-from widgets.Contour_threshold import ContourThresholdDialog
-from widgets.Kernel_size import KernelSizeDialog
-from widgets.Scalebar_set_scale import ScalebarSetScaleDialog
-from widgets.Slice_thickness import SliceThicknessDialog
-from widgets.Unit_scale import UnitScaleDialog
-from widgets.GeometryDialog import GeometryDialogWithAspect
+from helpers.helpers import get_max_slice_thickness
+from widgets.contour_threshold import ContourThresholdDialog
+from widgets.kernel_size import KernelSizeDialog
+from widgets.scalebar_set_scale import ScalebarSetScaleDialog
+from widgets.slice_thickness import SliceThicknessDialog
+from widgets.unit_scale import UnitScaleDialog
+from widgets.geometry_dialog import GeometryDialogWithAspect
 
 if TYPE_CHECKING:
     from FetoMorph import MainWindow

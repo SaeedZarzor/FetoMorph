@@ -25,7 +25,7 @@ from PySide6.QtWidgets import QMessageBox
 
 logger = logging.getLogger("fetomorph.nifti")
 from scipy.ndimage import binary_opening, binary_closing, label
-from helpers.Helpers import compute_kernel_convex, defect_mm_per_px_and_fixed, image_annotation_style
+from helpers.helpers import compute_kernel_convex, defect_mm_per_px_and_fixed, image_annotation_style
 from nibabel.affines import apply_affine
 from constants import DEFECT_FIXED_POINT
 

@@ -19,8 +19,8 @@ from deps import (
     vtkImageData, vtkJPEGWriter, vtkNIFTIImageReader, vtkPNGWriter,
     vtkPolyData, vtkSTLReader, vtkWindowToImageFilter,
 )
-from helpers.Helpers import get_nifti_present_labels
-from widgets.Recent_paths import RecentPaths, populate_recent_menu
+from helpers.helpers import get_nifti_present_labels
+from widgets.recent_paths import RecentPaths, populate_recent_menu
 
 if TYPE_CHECKING:
     from FetoMorph import MainWindow

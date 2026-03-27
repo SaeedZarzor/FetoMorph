@@ -17,7 +17,7 @@ import cv2
 import pyvista as pv
 from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QImage, QPainter, QColor, QPen
-from functions.Nifti2image import draw_new_scale_bar
+from functions.nifti_to_image import draw_new_scale_bar
 
 logger = logging.getLogger(__name__)
 

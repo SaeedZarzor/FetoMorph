@@ -10,7 +10,7 @@ import cv2
 import os
 import numpy as np
 from typing import Tuple, Union
-from helpers.Helpers import image_annotation_style, compute_kernel_convex, compactness_2D
+from helpers.helpers import image_annotation_style, compute_kernel_convex, compactness_2D
 from constants import BINARY_THRESHOLD_DEFAULT, DEFECT_FIXED_POINT
 import pandas as pd
 

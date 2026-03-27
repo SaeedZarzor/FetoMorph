@@ -24,7 +24,7 @@ import pyvista as pv
 from PySide6.QtWidgets import QMessageBox
 
 logger = logging.getLogger("fetomorph.vtk")
-from helpers.Helpers import compute_kernel_convex, contours_exclude, calc_scale, get_red_rect_offset, slice_at, make_scale_cube, compactness_3D, compactness_2D, image_annotation_style
+from helpers.helpers import compute_kernel_convex, contours_exclude, calc_scale, get_red_rect_offset, slice_at, make_scale_cube, compactness_3D, compactness_2D, image_annotation_style
 from helpers.check_mesh import check_brain
 from typing import Any, Literal, Sequence
 from constants import BINARY_THRESHOLD_VTK, RED_CHANNEL_MIN, GREEN_CHANNEL_MAX, DEFECT_FIXED_POINT

@@ -22,7 +22,7 @@ from PIL import Image
 from pathlib import Path
 from scipy.spatial.distance import directed_hausdorff, cdist
 import matplotlib.pyplot as plt
-from helpers.Helpers import image_annotation_style
+from helpers.helpers import image_annotation_style
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 

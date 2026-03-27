@@ -17,17 +17,17 @@ Typical workflow:
 from deps import *
 from constants import (DEFAULT_NIFTI_REGIONS, WINDOW_WIDTH, WINDOW_HEIGHT,
                        CONSOLE_MAX_BLOCKS)
-from functions.Nifti2image import nifti_slice_to_image
+from functions.nifti_to_image import nifti_slice_to_image
 from functions.hausdorff import convert_image
 from functions.nii_extractor import nifti_extractor
 from widgets.scaled_image_label import ScaledImageLabel
-from widgets.VTK_Viewer import VTKViewer
-from widgets.OptionsDialog import ProcessingOptionsDialog
-from widgets.Recent_paths import populate_recent_menu
-from widgets.RegionDock import RegionsDock
-from widgets.GestationalWeeksDialog import GestationalWeeksDialog
-from widgets.ImageBrowserDialog import ImageBrowserDialog
-from widgets.ZoomControls import ZoomControlsWidget
+from widgets.vtk_viewer import VTKViewer
+from widgets.options_dialog import ProcessingOptionsDialog
+from widgets.recent_paths import populate_recent_menu
+from widgets.region_dock import RegionsDock
+from widgets.gestational_weeks_dialog import GestationalWeeksDialog
+from widgets.image_browser_dialog import ImageBrowserDialog
+from widgets.zoom_controls import ZoomControlsWidget
 from ribbon import *
 from icons import set_icons
 from managers.metrics_store import MetricsStore

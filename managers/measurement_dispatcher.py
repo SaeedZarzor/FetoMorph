@@ -14,18 +14,18 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 from deps import QColor, QFileDialog, QMessageBox, QPixmap, pd
-from functions.Nifti2image import draw_new_scale_bar
+from functions.nifti_to_image import draw_new_scale_bar
 from functions.curvature import compute_curvature_profile, save_curvature_plot
 from functions.hausdorff import calculate_hausdorff_distance
-from functions.measurement_Batch import process_on_images_batch
-from functions.measurements_Nifti import *
+from functions.measurement_batch import process_on_images_batch
+from functions.measurements_nifti import *
 from functions.measurements_image import *
 from functions.measurements_stl import *
 from functions.measurements_vtk import *
 from functions.optimization import optimization
 from functions.pial_to_stl import pial_pair_to_combined_stl, pial_to_stl
-from helpers.Helpers import compactness_2D, compactness_3D
-from helpers.Read_Excel import conver_excel
+from helpers.helpers import compactness_2D, compactness_3D
+from helpers.read_excel import conver_excel
 from managers.metrics_store import MetricsStore
 from managers.view_manager import ViewManager
 from widgets.optimization_widgets import OptimizationOptionsDialog

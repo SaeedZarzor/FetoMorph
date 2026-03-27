@@ -15,7 +15,7 @@ from deps import (
     QWidget, Qt,
     vtkNIFTIImageReader,
 )
-from helpers.Helpers import add_scalebar
+from helpers.helpers import add_scalebar
 
 if TYPE_CHECKING:
     from FetoMorph import MainWindow
