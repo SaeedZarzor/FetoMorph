@@ -16,39 +16,25 @@ Typical workflow:
 
 from deps import *
 from constants import (DEFAULT_NIFTI_REGIONS, WINDOW_WIDTH, WINDOW_HEIGHT,
-                       DEFAULT_PIXEL_SIZE, DEFAULT_CNT_THRESHOLD,
-                       DEFAULT_KERNEL_SIZE, DEFAULT_SLICE_THICKNESS,
-                       DEFAULT_SCALEBAR_MM, CONSOLE_MAX_BLOCKS)
-from functions.measurements_image import *
-from functions.measurements_Nifti import *
-from functions.measurements_stl import *
-from functions.measurements_vtk import *
-from functions.measurement_Batch import *
-from functions.pial_to_stl import *
-from functions.Nifti2image import nifti_slice_to_image, draw_new_scale_bar
-from functions.curvature import compute_curvature_profile, save_curvature_plot
-from functions.hausdorff import calculate_hausdorff_distance, convert_image
+                       CONSOLE_MAX_BLOCKS)
+from functions.Nifti2image import nifti_slice_to_image
+from functions.hausdorff import convert_image
 from functions.nii_extractor import nifti_extractor
-from functions.optimization import optimization
-from helpers.Read_Excel import conver_excel
-from helpers.Helpers import get_nifti_present_labels, add_scalebar, get_max_slice_thickness,compactness_3D,compactness_2D
 from widgets.scaled_image_label import ScaledImageLabel
-from widgets.Contour_threshold import ContourThresholdDialog
-from widgets.Scalebar_set_scale import ScalebarSetScaleDialog
-from widgets.Unit_scale import UnitScaleDialog
 from widgets.VTK_Viewer import VTKViewer
-from widgets.Kernel_size import KernelSizeDialog
-from widgets.optimization_widgets import OptimizationOptionsDialog
-from widgets.Slice_thickness import SliceThicknessDialog
 from widgets.OptionsDialog import ProcessingOptionsDialog
-from widgets.Recent_paths import RecentPaths, populate_recent_menu
-from widgets.GeometryDialog import GeometryDialogWithAspect
-from widgets.RegionDock import *
+from widgets.Recent_paths import populate_recent_menu
+from widgets.RegionDock import RegionsDock
 from widgets.GestationalWeeksDialog import GestationalWeeksDialog
 from widgets.ImageBrowserDialog import ImageBrowserDialog
 from widgets.ZoomControls import ZoomControlsWidget
 from ribbon import *
 from icons import set_icons
+from managers.metrics_store import MetricsStore
+from managers.settings_manager import SettingsManager
+from managers.file_manager import FileManager
+from managers.view_manager import ViewManager
+from managers.measurement_dispatcher import MeasurementDispatcher
 
 import logging
 
@@ -204,6 +190,72 @@ class MainWindow(QMainWindow):
     menu actions for quick access.
     """
 
+    # ---- Property delegates to SettingsManager ----
+    # These let existing code keep using ``self.pixel_size`` etc. while
+    # the actual state lives in ``self.settings``.
+
+    def _settings_prop(attr):  # noqa: N805 – deliberate factory
+        """Create a read/write property that delegates to ``self.settings.<attr>``."""
+        return property(
+            lambda self: getattr(self.settings, attr),
+            lambda self, v: setattr(self.settings, attr, v),
+        )
+
+    units_length       = _settings_prop("units_length")
+    pixel_size_default = _settings_prop("pixel_size_default")
+    pixel_size         = _settings_prop("pixel_size")
+    image_scales       = _settings_prop("image_scales")
+    image_scale_from_scalebar = _settings_prop("image_scale_from_scalebar")
+    draw_hallmarks_on_image   = _settings_prop("draw_hallmarks_on_image")
+    cnt_threshold      = _settings_prop("cnt_threshold")
+    kernel_size        = _settings_prop("kernel_size")
+    slice_thickness    = _settings_prop("slice_thickness")
+    mm_per_px_bar      = _settings_prop("mm_per_px_bar")
+    bar_mm             = _settings_prop("bar_mm")
+    custom_label       = _settings_prop("custom_label")
+    physical_dim       = _settings_prop("physical_dim")
+    slice_direction    = _settings_prop("slice_direction")
+    _flat_axis         = _settings_prop("_flat_axis")
+
+    del _settings_prop  # remove helper from class namespace
+
+    # ---- Property delegates to FileManager ----
+    def _file_prop(attr):  # noqa: N805
+        return property(
+            lambda self: getattr(self.file_mgr, attr),
+            lambda self, v: setattr(self.file_mgr, attr, v),
+        )
+
+    last_dir               = _file_prop("last_dir")
+    current_output_dir     = _file_prop("current_output_dir")
+    current_output_3D_slices = _file_prop("current_output_3D_slices")
+    last_annotated_path    = _file_prop("last_annotated_path")
+    recent                 = _file_prop("recent")
+
+    del _file_prop
+
+    # ---- Property delegates to ViewManager ----
+    def _view_prop(attr):  # noqa: N805
+        return property(
+            lambda self: getattr(self.view, attr),
+            lambda self, v: setattr(self.view, attr, v),
+        )
+
+    _pm_index              = _view_prop("_pm_index")
+    _pms                   = _view_prop("_pms")
+    slice_nav_mode         = _view_prop("slice_nav_mode")
+    slice_nav_items        = _view_prop("slice_nav_items")
+    slice_nav_index_map    = _view_prop("slice_nav_index_map")
+    nifti_axis             = _view_prop("nifti_axis")
+    nifti_depth            = _view_prop("nifti_depth")
+    label_overlay_enabled  = _view_prop("label_overlay_enabled")
+    nifti_selected_regions_default = _view_prop("nifti_selected_regions_default")
+    nifti_selected_regions = _view_prop("nifti_selected_regions")
+    nifti_label_lut        = _view_prop("nifti_label_lut")
+    labels_available       = _view_prop("labels_available")
+
+    del _view_prop
+
     def __init__(self):
         """Initialise the main window, menus, toolbar, state variables, and console hooks."""
         super().__init__()
@@ -214,76 +266,32 @@ class MainWindow(QMainWindow):
         self.current_path: str | None = None
         self.current_kind: str | None = None  # "image" | "nifti" | "vtk_image" | "vtk_poly" | "vtk_surface" | "stl"
         self._active_view = "image"
-        self.last_dir = os.path.expanduser("~/Documents") if os.path.isdir(os.path.expanduser("~/Documents")) else os.path.expanduser("~")
 
         # Temp working directory for processing (no persistent saves here)
         self.temp_dir = tempfile.mkdtemp(prefix="FetoMorph_")
         print(f"[Temp] Working directory: {self.temp_dir}")
 
-        # Metrics store -- keyed by file path; each value is a list of row
-        # dicts with columns: File, Kind, Label, Annotation, Source,
-        # SliceDirection, PixelSize, PixelSizeUnits, KernelSize, LengthUnit,
-        # SliceThickness, Length(PA), Width(LR), Height(IS), Area, Volume,
-        # Perimeter, Perimeter_convex, SulciCount, MinDepth, MaxDepth,
-        # MeanDepth, LGI.  Multiple rows per path arise when measurement
-        # parameters change.
-        self.metrics: dict[str, list[dict]] = {}
-        self.current_output_dir = None
-        self.current_output_3D_slices = None
-        self.last_annotated_path: str | None = None
-        self.annotation_records: list[dict] = []          # flat list of all annotations
-        self.annotations_by_source: dict[str, list[dict]] = {}  # per-image grouping
-        self._roi_counter_by_source: dict[str, int] = {}  # for auto names if user leaves blank
-        self.annotation_labels_by_path: dict[str, str] = {}  # save the label for each RIO path
-        # NIfTI viewing state (axis: 0=sagittal, 1=coronal, 2=axial)
-        self.nifti_axis: int = 1         # default = coronal
-        self.nifti_depth: int = 0        # number of slices along current axis
-        self.nifti_selected_regions_default = DEFAULT_NIFTI_REGIONS
-        self.labels_available: set[int] = set()
-        self.nifti_label_lut: dict[int, QColor] = {}   # label -> color
-        self.nifti_selected_regions: set[int] = set()
+        # Managers
+        self.metrics_store = MetricsStore(self)
+        self.file_mgr = FileManager(self)
+        self.view = ViewManager(self)
+        self.view.nifti_selected_regions_default = DEFAULT_NIFTI_REGIONS
+        self.dispatcher = MeasurementDispatcher(self)
         self.Freesurfer_record: List[Dict[str, str]] = []
-        self.label_overlay_enabled: bool = True
-        
-        # Params for measurements
-        self.units_length = None          # e.g., "mm" (set by user prompt)
-        # Default physical size of one pixel in length-units (e.g. 0.01 mm/px).
-        # Acts as a fallback when the user has not yet calibrated the image.
-        self.pixel_size_default = DEFAULT_PIXEL_SIZE
-        self.pixel_size = self.pixel_size_default       # current working scale (units/pixel)
-        self.image_scales = {}                          # per-file scale: {path: float}
-        self.image_scale_from_scalebar = {}                       # {path: bool} whether the scale was set from scalebar (vs. manual entry)
-        self.draw_hallmarks_on_image = True
-        self.cnt_threshold = DEFAULT_CNT_THRESHOLD
-        self.kernel_size = DEFAULT_KERNEL_SIZE
-        self.slice_thickness = DEFAULT_SLICE_THICKNESS
-        self.mm_per_px_bar = 0
-        self.bar_mm = DEFAULT_SCALEBAR_MM
-        self.custom_label: str = None
-        self.physical_dim: tuple[int, int, int] = (0, 0, 0)
-        self.slice_direction: Literal["X", "Y", "Z"] = "Y"
-        self._flat_axis: int | None = None  # axis index if current mesh is planar (0=X,1=Y,2=Z)
-        
+
+        # Params for measurements (owned by SettingsManager)
+        self.settings = SettingsManager(self)
+
         # Params for optimization
         self.optimization_objectives: list[str] = []
         self.optimization_constraints: dict[str, float] = {}
         self.optimization_algorithms: str = "NSGA-III"
         self.optimization_n_gen: int = 200
         self.optimization_objective_directions: dict[str, str] = {}
-            
-        # Slice navigation mode/state
-        self.slice_nav_mode = None           # None | "nifti" | "png"
-        self.slice_nav_items = []            # list[str] when mode=="png" (PNG paths)
-        self.slice_nav_index_map = []        # list[int] original slice indices (optional label)
-        self._init_metrics_dock()
 
-        # Pixmap carousel for multi-image results (e.g. curvature, Hausdorff).
-        # _pms holds QPixmap objects; _pm_index tracks which one is displayed.
-        # Ctrl+M / Ctrl+Shift+M cycle through them.
-        self._pm_index = 0
-        self._pms = []
-        QShortcut(QKeySequence("Ctrl+M"), self).activated.connect(self._next_pm)
-        QShortcut(QKeySequence("Ctrl+Shift+M"), self).activated.connect(self._prev_pm)
+        # Pixmap carousel shortcuts
+        QShortcut(QKeySequence("Ctrl+M"), self).activated.connect(self.view.next_pm)
+        QShortcut(QKeySequence("Ctrl+Shift+M"), self).activated.connect(self.view.prev_pm)
         self._resume_sc = QShortcut(QKeySequence("Shift+Alt+E"), self)
         self._resume_sc.setContext(Qt.ApplicationShortcut)
 
@@ -309,27 +317,26 @@ class MainWindow(QMainWindow):
 
         self.container = QWidget(); self.vbox = QVBoxLayout(self.container); self.vbox.setContentsMargins(8,8,8,8); self.vbox.addWidget(self.splitter)
         self.setCentralWidget(self.container)
-        self._show_widget(self.image_label)
+        self.view.show_widget(self.image_label)
         
         # Menus — File (with Import submenu)
         file_menu = self.menuBar().addMenu("File")
         import_menu = file_menu.addMenu("Import")
 
-        self.act_imp_img = QAction("Image…", self); self.act_imp_img.setShortcut(QKeySequence.Open); self.act_imp_img.triggered.connect(self.import_image); import_menu.addAction(self.act_imp_img)
-        self.act_imp_vtk = QAction(".vtk file…", self); self.act_imp_vtk.setShortcut(QKeySequence("Ctrl+Shift+V")); self.act_imp_vtk.triggered.connect(self.import_vtk); import_menu.addAction(self.act_imp_vtk)
-        self.act_imp_stl = QAction(".stl file…", self); self.act_imp_stl.setShortcut(QKeySequence("Ctrl+Shift+L")); self.act_imp_stl.triggered.connect(self.import_stl); import_menu.addAction(self.act_imp_stl)
-        self.act_imp_nii = QAction("NIfTI…", self); self.act_imp_nii.setShortcut(QKeySequence("Ctrl+Shift+N")); self.act_imp_nii.triggered.connect(self.import_nifti); import_menu.addAction(self.act_imp_nii)
+        self.act_imp_img = QAction("Image…", self); self.act_imp_img.setShortcut(QKeySequence.Open); self.act_imp_img.triggered.connect(self.file_mgr.import_image); import_menu.addAction(self.act_imp_img)
+        self.act_imp_vtk = QAction(".vtk file…", self); self.act_imp_vtk.setShortcut(QKeySequence("Ctrl+Shift+V")); self.act_imp_vtk.triggered.connect(self.file_mgr.import_vtk); import_menu.addAction(self.act_imp_vtk)
+        self.act_imp_stl = QAction(".stl file…", self); self.act_imp_stl.setShortcut(QKeySequence("Ctrl+Shift+L")); self.act_imp_stl.triggered.connect(self.file_mgr.import_stl); import_menu.addAction(self.act_imp_stl)
+        self.act_imp_nii = QAction("NIfTI…", self); self.act_imp_nii.setShortcut(QKeySequence("Ctrl+Shift+N")); self.act_imp_nii.triggered.connect(self.file_mgr.import_nifti); import_menu.addAction(self.act_imp_nii)
         file_menu.addSeparator()
         
-        self.recent = RecentPaths("YourOrg", "YourApp")
         self.menu_recent = file_menu.addMenu("Recent")
-        populate_recent_menu(self.menu_recent, self.recent, self.open_path)
-        self.act_show_results = QAction("Show Results…", self); self.act_show_results.triggered.connect(self.show_results_dock); file_menu.addAction(self.act_show_results)
-        self.act_save = QAction("Save View As…", self); self.act_save.setShortcut(QKeySequence("Ctrl+V")); self.act_save.triggered.connect(self.save_view); file_menu.addAction(self.act_save)
-        self.act_save_data = QAction("Save Data As…", self); self.act_save_data.setShortcut(QKeySequence.SaveAs); self.act_save_data.triggered.connect(self.save_data_as); file_menu.addAction(self.act_save_data)
-        self.act_export_metrics = QAction("Export Metrics to Excel…", self); self.act_export_metrics.setShortcut(QKeySequence("Ctrl+E")); self.act_export_metrics.triggered.connect(self.export_metrics_excel); file_menu.addAction(self.act_export_metrics)
+        populate_recent_menu(self.menu_recent, self.recent, self.file_mgr.open_path)
+        self.act_show_results = QAction("Show Results…", self); self.act_show_results.triggered.connect(self.metrics_store.show_results_dock); file_menu.addAction(self.act_show_results)
+        self.act_save = QAction("Save View As…", self); self.act_save.setShortcut(QKeySequence("Ctrl+V")); self.act_save.triggered.connect(self.file_mgr.save_view); file_menu.addAction(self.act_save)
+        self.act_save_data = QAction("Save Data As…", self); self.act_save_data.setShortcut(QKeySequence.SaveAs); self.act_save_data.triggered.connect(self.file_mgr.save_data_as); file_menu.addAction(self.act_save_data)
+        self.act_export_metrics = QAction("Export Metrics to Excel…", self); self.act_export_metrics.setShortcut(QKeySequence("Ctrl+E")); self.act_export_metrics.triggered.connect(self.metrics_store.export_metrics_excel); file_menu.addAction(self.act_export_metrics)
         self.act_Reset= QAction("Reset view…", self); self.act_Reset.setShortcut(QKeySequence("Ctrl+R")); self.act_Reset.setToolTip("Return to original view and clear on-screen annotations"); self.act_Reset.triggered.connect(self.reset_view); file_menu.addAction(self.act_Reset)
-        self.act_close = QAction("Close", self); self.act_close.setShortcut(QKeySequence.Close); self.act_close.triggered.connect(self.close_current); file_menu.addAction(self.act_close)
+        self.act_close = QAction("Close", self); self.act_close.setShortcut(QKeySequence.Close); self.act_close.triggered.connect(self.file_mgr.close_current); file_menu.addAction(self.act_close)
         
         file_menu.addSeparator()
         self.act_quit = QAction("Quit", self); self.act_quit.setShortcut(QKeySequence.Quit); self.act_quit.setMenuRole(QAction.MenuRole.QuitRole); self.act_quit.triggered.connect(self.quit_app); file_menu.addAction(self.act_quit)
@@ -337,47 +344,47 @@ class MainWindow(QMainWindow):
         # Process menu (auto-enabled by file type)
         process_menu = self.menuBar().addMenu("Process"); self.process_menu = process_menu
         measures_menu = process_menu.addMenu("Measure")
-        self.act_meas_allmarks = QAction("All hallmarks", self); self.act_meas_allmarks.triggered.connect(self.on_measure_allmarks); measures_menu.addAction(self.act_meas_allmarks)
-        self.act_meas_volumes = QAction("Volumes", self); self.act_meas_volumes.triggered.connect(self.on_measure_volumes); measures_menu.addAction(self.act_meas_volumes)
-        self.act_meas_area = QAction("Area", self); self.act_meas_area.triggered.connect(self.on_measure_area); measures_menu.addAction(self.act_meas_area)
-        self.act_meas_perimeter = QAction("Perimeter", self); self.act_meas_perimeter.triggered.connect(self.on_measure_perimeter); measures_menu.addAction(self.act_meas_perimeter)
-        self.act_meas_stright = QAction("Straight", self); self.act_meas_stright.triggered.connect(self.on_measure_straight); measures_menu.addAction(self.act_meas_stright)
-        self.act_meas_sulci = QAction("Sulci Depth", self); self.act_meas_sulci.triggered.connect(self.on_measure_sulci_depth); measures_menu.addAction(self.act_meas_sulci)
+        self.act_meas_allmarks = QAction("All hallmarks", self); self.act_meas_allmarks.triggered.connect(self.dispatcher.on_measure_allmarks); measures_menu.addAction(self.act_meas_allmarks)
+        self.act_meas_volumes = QAction("Volumes", self); self.act_meas_volumes.triggered.connect(self.dispatcher.on_measure_volumes); measures_menu.addAction(self.act_meas_volumes)
+        self.act_meas_area = QAction("Area", self); self.act_meas_area.triggered.connect(self.dispatcher.on_measure_area); measures_menu.addAction(self.act_meas_area)
+        self.act_meas_perimeter = QAction("Perimeter", self); self.act_meas_perimeter.triggered.connect(self.dispatcher.on_measure_perimeter); measures_menu.addAction(self.act_meas_perimeter)
+        self.act_meas_stright = QAction("Straight", self); self.act_meas_stright.triggered.connect(self.dispatcher.on_measure_straight); measures_menu.addAction(self.act_meas_stright)
+        self.act_meas_sulci = QAction("Sulci Depth", self); self.act_meas_sulci.triggered.connect(self.dispatcher.on_measure_sulci_depth); measures_menu.addAction(self.act_meas_sulci)
         process_menu.addSeparator()
         
         analysis_menu = process_menu.addMenu("Analysis")
-        self.act_meas_lgi = QAction("LGI", self); self.act_meas_lgi.triggered.connect(self.on_measure_lgi); analysis_menu.addAction(self.act_meas_lgi); self.act_meas_lgi.setToolTip("Compute Local Gyrification Index")
-        self.act_meas_curvature = QAction("Curvature", self); self.act_meas_curvature.triggered.connect(self.on_measure_curvature); analysis_menu.addAction(self.act_meas_curvature)
-        self.act_meas_compactness = QAction("Compactness", self); self.act_meas_compactness.triggered.connect(self.on_measure_compactness); analysis_menu.addAction(self.act_meas_compactness); self.act_meas_compactness.setToolTip("Measure of how closely a shape approaches the most space-efficient form")
-        self.act_hausdorf = QAction("Hausdorff distance", self); self.act_hausdorf.triggered.connect(self.on_measure_hausdorff); analysis_menu.addAction(self.act_hausdorf)
+        self.act_meas_lgi = QAction("LGI", self); self.act_meas_lgi.triggered.connect(self.dispatcher.on_measure_lgi); analysis_menu.addAction(self.act_meas_lgi); self.act_meas_lgi.setToolTip("Compute Local Gyrification Index")
+        self.act_meas_curvature = QAction("Curvature", self); self.act_meas_curvature.triggered.connect(self.dispatcher.on_measure_curvature); analysis_menu.addAction(self.act_meas_curvature)
+        self.act_meas_compactness = QAction("Compactness", self); self.act_meas_compactness.triggered.connect(self.dispatcher.on_measure_compactness); analysis_menu.addAction(self.act_meas_compactness); self.act_meas_compactness.setToolTip("Measure of how closely a shape approaches the most space-efficient form")
+        self.act_hausdorf = QAction("Hausdorff distance", self); self.act_hausdorf.triggered.connect(self.dispatcher.on_measure_hausdorff); analysis_menu.addAction(self.act_hausdorf)
         process_menu.addSeparator()
         
-        self.act_img_batch = QAction("Process images batch", self); self.act_img_batch.triggered.connect(self.on_process_batch); process_menu.addAction(self.act_img_batch)
-        self.act_optimization = QAction("Optimization", self); self.act_optimization.triggered.connect(self.on_optimization); process_menu.addAction(self.act_optimization)
+        self.act_img_batch = QAction("Process images batch", self); self.act_img_batch.triggered.connect(self.dispatcher.on_process_batch); process_menu.addAction(self.act_img_batch)
+        self.act_optimization = QAction("Optimization", self); self.act_optimization.triggered.connect(self.dispatcher.on_optimization); process_menu.addAction(self.act_optimization)
         process_menu.addSeparator()
         self.act_nitfi2png = QAction("Nifti masking…", self); self.act_nitfi2png.triggered.connect(self.Nifti_to_png); process_menu.addAction(self.act_nitfi2png)
         self.act_niftiextractor = QAction("Nifti extract regions…", self); self.act_niftiextractor.triggered.connect(self.Nifti_extractor); process_menu.addAction(self.act_niftiextractor)
 
         # Setting menu
         Setting_menu = self.menuBar().addMenu("Adjustments"); self.Setting_menu = Setting_menu
-        self.act_set_custom_label = QAction("Custom label…", self); self.act_set_custom_label.triggered.connect(self.set_custom_label); Setting_menu.addAction(self.act_set_custom_label)
-        self.act_set_image_scale = QAction("Set Image Scale…", self); self.act_set_image_scale.triggered.connect(self.set_image_scale); Setting_menu.addAction(self.act_set_image_scale)
-        self.act_set_scale = QAction("Set Scale From Scalebar…", self);self.act_set_scale.triggered.connect(self.set_scale_from_scalebar);
+        self.act_set_custom_label = QAction("Custom label…", self); self.act_set_custom_label.triggered.connect(self.settings.set_custom_label); Setting_menu.addAction(self.act_set_custom_label)
+        self.act_set_image_scale = QAction("Set Image Scale…", self); self.act_set_image_scale.triggered.connect(self.settings.set_image_scale); Setting_menu.addAction(self.act_set_image_scale)
+        self.act_set_scale = QAction("Set Scale From Scalebar…", self);self.act_set_scale.triggered.connect(self.settings.set_scale_from_scalebar);
         Setting_menu.addAction(self.act_set_scale)
-        self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.set_kernel_dialog); Setting_menu.addAction(self.act_kernel_size)
-        self.act_slice_thickness = QAction("Set Slice Thickness…", self); self.act_slice_thickness.triggered.connect(self.set_slice_thickness_dialog); Setting_menu.addAction(self.act_slice_thickness); self.act_slice_thickness.setToolTip("Set the distance between slices")
-        self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
+        self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.settings.set_kernel_dialog); Setting_menu.addAction(self.act_kernel_size)
+        self.act_slice_thickness = QAction("Set Slice Thickness…", self); self.act_slice_thickness.triggered.connect(self.settings.set_slice_thickness_dialog); Setting_menu.addAction(self.act_slice_thickness); self.act_slice_thickness.setToolTip("Set the distance between slices")
+        self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.settings.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
         self.act_draw_hallmarks = QAction("Draw hallmarks values on image", self); self.act_draw_hallmarks.setCheckable(True); self.act_draw_hallmarks.setChecked(True); self.act_draw_hallmarks.toggled.connect(lambda checked: setattr(self, "draw_hallmarks_on_image", bool(checked))); Setting_menu.addAction(self.act_draw_hallmarks)
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Setting_menu.addAction(self.act_annotate_square)
         self.act_choose_regions = QAction("ROI selection…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
-        self.act_set_physical_dim = QAction("Mesh dimensions…", self);self.act_set_physical_dim.setToolTip("Define the physical dimensions of the VTK mesh."); self.act_set_physical_dim.triggered.connect(self.load_mesh_and_ask_geometry);Setting_menu.addAction(self.act_set_physical_dim)
+        self.act_set_physical_dim = QAction("Mesh dimensions…", self);self.act_set_physical_dim.setToolTip("Define the physical dimensions of the VTK mesh."); self.act_set_physical_dim.triggered.connect(self.settings.load_mesh_and_ask_geometry);Setting_menu.addAction(self.act_set_physical_dim)
     
         # Freesurfer menu
         Freesurfer_menu = self.menuBar().addMenu("Freesurfer Viewer")
         self.act_view_surfacses = QAction("Surfaces…", self); self.act_view_surfacses.setToolTip("Display the brain surface reconstructed with FreeSurfer (e.g. pial, white)."); self.act_view_surfacses.triggered.connect(self.view_freesurfer_surfaces); Freesurfer_menu.addAction(self.act_view_surfacses)
         self.act_view_morph_map = QAction("Morph maps…", self); self.act_view_morph_map.setToolTip("Display the morph map of a brain surface reconstructed with FreeSurfer (e.g. slucs, thickness, curve)."); self.act_view_morph_map.triggered.connect(self.view_morph_map); Freesurfer_menu.addAction(self.act_view_morph_map)
-        self.act_pial_to_stl = QAction("Pial → STL…", self); self.act_pial_to_stl.triggered.connect(self.on_pial_to_stl); Freesurfer_menu.addAction(self.act_pial_to_stl)
-        self.act_pial_merge = QAction("Combined STL…", self); self.act_pial_merge.triggered.connect(self.on_combined_stl); Freesurfer_menu.addAction(self.act_pial_merge)
+        self.act_pial_to_stl = QAction("Pial → STL…", self); self.act_pial_to_stl.triggered.connect(self.dispatcher.on_pial_to_stl); Freesurfer_menu.addAction(self.act_pial_to_stl)
+        self.act_pial_merge = QAction("Combined STL…", self); self.act_pial_merge.triggered.connect(self.dispatcher.on_combined_stl); Freesurfer_menu.addAction(self.act_pial_merge)
 
         # Examples menu
         Examples_menu = self.menuBar().addMenu("Examples")
@@ -422,7 +429,7 @@ class MainWindow(QMainWindow):
 
         # Console hooking
         self._orig_stdout = sys.stdout; self._orig_stderr = sys.stderr
-        self._qt_console = QtConsole(); self._qt_console.text.connect(self._append_progress)
+        self._qt_console = QtConsole(); self._qt_console.text.connect(self.view.append_progress)
         sys.stdout = TeeStream(self._orig_stdout, self._qt_console); sys.stderr = TeeStream(self._orig_stderr, self._qt_console)
         vtk_output = QtVTKOutputWindow(self._qt_console); vtkOutputWindow.SetInstance(vtk_output)
         print("Application started. Progress output will appear here.")
@@ -514,13 +521,13 @@ class MainWindow(QMainWindow):
 
         self.orient_combo = QComboBox()
         self.orient_combo.addItems(["Axial (Z)", "Coronal (Y)", "Sagittal (X)"])
-        self.orient_combo.currentTextChanged.connect(self._on_orientation_changed)
+        self.orient_combo.currentTextChanged.connect(self.view.on_orientation_changed)
         self.nav_tb.addWidget(self.orient_combo)
         
         self.view_mode = QComboBox()
         self.view_mode.addItems(["2D", "3D"])
         self.view_mode.setCurrentText("2D")
-        self.view_mode.currentTextChanged.connect(self._on_view_changed)
+        self.view_mode.currentTextChanged.connect(self.view.on_view_changed)
         self.nav_tb.addWidget(self.view_mode)
         
         self.nav_tb.addSeparator()
@@ -533,7 +540,7 @@ class MainWindow(QMainWindow):
         self.slice_slider.setMaximum(0)
         self.slice_slider.setSingleStep(1)
         self.slice_slider.setPageStep(5)
-        self.slice_slider.valueChanged.connect(self.on_slice_slider_changed)
+        self.slice_slider.valueChanged.connect(self.view.on_slice_slider_changed)
         self.nav_tb.addWidget(self.slice_slider)
 
         self.slice_value_label = QLabel("—")
@@ -545,196 +552,11 @@ class MainWindow(QMainWindow):
         self.zoom_controls.bind_image_label(self.image_label)
         self.nav_tb.addWidget(self.zoom_controls)
 
-        self._set_zoom_controls_visible(False)
+        self.view.set_zoom_controls_visible(False)
 
     @property
     def is_vtk(self) -> bool:
         return self.current_kind is not None and self.current_kind.startswith("vtk")
-
-    # ---------- Import handlers ----------
-    def import_image(self):
-        """Open a file dialog for image files and load the selected image."""
-        start = self.last_dir if os.path.isdir(self.last_dir) else ""
-        path, _ = QFileDialog.getOpenFileName(self, "Import Image", start, "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.gif)")
-        self.open_path(path)
-        if not path: return
-        self.last_dir = os.path.dirname(path) or self.last_dir
-        print(f"Importing image: {path}"); self.load_image(path)
-
-    def import_vtk(self):
-        """Open a file dialog for VTK legacy files and load the selected mesh/image."""
-        start = self.last_dir if os.path.isdir(self.last_dir) else ""
-        path, _ = QFileDialog.getOpenFileName(self, "Import .vtk", start, "VTK Legacy (*.vtk)")
-        self.open_path(path)
-        if not path: return
-        self.last_dir = os.path.dirname(path) or self.last_dir
-        print(f"Importing VTK: {path}"); self.load_vtk(path)
-
-    def import_stl(self):
-        """Open a file dialog for STL mesh files and load the selected surface."""
-        start = self.last_dir if os.path.isdir(self.last_dir) else ""
-        path, _ = QFileDialog.getOpenFileName(self, "Import .stl", start, "STL Mesh (*.stl)")
-        self.open_path(path)
-        if not path: return
-        self.last_dir = os.path.dirname(path) or self.last_dir
-        print(f"Importing STL: {path}"); self.load_stl(path)
-
-    def import_nifti(self):
-        """Open a file dialog for NIfTI volumes and load the selected scan."""
-        start = self.last_dir if os.path.isdir(self.last_dir) else ""
-        path, _ = QFileDialog.getOpenFileName(self, "Import NIfTI", start, "NIfTI (*.nii *.nii.gz)")
-        self.open_path(path)
-        if not path: return
-        self.last_dir = os.path.dirname(path) or self.last_dir
-        print(f"Importing NIfTI: {path}"); self.load_nifti(path)
-
-    # ---------- File menu ----------
-    def save_view(self):
-        """Ask path & save exactly what is displayed (no auto-saving during processing)."""
-        if self._active_view not in ("image", "vtk"):  # _active_view uses "vtk" for the view widget, not the kind tag
-            QMessageBox.information(self, "Save View", "Nothing to save."); return
-        base = "view"
-        if self.current_path: base = os.path.splitext(os.path.basename(self.current_path))[0] + "_view"
-        default_name = os.path.join(self.last_dir, base + ".png")
-        path, _ = QFileDialog.getSaveFileName(self, "Save View As…", default_name, "PNG Image (*.png);;JPEG Image (*.jpg *.jpeg)")
-        if not path: return
-        extn = os.path.splitext(path)[1].lower()
-        if extn not in (".png", ".jpg", ".jpeg"): path += ".png"; extn = ".png"
-        folder = os.path.dirname(path)
-        if folder and not os.path.exists(folder):
-            reply = QMessageBox.question(self, "Create Folder?", f"The folder\n\n{folder}\n\ndoes not exist. Create it?",
-                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-            if reply == QMessageBox.Yes:
-                try: os.makedirs(folder, exist_ok=True); print(f"Created folder: {folder}")
-                except Exception as ex: logger.error("Error creating folder: %s", ex); QMessageBox.critical(self, "Save Failed", f"Could not create folder:\n{ex}"); return
-            else: return
-        self.last_dir = folder or self.last_dir
-        try:
-            if self._active_view == "image":
-                pm = self.image_label.grab(); ok = pm.save(path)
-                if not ok: raise RuntimeError("Failed to save image widget snapshot.")
-            else:
-                rw = self.vtk_view.vtkWidget.GetRenderWindow(); rw.Render()
-                w2i = vtkWindowToImageFilter(); w2i.SetInput(rw); w2i.ReadFrontBufferOff(); w2i.Update()
-                writer = vtkJPEGWriter() if extn in (".jpg", ".jpeg") else vtkPNGWriter()
-                writer.SetFileName(path); writer.SetInputConnection(w2i.GetOutputPort()); writer.Write()
-            print(f"Saved view to: {path}")
-        except Exception as ex:
-            logger.error("Error saving view: %s", ex); QMessageBox.critical(self, "Save Failed", f"{type(ex).__name__}: {ex}")
-            
-    def save_data_as(self):
-        """Export the current results folder or the loaded data file.
-
-        When both a results folder and a loaded file exist, the user is
-        asked which to export.  Folders are copied via ``shutil.copytree``
-        and single files via ``shutil.copy2``.
-        """
-
-        src_folder = getattr(self, "current_output_dir", None)
-        has_folder = bool(src_folder and os.path.isdir(src_folder) and any(files for _,_,files in os.walk(src_folder)))
-
-        src_file = self.current_path if (self.current_path and os.path.isfile(self.current_path)) else None
-        has_file = bool(src_file)
-
-        if not has_folder and not has_file:
-            QMessageBox.information(self, "Export", "There is nothing to export yet.")
-            return
-
-        # Decide mode: ask if both exist
-        mode = None
-        if has_folder and has_file:
-            m = QMessageBox(self)
-            m.setWindowTitle("Export")
-            m.setText("What do you want to export?")
-            btn_folder = m.addButton("Results Folder", QMessageBox.AcceptRole)
-            btn_file   = m.addButton("Current File Only", QMessageBox.ActionRole)
-            m.addButton(QMessageBox.Cancel)
-            m.exec()
-            if m.clickedButton() is btn_folder:
-                mode = "folder"
-            elif m.clickedButton() is btn_file:
-                mode = "file"
-            else:
-                return
-        elif has_folder:
-            mode = "folder"
-        else:
-            mode = "file"
-
-        start_dir = self.last_dir if os.path.isdir(self.last_dir) else os.path.expanduser("~")
-
-        if mode == "folder":
-            # Pick destination directory and copy the whole results folder into it.
-            dest_root = QFileDialog.getExistingDirectory(self, "Choose Destination Folder", start_dir,
-                                                         QFileDialog.Option.ShowDirsOnly)
-            if not dest_root:
-                return
-            folder_name = os.path.basename(os.path.normpath(src_folder))
-            target = os.path.join(dest_root, folder_name)
-            try:
-                if os.path.exists(target):
-                    reply = QMessageBox.question(self, "Folder Exists",
-                                                 f"{target}\n\nalready exists. Merge into it?",
-                                                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-                    if reply != QMessageBox.Yes:
-                        return
-                    shutil.copytree(src_folder, target, dirs_exist_ok=True)
-                else:
-                    shutil.copytree(src_folder, target)
-            except Exception as ex:
-                QMessageBox.critical(self, "Export Failed", f"{type(ex).__name__}: {ex}")
-                return
-            print(f"[Export] Folder → {target}")
-            self.last_dir = dest_root
-            try:
-                from PySide6.QtGui import QDesktopServices
-                from PySide6.QtCore import QUrl
-                QDesktopServices.openUrl(QUrl.fromLocalFile(target))
-            except Exception:
-                pass
-            QMessageBox.information(self, "Export Complete", f"Exported folder to:\n{target}")
-            return
-
-        # mode == "file": save ONLY the current data file (e.g., STL), like before.
-        base = os.path.basename(src_file)
-        # Choose a sensible filter by kind
-        kind = (self.current_kind or "").lower()
-        if kind == "stl":
-            filt = "STL Mesh (*.stl)"; suggested = os.path.join(start_dir, base if base.lower().endswith(".stl") else os.path.splitext(base)[0] + ".stl")
-        elif kind == "nifti":
-            filt = "NIfTI (*.nii *.nii.gz)"; suggested = os.path.join(start_dir, base if (base.lower().endswith(".nii") or base.lower().endswith(".nii.gz")) else os.path.splitext(base)[0] + ".nii.gz")
-        elif kind == "image":
-            # just copy the source image; if you want re-encode, add logic here
-            filt = "Image (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"; suggested = os.path.join(start_dir, base)
-        else:
-            # generic data
-            filt = "All Files (*.*)"; suggested = os.path.join(start_dir, base)
-
-        path, _ = QFileDialog.getSaveFileName(self, "Save Current File As…", suggested, filt)
-        if not path:
-            return
-
-        # Ensure extension for some types
-        if kind == "stl" and not path.lower().endswith(".stl"):
-            path += ".stl"
-        if kind == "nifti" and not (path.lower().endswith(".nii") or path.lower().endswith(".nii.gz")):
-            path += ".nii.gz"
-
-        try:
-            shutil.copy2(src_file, path)
-            print(f"[Export] File → {path}")
-            self.last_dir = os.path.dirname(path)
-            QMessageBox.information(self, "Export Complete", f"Saved:\n{path}")
-        except Exception as ex:
-            QMessageBox.critical(self, "Export Failed", f"{type(ex).__name__}: {ex}")
-
-
-    def close_current(self):
-        """Close the currently loaded file and reset the display to a blank state."""
-        self.image_label.clearImage(); self._show_widget(self.image_label); self._set_slice_controls(False);self.act_choose_regions.setEnabled(False); self.act_annotate_square.setEnabled(False)
-        self.nav_tb.hide()
-        self._set_current(None, None); print("\n Closed current file and reset view.")
-        self.statusBar().showMessage("Closed current file and reset view.", 3000)
 
 
     def quit_app(self):
@@ -777,2551 +599,6 @@ class MainWindow(QMainWindow):
         print("Quitting application.")
         self.close()
         
-
-    def _ensure_metric_row(
-        self,
-        path: Optional[str],
-        kind: Optional[str],
-        label: Optional[str] = None,
-        annotation:Optional[str] = None,
-        source: Optional[str] = None,
-        direction: Optional[str] = None,
-        *,
-        pixel_size: Optional[float] = None,
-        pixel_size_units: Optional[str] = None,
-        kernel_size: Optional[float] = None,
-        unit:  Optional[str] = None,
-        slice_thickness: Optional[float] = None,
-        new_on_param_change: bool = False,
-    ):
-        """Ensure a metrics row exists for a given (path, annotation) pair.
-
-        Looks up ``self.metrics[path]`` and returns the most recent row
-        whose annotation matches.  If no row exists, or if
-        ``new_on_param_change`` is True and any parameter (pixel size,
-        kernel size, slice thickness, unit, direction) has changed since
-        the last row, a new row dict is appended.
-
-        Args:
-            path: File path key in the metrics store.
-            kind: File type string (e.g. "image", "nifti").
-            label: Custom label string.
-            annotation: Annotation/ROI label used to match rows.
-            source: Provenance string (e.g. source Excel path).
-            direction: Slice direction for VTK meshes.
-            pixel_size: Physical size per pixel.
-            pixel_size_units: Unit string for pixel size (e.g. "mm/pixel").
-            kernel_size: Morphological kernel size in pixels.
-            unit: Length unit string (e.g. "mm", "cm").
-            slice_thickness: Distance between slices.
-            new_on_param_change: If True, create a new row when any
-                parameter differs from the latest row.
-
-        Returns:
-            The existing or newly created row dict, or None if *path*
-            is falsy.
-        """
-        if not path:
-            return None
-
-        if not hasattr(self, "metrics") or self.metrics is None:
-            self.metrics = {}
-
-        rows = self.metrics.get(path)
-
-        # Backward compatibility: single dict -> list[dict]
-        if isinstance(rows, dict):
-            rows = [rows]
-            self.metrics[path] = rows
-        elif rows is None:
-            rows = []
-            self.metrics[path] = rows
-
-        # Most recent row for this label (if any)
-        last = next((r for r in reversed(rows) if r.get("Annotation") == annotation), None)
-        
-        def differs(key: str, new_val):
-            if new_val is None:
-                return False
-            if last is None:
-                return True  # creating first row and user provided a value
-            return new_val != last.get(key)
-
-        make_new = (
-            last is None
-            or (new_on_param_change and any([
-                differs("PixelSize",       pixel_size),
-                differs("PixelSizeUnits",  pixel_size_units),
-                differs("KernelSize",      kernel_size),
-                differs("SliceThickness",  slice_thickness),
-                differs("LengthUnit",      unit),
-                differs("SliceDirection",  direction),
-            ]))
-        )
-
-        if make_new:
-            row = {
-                "File": os.path.basename(path),
-                "Kind": kind,
-                "Label": label,
-                "Annotation": annotation,
-                "Source": source,
-                "SliceDirection": direction,
-                "Area": None,
-                "PixelSize":       pixel_size if pixel_size is not None else (last.get("PixelSize") if last else None),
-                "PixelSizeUnits":  pixel_size_units if pixel_size_units is not None else (last.get("PixelSizeUnits") if last else None),
-                "KernelSize":      kernel_size if kernel_size is not None else (last.get("KernelSize") if last else None),
-                "LengthUnit":      unit if unit is not None else (last.get("LengthUnit") if last else None),
-                "SliceThickness":  slice_thickness if slice_thickness is not None else (last.get("SliceThickness") if last else None),
-                "Length(PA)": None,
-                "Width(LR)": None,
-                "Height(IS)": None,
-                "Volume": None,
-                "Perimeter": None,
-                "Perimeter_convex": None,
-                "SulciCount": None,
-                "MinDepth": None,
-                "MaxDepth": None,
-                "MeanDepth": None,
-                "LGI": None,
-                "Compactness": None,
-            }
-            rows.append(row)
-            return row
-
-        # Otherwise: refresh/update the latest row and return it
-        last["File"] = os.path.basename(path)
-        
-        if kind is not None:
-            last["Kind"] = kind
-        if label is not None:
-            last["Label"] = label
-        if pixel_size is not None:
-            last["PixelSize"] = pixel_size
-        if pixel_size_units is not None:
-            last["PixelSizeUnits"] = pixel_size_units
-        if kernel_size is not None:
-            last["KernelSize"] = kernel_size
-        if unit is not None:
-            last["LengthUnit"] = unit
-        if slice_thickness is not None:
-            last["SliceThickness"] = slice_thickness
-        if direction is not None:
-            last["SliceDirection"] = direction
-        return last
-
-        
-    def _record_metric_for(self, path: str, annotation: Optional[str] = None, source: Optional[str] = None ,**vals):
-        """Record one or more metric values for a given file path.
-
-        Delegates to ``_ensure_metric_row`` for row creation, then maps
-        friendly keyword arguments (e.g. ``area``, ``volume``,
-        ``sulci_depth``) onto the canonical column names in the metrics
-        dict.
-
-        Args:
-            path: Filesystem path of the data file being measured.
-            annotation: Optional annotation/ROI label.
-            source: Optional provenance string (e.g. Excel source path).
-            **vals: Metric values keyed by friendly name. Special keys
-                include ``sulci_depth`` (list/tuple), ``dimensions``
-                (3-tuple), ``pixel_size``, ``pixel_size_units``,
-                ``kernel_size``, ``slice_thickness``, ``direction``,
-                and ``unit``.
-        """
-        if not path:
-            return
-        kind = getattr(self, "current_kind", None)
-        label = getattr(self, "custom_label", None)
-
-        # Extract the triple so _ensure_metric_row can decide whether to create a new row
-        psize = vals.pop("pixel_size", None)
-        punit = vals.pop("pixel_size_units", None)
-        ksize = vals.pop("kernel_size", None)
-        thicsl = vals.pop("slice_thickness", None) 
-        direction = vals.pop("direction", None)
-        uni = vals.pop("unit", None)
-        row = self._ensure_metric_row(
-            path, kind, label, annotation,
-            source, direction,
-            pixel_size=psize,
-            pixel_size_units=punit,
-            kernel_size=ksize,
-            unit = uni,
-            slice_thickness = thicsl,
-            new_on_param_change=True,
-        )
-
-        # Optional: accept 'sulci_depth' as a 3-tuple/list
-        sd = vals.pop("sulci_depth", None)
-        if sd is not None:
-            if isinstance(sd, (list, tuple)):
-                n = len(sd)
-                if n == 0:
-                    row["SulciCount"] = row["MinDepth"] = row["MaxDepth"] = row["MeanDepth"]= None
-                else:
-                    row["SulciCount"] = n
-                    row["MinDepth"] = min(sd)
-                    row["MaxDepth"] = max(sd)
-                    row["MeanDepth"] = sum(sd)/n
-                    
-            else:
-                raise ValueError("sulci_depth must be an iterable")
-
-        ld = vals.pop("dimensions", None)
-        if ld is not None:
-            if isinstance(ld, (list, tuple)):
-                nl = len(ld)
-                if nl == 3:
-                    row["Length(PA)"] = ld[0]
-                    row["Width(LR)"] = ld[1]
-                    row["Height(IS)"] = ld[2]
-                else:
-                    raise ValueError("one or more dimensions are missing")
-                    
-            else:
-                raise ValueError("dimensions must be an iterable")
-        # Map remaining friendly keys to columns
-        keymap = {
-            "area": "Area",
-            "volume": "Volume",
-            "perimeter": "Perimeter",
-            "perimeter_convex": "Perimeter_convex",
-            "lgi": "LGI", "compactness": "Compactness"
-            # triple handled above
-        }
-        for k, v in vals.items():
-            col = keymap.get(k.lower(), k)
-            row[col] = v
-            
-        self._metrics_rebuild_for_current()
-
-
-    def open_path(self, path: str):
-        """Route a file path to the appropriate loader based on its extension.
-
-        Also updates the recent-files list and menu.
-
-        Args:
-            path: Absolute path of the file to open.
-        """
-        ext = Path(path).suffix.lower()
-        try:
-            if ext in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff"}:
-                self.load_image(path)
-                print(f"Importing image: {path}")
-            elif ext == ".vtk":
-                self.load_vtk(path)
-                print(f"Importing VTK: {path}")
-            elif ext == ".nii" or ext == ".gz":
-                self.load_nifti(path)
-                print(f"Importing NIfTI: {path}")
-            elif ext == ".stl":
-                self.load_stl(path)
-                print(f"Importing STL: {path}")
-            else:
-                logger.warning("Unknown file type: %s", ext(path))
-           
-            self.last_dir = os.path.dirname(path) or self.last_dir
-        except Exception as e:
-            logger.error("Failed to open %s: %s", path, e)
-
-        # Update recent list + menu
-        self.recent.add(path)
-        populate_recent_menu(self.menu_recent, self.recent, self.open_path)
-    # --------- Loaders ----------
-    def load_image(self, path: str):
-        """Load and display a 2-D raster image.
-
-        Args:
-            path: Path to the image file (PNG, JPEG, BMP, TIFF, GIF).
-        """
-        pm = QPixmap(path)
-        if pm.isNull(): QMessageBox.critical(self, "Open Failed", "Could not read image file."); return
-        self.image_label.setImage(pm); self._show_widget(self.image_label); self._set_slice_controls(False)
-        if hasattr(self, "zoom_controls"):
-            self.zoom_controls.set_zoom_text("Fit")
-        print(f"Loaded image: {path}  size={pm.width()}x{pm.height()}"); self._set_current("image", path)
-        self.statusBar().showMessage(f"{self.current_path} image is loaded", 5000)
-
-    def load_nifti(self, path: str):
-        """Load a NIfTI volume and display it in 2-D or 3-D mode.
-
-        Args:
-            path: Path to the .nii or .nii.gz file.
-        """
-        self._set_current("nifti", path)
-        rdr = vtkNIFTIImageReader(); rdr.SetFileName(path); rdr.Update(); img = rdr.GetOutput()
-        print(f"NIfTI loaded:\n"
-              f"Extent={img.GetExtent()} \n Spacing={img.GetSpacing()} \n  Range={img.GetScalarRange()}")
-        self.labels_available = get_nifti_present_labels(path)
-        self.statusBar().showMessage(f"{self.current_path} nifti file is loaded", 5000)
-        if self.view_mode.currentText() == "3D":
-            self.slice_nav_mode = None
-            self.vtk_view.show_image2d(img);  self._show_widget(self.vtk_view); self._sync_slice_controls()
-        elif self.view_mode.currentText() == "2D":
-            self.slice_nav_mode = "nifti"
-            self._nifti_set_orientation(self.orient_combo.currentText());
-
-    def load_stl(self, path: str):
-        """Load an STL mesh and render it in the VTK viewer.
-
-        Args:
-            path: Path to the .stl file.
-        """
-        r = vtkSTLReader(); r.SetFileName(path); r.Update(); poly = r.GetOutput()
-        if not poly or poly.GetNumberOfPoints()==0:
-            QMessageBox.critical(self,"Open Failed","Empty or invalid .stl file."); return
-        self.vtk_view.show_polydata(poly); self._show_widget(self.vtk_view); self._set_slice_controls(False)
-        print(f"STL loaded:\n"
-              f"  File: {path}\n"
-              f"  Points: {poly.GetNumberOfPoints():,}\n"
-              f"  Polys:  {poly.GetNumberOfPolys():,}")
-        self._set_current("stl", path)
-
-    @staticmethod
-    def _polydata_is_planar(pd: vtkPolyData, tol: float = 1e-6) -> int | None:
-        """Return the flat axis index if all points lie in a single plane, else None.
-
-        Checks whether the coordinate range along any axis is below *tol*,
-        meaning the mesh is effectively 2-D.
-
-        Returns:
-            Axis index (0=X, 1=Y, 2=Z) if planar, or None if not.
-        """
-        n = pd.GetNumberOfPoints()
-        if n < 3:
-            return 2
-        bounds = pd.GetBounds()  # (xmin,xmax, ymin,ymax, zmin,zmax)
-        for i in range(3):
-            if bounds[2 * i + 1] - bounds[2 * i] < tol:
-                return i
-        return None
-
-    def load_vtk(self, path: str):
-        """Load a VTK legacy file (image data or polydata) and display it.
-
-        Falls back through DataSetReader, GenericDataObjectReader, and
-        DataSetSurfaceFilter to handle diverse VTK dataset types.
-
-        Args:
-            path: Path to the .vtk file.
-        """
-        dsr = vtkDataSetReader(); dsr.SetFileName(path); dsr.Update(); ds = dsr.GetOutput()
-        if ds is None:
-            gr = vtkGenericDataObjectReader(); gr.SetFileName(path); gr.Update(); ds = gr.GetOutput()
-        if isinstance(ds, vtkImageData):
-            self._flat_axis = None
-            self.vtk_view.show_image2d(ds); self._show_widget(self.vtk_view); self._sync_slice_controls()
-            print(f"Legacy VTK image loaded. Extent={ds.GetExtent()}  Range={ds.GetScalarRange()}"); self._set_current("vtk_image", path); return
-        if isinstance(ds, vtkPolyData) and ds.GetNumberOfPoints()>0:
-            flat_axis = self._polydata_is_planar(ds)
-            if flat_axis is not None:
-                self._flat_axis = flat_axis; self.slice_direction = ("X", "Y", "Z")[flat_axis]
-                self.vtk_view.show_polydata_2d(ds, flat_axis); self._show_widget(self.vtk_view); self._set_slice_controls(False)
-                print(f"Legacy VTK polydata (planar/2D). Points={ds.GetNumberOfPoints()}  Polys={ds.GetNumberOfPolys()}"); self._set_current("vtk_image", path); return
-            self._flat_axis = None
-            self.vtk_view.show_polydata(ds); self._show_widget(self.vtk_view); self._set_slice_controls(False)
-            print(f"Legacy VTK polydata loaded. Points={ds.GetNumberOfPoints()}  Polys={ds.GetNumberOfPolys()}"); self._set_current("vtk_poly", path); return
-        surf = vtkDataSetSurfaceFilter(); surf.SetInputData(ds); surf.Update(); poly = surf.GetOutput()
-        if poly and poly.GetNumberOfPoints()>0:
-            flat_axis = self._polydata_is_planar(poly)
-            if flat_axis is not None:
-                self._flat_axis = flat_axis; self.slice_direction = ("X", "Y", "Z")[flat_axis]
-                self.vtk_view.show_polydata_2d(poly, flat_axis); self._show_widget(self.vtk_view); self._set_slice_controls(False)
-                print(f"Legacy VTK dataset surfaced (planar/2D). Points={poly.GetNumberOfPoints()}  Polys={poly.GetNumberOfPolys()}"); self._set_current("vtk_image", path); return
-            self._flat_axis = None
-            self.vtk_view.show_polydata(poly); self._show_widget(self.vtk_view); self._set_slice_controls(False)
-            print(f"Legacy VTK dataset surfaced. Points={poly.GetNumberOfPoints()}  Polys={poly.GetNumberOfPolys()}"); self._set_current("vtk_surface", path); return
-        QMessageBox.critical(self, "Open Failed", "Unsupported or empty .vtk dataset (no points after surface extraction).")
-        
-        
-    def set_custom_label(self):
-        """Prompt the user to enter a custom label string for the current file."""
-        val, ok = QInputDialog.getText(
-        self,
-        "Set Custom Label",
-        "Enter label:",              # <--- mandatory label text
-        QLineEdit.Normal
-        )
-        self.custom_label = val if ok else None
-            
-    # -------------- Export to Excel -------------------------
-    def export_metrics_excel(self):
-        """Export all collected metrics to an Excel .xlsx file.
-
-        Flattens ``self.metrics`` (keyed by path, each value a list of
-        row dicts) into a pandas DataFrame and writes it via openpyxl.
-        Rows with no real metric values are excluded, and columns that
-        are entirely empty are dropped before writing.
-        """
-        if not getattr(self, "metrics", None):
-            QMessageBox.information(self, "Export Metrics", "No metrics to export yet.")
-            return
-
-        # Define columns in the order you want them in Excel
-        base_cols = ["File", "Kind"]
-        metric_cols = [
-            "Label", "Annotation", "Source", "SliceDirection",
-            "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit", "SliceThickness",
-            "Length(PA)", "Width(LR)", "Height(IS)",
-            "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciCount", "MinDepth", "MaxDepth","MeanDepth",
-            "LGI", "Compactness",
-        ]
-        
-        cols = base_cols + metric_cols
-
-        # Flatten: path -> [rows]  ==>  list of row dicts
-        flat_rows = []
-        for _path, rows in self.metrics.items():
-            if rows is None:
-                continue
-            if isinstance(rows, dict):
-                rows = [rows]  # backward-compat safeguard
-            for row in rows:
-                # Keep only known columns; missing keys become NaN in DataFrame
-                flat_rows.append({c: row.get(c) for c in cols})
-
-        if not flat_rows:
-            QMessageBox.information(self, "Export Metrics", "No metrics to export yet.")
-            return
-
-        # Build DataFrame (requires pandas)
-        try:
-            import pandas as pd
-        except Exception:
-            QMessageBox.critical(
-                self,
-                "Export Metrics",
-                "Pandas is required to export to Excel.\nInstall with:\n  pip install pandas openpyxl"
-            )
-            return
-
-        df = pd.DataFrame(flat_rows, columns=cols)
-
-        # Keep only rows that have at least one *real* metric filled in
-        # (exclude Label and PixelSizeUnits; keep PixelSize/KernelSize and numeric metrics)
-        real_metric_cols = [
-            "PixelSize", "KernelSize", "SliceThickness",
-            "Length(PA)", "Width(LR)", "Height(IS)",
-            "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciCount", "MinDepth", "MaxDepth","MeanDepth",
-            "LGI","Compactness",
-        ]
-        has_any_metric = df[real_metric_cols].notna().any(axis=1)
-        df = df.loc[has_any_metric].copy()
-
-        if df.empty:
-            QMessageBox.information(self, "Export Metrics", "No non-empty metrics to export yet.")
-            return
-
-        # Drop metric columns that are entirely empty across remaining rows
-        drop_all_null = [c for c in real_metric_cols + ["Label", "Annotation", "Source", "SliceDirection","LengthUnit","PixelSizeUnits"] if c in df.columns and df[c].isna().all()]
-        if drop_all_null:
-            df.drop(columns=drop_all_null, inplace=True)
-
-        # Choose file path
-        default_name = os.path.join(getattr(self, "last_dir", os.getcwd()), "metrics.xlsx")
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export Metrics to Excel…", default_name, "Excel Workbook (*.xlsx)"
-        )
-        if not path:
-            return
-        if not path.lower().endswith(".xlsx"):
-            path += ".xlsx"
-
-        folder = os.path.dirname(path)
-        if folder and not os.path.exists(folder):
-            reply = QMessageBox.question(
-                self, "Create Folder?",
-                f"The folder\n\n{folder}\n\ndoes not exist. Create it?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
-            )
-            if reply == QMessageBox.Yes:
-                try:
-                    os.makedirs(folder, exist_ok=True)
-                    print(f"Created folder: {folder}")
-                except Exception as ex:
-                    logger.error("Error creating folder: %s", ex)
-                    QMessageBox.critical(self, "Export Failed", f"Could not create folder:\n{ex}")
-                    return
-            else:
-                return
-
-        # Write Excel
-        try:
-            df.to_excel(path, index=False)  # uses openpyxl/xlsxwriter if installed
-            print(f"Exported metrics to: {path}")
-            if folder:
-                self.last_dir = folder
-        except Exception as ex:
-            logger.error("Error exporting metrics: %s", ex)
-            QMessageBox.critical(self, "Export Failed", f"{type(ex).__name__}: {ex}")
-
-    @staticmethod
-    def _depth_summary(vals, unit: str) -> str:
-        if not isinstance(vals, (list, tuple)) or len(vals) == 0:
-            return "No sulci are identified; the profile appears less lissencephalic."
-        return ", ".join(f"{float(v):.2f}" for v in vals[:3]) + f" {unit}"
-
-    # ---------- Planar VTK measurement via screenshot ----------
-    def _measure_planar_vtk(self, mode: str = "allmarks"):
-        """Measure a planar VTK mesh by capturing a 2D screenshot and running image measurements.
-
-        Args:
-            mode: One of "allmarks", "perimeter", "area", "lGI", "sulci_depth".
-        """
-        import pyvista as pv
-
-        t0 = time.time()
-        try:
-            # Ensure geometry
-            if all(v == 0 for v in self.physical_dim):
-                self.load_mesh_and_ask_geometry()
-
-            u = self.units_length
-
-            # Read mesh bounds
-            mesh = pv.read(str(self.current_path))
-            xmin, xmax, ymin, ymax, zmin, zmax = mesh.bounds
-            mesh_dim = (xmax - xmin, ymax - ymin, zmax - zmin)
-
-            # Determine camera vertical axis from _flat_axis
-            flat = self._flat_axis
-            if flat == 0:       # flat in X → camera looks along X, vertical=Y, horizontal=Z
-                vert_axis, horiz_axis = 1, 2
-            elif flat == 1:     # flat in Y → camera looks along Y, vertical=Z, horizontal=X
-                vert_axis, horiz_axis = 2, 0
-            else:               # flat in Z → camera looks along Z, vertical=Y, horizontal=X
-                vert_axis, horiz_axis = 1, 0
-
-            # Capture screenshot
-            bgr, world_per_px = self.vtk_view.capture_polydata2d_screenshot()
-
-            # Compute pixel_size in physical units
-            md = mesh_dim[vert_axis]
-            if md < 1e-12:
-                md = mesh_dim[horiz_axis]
-            scale_factor = self.physical_dim[vert_axis] / max(md, 1e-12)
-            pixel_size = world_per_px * scale_factor
-
-            # Save clean image to temp for measurement functions
-            uid = uuid.uuid4().hex[:8]
-            out_dir = os.path.join(self.temp_dir, f"planar_vtk_{mode}_{uid}")
-            os.makedirs(out_dir, exist_ok=True)
-            self.current_output_dir = out_dir
-            name = os.path.splitext(os.path.basename(self.current_path))[0]
-            img_path = os.path.join(out_dir, f"{name}.png")
-            cv2.imwrite(img_path, bgr)
-
-            # Call measurement function
-            if mode == "allmarks":
-                area, perimeter, perimeter_convex, lGI, compactness, depth, annotated_bgr = compute_image_allmarks(
-                    img_path, pixel_size=pixel_size, kernel_size=self.kernel_size,
-                    cnt_threshold=self.cnt_threshold, unit=u, add_scalebar=False,
-                    draw_hallmarks=self.draw_hallmarks_on_image)
-            elif mode == "perimeter":
-                perimeter, annotated_bgr = compute_image_perimeter(
-                    img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u, add_scalebar=False,
-                    draw_hallmarks=self.draw_hallmarks_on_image)
-            elif mode == "area":
-                area, annotated_bgr = compute_image_area(
-                    img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u, add_scalebar=False,
-                    draw_hallmarks=self.draw_hallmarks_on_image)
-            elif mode == "lGI":
-                lGI, perimeter, perimeter_convex, annotated_bgr = compute_image_lGI(
-                    img_path, pixel_size=pixel_size, kernel_size=self.kernel_size,
-                    cnt_threshold=self.cnt_threshold, unit=u, add_scalebar=False,
-                    draw_hallmarks=self.draw_hallmarks_on_image)
-            elif mode == "sulci_depth":
-                depth, annotated_bgr = compute_image_sulci_depth(
-                    img_path, pixel_size=pixel_size, cnt_threshold=self.cnt_threshold, unit=u, add_scalebar=False)
-            else:
-                print(f"[Planar VTK] Unknown mode: {mode}")
-                return
-
-            # Add scale bar to annotated image
-            image_width_phys = bgr.shape[1] * pixel_size
-            target = image_width_phys * 0.2
-            magnitude = 10 ** int(np.floor(np.log10(max(target, 1e-9))))
-            bar_phys = next((magnitude * n for n in [1, 2, 5, 10] if magnitude * n >= target * 0.7), magnitude * 10)
-            bar_px = int(round(bar_phys / pixel_size))
-            annotated_bgr = draw_new_scale_bar(annotated_bgr, bar_px, text=f"{bar_phys:g} {u}")
-
-            # Save annotated image to temp
-            annotated_path = os.path.join(out_dir, "annotated.png")
-            cv2.imwrite(annotated_path, annotated_bgr)
-
-            # Register scale so re-measurement works without prompting
-            self.image_scales[img_path] = pixel_size
-            self.pixel_size = pixel_size
-
-            # Display
-            pm = self._np_bgr_to_qpixmap(annotated_bgr)
-            self.image_label.setImage(pm)
-            self.image_label.remove_last_annotation()
-            self._show_widget(self.image_label)
-            self._active_view = "image"
-            self._set_current("image", img_path)
-
-            # Record metrics and print
-            if mode == "allmarks":
-                self._record_metric_for(img_path, unit=u, dimensions=self.physical_dim,
-                    kernel_size=self.kernel_size, area=area, perimeter=perimeter,
-                    perimeter_convex=perimeter_convex, lgi=lGI, compactness=comp, sulci_depth=depth)
-                print(f"[Planar VTK allmarks] area={area:.2f} {u}^2, perimeter={perimeter:.2f} {u}, GI={lGI:.2f}")
-                print(f"[Planar VTK allmarks] Maximum Sulci Depth = {self._depth_summary(depth, u)}")
-
-            elif mode == "perimeter":
-                self._record_metric_for(img_path, unit=u, dimensions=self.physical_dim, perimeter=perimeter)
-                print(f"[Planar VTK perimeter] perimeter={perimeter:.2f} {u}")
-            elif mode == "area":
-                self._record_metric_for(img_path, unit=u, dimensions=self.physical_dim, area=area)
-                print(f"[Planar VTK area] area={area:.2f} {u}^2")
-            elif mode == "lGI":
-                self._record_metric_for(img_path, unit=u, dimensions=self.physical_dim,
-                    kernel_size=self.kernel_size, lgi=lGI)
-                print(f"[Planar VTK lGI] GI={lGI:.2f}")
-            elif mode == "compactness":
-                self._record_metric_for(img_path, unit=u, dimensions=self.physical_dim,
-                    kernel_size=self.kernel_size, compactness=compactness)
-                print(f"[Planar VTK compactness] Compactness={compactness:.2f}")
-            elif mode == "sulci_depth":
-                self._record_metric_for(img_path, unit=u, dimensions=self.physical_dim, sulci_depth=depth)
-                if isinstance(depth, (list, tuple)) and len(depth) > 0:
-                    summary = ", ".join(f"{float(v):.2f}" for v in depth[:3])
-                    print(f"[Planar VTK sulci depth] Maximum depths = {self._depth_summary(depth, u)}")
-
-            dt = time.time() - t0
-            print(f"[Planar VTK {mode}] Done in {dt:.2f}s.")
-
-        except Exception as ex:
-            logger.error("Planar VTK {mode} failed: %s", ex)
-            QMessageBox.critical(self, f"Planar VTK {mode} Failed", f"{type(ex).__name__}: {ex}")
-
-    # ---------- Process menu (stubs) ----------
-    def on_measure_allmarks(self):
-        """Process → Measures → All hallmarks: compute and show annotated result WITHOUT saving."""
-        if not self.current_path or not os.path.isfile(self.current_path):
-            print("[All hallmarks] No image file is loaded."); return
-        if self.current_kind == "image":
-            try:
-                result = self._ensure_calibrated()
-                if result is None:
-                    return
-                u, px_size = result
-
-                print(f"[All hallmarks] Measuring: {self.current_path}")
-                print(f"[All hallmarks] Measuring with pixel size = {px_size} {u}/pixel")
-
-                image_path = self.current_path
-                if self.last_annotated_path is not None:
-                    image_path = self.last_annotated_path
-                    
-                area, perimeter, perimeter_convex, lGI, compactness, depth, annotated_bgr = compute_image_allmarks(
-                    image_path,
-                    pixel_size=px_size,
-                    kernel_size= self.kernel_size,
-                    cnt_threshold=self.cnt_threshold,
-                    unit = u,
-                    add_scalebar=not bool(self.image_scale_from_scalebar.get(self.current_path, False)),
-                    draw_hallmarks=self.draw_hallmarks_on_image,
-                )
-                
-                print(f"[All hallmarks] Results:")
-                print(f"Annotated area = {area:.2f} {u}^2.")
-                print(f"Annotated Perimeter = {perimeter:.2f} {u}.")
-                print(f"Convex Perimeter = {perimeter_convex:.2f} {u}.")
-                print(f"LGI (Convex Perimeter/ Perimeter) = {lGI:.2f} .")
-                print(f"Compactness = {compactness:.2f} .")
-                print(f"Maximum Sulci Depth = {self._depth_summary(depth, u)}")
-                
-                # Convert BGR ndarray → QPixmap and show (no disk write)
-                label_text = self.get_label_for_cropped_path(image_path)
-                if label_text:
-                    annotated_bgr = put_label_on_bgr(annotated_bgr, label_text, pos="topleft")
-
-
-                pm = self._np_bgr_to_qpixmap(annotated_bgr)
-                self.image_label.setImage(pm)
-                
-                self.image_label.remove_last_annotation()
-                self._show_widget(self.image_label)
-                # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
-                self._active_view = "image"
-                # Ensure File/Process actions stay enabled
-                self._set_current("image", self.current_path)
-                self._record_metric_for(
-                    self.current_path,
-                    annotation = label_text,
-                    pixel_size_units = f"{self.units_length}/pixel",
-                    unit = self.units_length,
-                    pixel_size = self.pixel_size,
-                    kernel_size = self.kernel_size,
-                    area=area,
-                    perimeter=perimeter,
-                    perimeter_convex = perimeter_convex,
-                    lgi=lGI,
-                    compactness=compactness,
-                    sulci_depth = depth)
-                    
-            except Exception as ex:
-                logger.error("All hallmarks failed: %s", ex)
-                QMessageBox.critical(self, "All hallmarks Failed", f"{type(ex).__name__}: {ex}")
-        elif self.current_kind == "nifti":
-            t0 = time.time()
-            try:
-                nif_path = self.current_path
-                print(f"[NIfTI] Computing area/perimeter from: {nif_path}")
-
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"nifti_allmarks_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                
-                labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
-                dims, area, volume, gi, depth, saved_pngs, valid_slices = compute_nifti_allmarks(self, file_path=nif_path,
-                out_dir=out_dir,valid_labels = labels, min_contour_area=self.cnt_threshold, kernel_size = self.kernel_size)
-            
-                if area is None:
-                    return
-
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(
-                    self.current_path,
-                    kernel_size = self.kernel_size,
-                    dimensions = dims,
-                    unit = "cm",
-                    volume=volume,
-                    area=area,
-                    lgi=gi,
-                    sulci_depth = depth)
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
-                
-                print(f"[NIfTI hallmarks] Results:")
-                print("The Brain Volume Result = {volume:.2f} cm^3.")
-                print(f"The Brain Outer Surface Area Result = {area:.2f} cm^2.")
-                print(f"The Brain GI (Convex surface area/ surfacearea) = {gi:.2f} .")
-                print(f"Maximum Sulci Depth = {self._depth_summary(depth, 'cm')}")
-
-                    
-                dt = time.time() - t0
-                print(f"[NIfTI hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-
-            except Exception as ex:
-                logger.error("NIfTI hallmarks failed: %s", ex)
-                QMessageBox.critical(self, "NIfTI All hallmarks Failed", f"{type(ex).__name__}: {ex}")
-            return
-            
-        elif self.current_kind == "stl":
-            t0 = time.time()
-            try:
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"STL_allmarks_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                source_label, dims, area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_stl_allmarks(self, file_path=self.current_path,     out_dir=out_dir, min_contour_area=self.cnt_threshold,
-                kernel_size = self.kernel_size, slice_thickness=self.slice_thickness)
-            
-                if source_label == "not_brain":
-                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
-                    return
-                elif area is None:
-                    return
-
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(
-                    self.current_path,
-                    source = source_label,
-                    kernel_size = self.kernel_size,
-                    dimensions = dims,
-                    unit = "cm",
-                    slice_thickness= self.slice_thickness,
-                    volume=volume,
-                    area=area,
-                    compactness=compactness,
-                    sulci_depth = depth,
-                    lgi=gi)
-
-                self.two_mode_view(out_dir, saved_pngs, valid_slices)
-
-                
-                print(f"[STL hallmarks] Results:")
-                print(f"STL mesh Volume Result = {volume:.2f} cm^3.")
-                print(f"STL mesh Outer Surface Area Result = {area:.2f} cm^2.")
-                print(f"STL mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
-                print(f"STL mesh Compactness = {compactness:.2f} .")
-                print(f"The Maximum Grooves Depth = {self._depth_summary(depth, 'cm')}")
-
-                dt = time.time() - t0
-                print(f"[STL hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-            
-            except Exception as ex:
-                logger.error("STL hallmarks failed: %s", ex)
-                QMessageBox.critical(self, "STL hallmarks Failed", f"{type(ex).__name__}: {ex}")
-                return
-        
-        elif self.is_vtk:
-            if self._flat_axis is not None:
-                self._measure_planar_vtk(mode="allmarks")
-                return
-            t0 = time.time()
-            try:
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"VTL_allmarks_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                
-                if all(v == 0 for v in self.physical_dim):
-                    self.load_mesh_and_ask_geometry()
-
-                u = self.units_length
-                area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_vtk_allmarks(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,
-                    kernel_size = self.kernel_size, Slice_direction = self.slice_direction, Physical_dim= self.physical_dim, unit = u, slice_thickness=self.slice_thickness)
-            
-                if area is None:
-                    return
-       
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(
-                    self.current_path,
-                    direction = self.slice_direction,
-                    kernel_size = self.kernel_size,
-                    unit = u,
-                    dimensions = self.physical_dim,
-                    slice_thickness= self.slice_thickness,
-                    volume=volume,
-                    area=area,
-                    compactness=compactness,
-                    sulci_depth = depth,
-                    lgi=gi)
-                    
-                
-                self.two_mode_view(out_dir, saved_pngs, valid_slices)
-                
-                print(f"[VTK hallmarks] Results:")
-                print(f"VTK mesh Volume Result = {volume:.2f} {u}^3.")
-                print(f"VTK mesh Outer Surface Area Result = {area:.2f} {u}^2.")
-                print(f"VTK mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
-                print(f"VTK mesh Compactness = {compactness:.2f} .")
-                print(f"VTK mesh Maximum Sulci Depth = {self._depth_summary(depth, u)}")
-
-                dt = time.time() - t0
-                print(f"[VTK hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-                      
-            except Exception as ex:
-                logger.error("VTK hallmarks failed: %s", ex)
-                QMessageBox.critical(self, "VTK hallmarks Failed", f"{type(ex).__name__}: {ex}")
-                return
-            
-        else:
-            print("[All hallmarks] Unsupported current kind.")
-
-
-    def on_measure_volumes(self):
-        """Compute volume for the currently loaded 3-D object (NIfTI, STL, or VTK)."""
-        if not self.current_path or not os.path.isfile(self.current_path):
-            print("[Volume] No file is loaded."); return
-        if self.current_kind == "image":
-            print("[Volume] Implemented for 3D objects only."); return
-        
-        elif self.current_kind == "nifti":
-            t0 = time.time()
-            try:
-                nif_path = self.current_path
-                print(f"[NIfTI] Computing Volume from: {nif_path}")
-
-
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"nifti_volume_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
-
-                dims, volume,saved_pngs, valid_slices = compute_nifti_volume(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels)
-            
-                if volume is None:
-                    return
-
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path, unit="cm", dimensions = dims, volume = volume,)
-
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-                
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
-                
-                print(f"[NIfTI Volume] The Brain Volume Result = {volume:.2f} cm^3. ")
-                dt = time.time() - t0
-                print(f"[NIfTI Volume] Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-
-            except Exception as ex:
-                logger.error("NIfTI volume failed: %s", ex)
-                QMessageBox.critical(self, "NIfTI Volume Failed", f"{type(ex).__name__}: {ex}")
-            return
-        elif self.current_kind == "stl":
-            t0 = time.time()
-            try:
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"STL_volume_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                source_label, dims,volume, saved_pngs, valid_slices = compute_stl_volume(self, file_path=self.current_path,     out_dir=out_dir, min_contour_area=self.cnt_threshold, slice_thickness=self.slice_thickness)
-            
-                if source_label == "not_brain":
-                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
-                    return
-                elif volume is None:
-                    return
-
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(
-                    self.current_path,
-                    source = source_label,
-                    slice_thickness= self.slice_thickness,
-                    dimensions = dims,
-                    unit = "cm",
-                    volume=volume)
-
-                self.two_mode_view(out_dir, saved_pngs, valid_slices)
-
-                
-                print(f"STL mesh Volume Result = {volume:.2f} cm^3.")
-
-
-                dt = time.time() - t0
-                print(f"[STL Volume] Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-
-            except Exception as ex:
-                logger.error("STL Volume failed: %s", ex)
-                QMessageBox.critical(self, "STL Volume Failed", f"{type(ex).__name__}: {ex}")
-            return
-            
-        elif self.is_vtk:
-            if self._flat_axis is not None:
-                print("[Volume] Not applicable for planar 2D meshes.")
-                QMessageBox.information(self, "Volume", "Volume measurement is not applicable for planar 2D meshes.")
-                return
-            t0 = time.time()
-            try:
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"VTL_volume_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                
-                if all(v == 0 for v in self.physical_dim):
-                    self.load_mesh_and_ask_geometry()
-
-                u = self.units_length
-                volume, saved_pngs, valid_slices = compute_vtk_volume(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,
-                    Slice_direction = self.slice_direction, Physical_dim= self.physical_dim, unit = u, slice_thickness=self.slice_thickness)
-            
-                if volume is None:
-                    return
-       
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(
-                    self.current_path,
-                    direction = self.slice_direction,
-                    unit = u,
-                    dimensions = self.physical_dim,
-                    slice_thickness= self.slice_thickness,
-                    volume=volume)
-                    
-                self.two_mode_view(out_dir, saved_pngs, valid_slices)
-                
-                print(f"VTK mesh Volume Result = {volume:.2f} {u}^3.")
-
-                dt = time.time() - t0
-                print(f"[VTK hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-                      
-            except Exception as ex:
-                logger.error("VTK Volume failed: %s", ex)
-                QMessageBox.critical(self, "VTK hallmarks Failed", f"{type(ex).__name__}: {ex}")
-                return
-                
-        else:
-            print("[Volume] Unsupported current kind. Open an image, NIfTI or STL file.")
-
-    def on_measure_perimeter(self):
-        """Process → Measures → Perimeter: compute and show annotated result WITHOUT saving."""
-        if not self.current_path or not os.path.isfile(self.current_path):
-            print("[Perimeter] No file is loaded."); return
-        
-        if self.current_kind == "image":
-            try:
-                result = self._ensure_calibrated()
-                if result is None:
-                    return
-                u, px_size = result
-
-                print(f"[Perimeter] Measuring: {self.current_path}")
-                print(f"[Perimeter] Measuring with pixel size = {px_size} {u}/pixel")
-
-                image_path = self.current_path
-                if self.last_annotated_path is not None:
-                    image_path = self.last_annotated_path
-                
-                perimeter, annotated_bgr = compute_image_perimeter(
-                    image_path,
-                    pixel_size = px_size,
-                    cnt_threshold = self.cnt_threshold,
-                    unit = u,
-                    add_scalebar=not bool(self.image_scale_from_scalebar.get(self.current_path, False)),
-                    draw_hallmarks=self.draw_hallmarks_on_image,
-                )
-                print(f"Annotated perimeter = {perimeter:.2f} {u}.")
-                
-                label_text = self.get_label_for_cropped_path(image_path)
-                if label_text:
-                    annotated_bgr = put_label_on_bgr(annotated_bgr, label_text, pos="topleft")
-                # Convert BGR ndarray → QPixmap and show (no disk write)
-                pm = self._np_bgr_to_qpixmap(annotated_bgr)
-                self.image_label.setImage(pm)
-                self.image_label.remove_last_annotation()
-                self._show_widget(self.image_label)
-                # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
-                self._active_view = "image"
-                # Ensure File/Process actions stay enabled
-                self._set_current("image", self.current_path)
-                self._record_metric_for(self.current_path,label=label_text,
-                    pixel_size_units = f"{self.units_length}/pixel",
-                    unit= self.units_length,
-                    pixel_size = self.pixel_size,
-                    perimeter=perimeter)
-
-            except Exception as ex:
-                logger.error("Perimeter failed: %s", ex)
-                QMessageBox.critical(self, "Perimeter Failed", f"{type(ex).__name__}: {ex}")
-            
-        elif self.is_vtk:
-            if self._flat_axis is not None:
-                self._measure_planar_vtk(mode="perimeter")
-                return
-            print("[Perimeter] Not supported for 3D VTK meshes.")
-            return
-
-        else:
-            return
-
-    def on_measure_compactness(self):
-        """Compute compactness for current image or 3D mesh, reusing saved metrics when available."""
-        if not self.current_path or not os.path.isfile(self.current_path):
-            print("[Compactness] No file is loaded."); return
-
-        # ── 3D mesh  ──────────────────────────────────────────────
-        if self.current_kind == "stl" or (self.is_vtk and self._flat_axis is None):
-            try:
-                t0 = time.time()
-                rows = self.metrics.get(self.current_path, []) if isinstance(getattr(self, "metrics", None), dict) else []
-                if isinstance(rows, dict):
-                    rows = [rows]
-                last_row = rows[-1] if rows else None
-
-                volume = float(last_row["Volume"]) if last_row and last_row.get("Volume") is not None else None
-                area = float(last_row["Area"]) if last_row and last_row.get("Area") is not None else None
-
-                if volume is not None and area is not None:
-                    comp = compactness_3D(volume, area)
-                else:
-                    uid = uuid.uuid4().hex[:8]
-                    out_dir = os.path.join(self.temp_dir, f"3D_compactness_{uid}")
-                    os.makedirs(out_dir, exist_ok=True)
-                    self.current_output_dir = out_dir
-
-                    if self.current_kind == "stl":
-                        source_label, dims, comp, saved_pngs, valid_slices = compute_compactness_stl(
-                            self, file_path=self.current_path, out_dir=out_dir,
-                            min_contour_area=self.cnt_threshold, slice_thickness=self.slice_thickness)
-                        if source_label == "not_brain":
-                            return
-
-                    elif self.is_vtk:
-                        if all(v == 0 for v in self.physical_dim):
-                            self.load_mesh_and_ask_geometry()
-                        comp, saved_pngs, valid_slices = compute_compactness_vtk(self, file_path=self.current_path,
-                        out_dir=out_dir, min_contour_area=self.cnt_threshold,
-                        Slice_direction=self.slice_direction, Physical_dim=self.physical_dim,
-                        unit=self.units_length, slice_thickness=self.slice_thickness)
-
-                    if comp is None:
-                        return
-
-                    self.two_mode_view(out_dir, saved_pngs, valid_slices)
-
-                self._record_metric_for(
-                    self.current_path,
-                    slice_thickness=self.slice_thickness, 
-                    compactness=comp)
-
-                base_name = os.path.basename(self.current_path)
-                print(f"[Compactness] for {base_name}: Compactness(3D)={comp:.4f}")
-                if comp > 1.0:
-                    QMessageBox.warning(self, "Compactness Warning",
-                        f"Compactness = {comp:.4f} exceeds 1.0.\n"
-                        "The expected range is [0, 1]. This may indicate incorrect "
-                        "physical dimensions or unit settings.")
-                dt = time.time() - t0
-                print(f"[Compactness] Done in {dt:.2f}s.")
-
-            except Exception as ex:
-                logger.error("Compactness failed: %s", ex)
-                QMessageBox.critical(self, "Compactness Failed", f"{type(ex).__name__}: {ex}")
-            return
-
-        # ── 2D image ───────────────────────────────────────────────────
-        if self.current_kind == "image":
-            try:
-                image_path = self.current_path
-                if self.last_annotated_path is not None:
-                    image_path = self.last_annotated_path
-                label_text = self.get_label_for_cropped_path(image_path)
-
-                rows = self.metrics.get(self.current_path, []) if isinstance(getattr(self, "metrics", None), dict) else []
-                if isinstance(rows, dict):
-                    rows = [rows]
-                last_row = next((r for r in reversed(rows) if r.get("Annotation") == label_text), None)
-
-                area = last_row.get("Area") if last_row else None
-                perimeter = last_row.get("Perimeter") if last_row else None
-
-                if area is not None and perimeter is not None:
-                    area = float(area)
-                    perimeter = float(perimeter)
-                    compactness_2D_value = compactness_2D(area, perimeter)
-                else:
-                    compactness_2D_value, annotated_bgr = compute_compactness_2D(image_path, cnt_threshold=self.cnt_threshold)
-                    pm = self._np_bgr_to_qpixmap(annotated_bgr)
-                    self.image_label.setImage(pm)
-                    self.image_label.remove_last_annotation()
-                    self._show_widget(self.image_label)
-                    self._active_view = "image"
-
-                base_name = os.path.basename(image_path)
-                print(f"[Compactness] for {base_name}: Compactness={compactness_2D_value:.4f}")
-                if compactness_2D_value > 1.0:
-                    QMessageBox.warning(self, "Compactness Warning",
-                        f"Compactness = {compactness_2D_value:.4f} exceeds 1.0.\n"
-                        "The expected range is [0, 1]. This may indicate an issue "
-                        "with contour detection or image quality.")
-                self._set_current("image", self.current_path)
-
-            except Exception as ex:
-                logger.error("Compactness failed: %s", ex)
-                QMessageBox.critical(self, "Compactness Failed", f"{type(ex).__name__}: {ex}")
-        else:
-            QMessageBox.information(self, "Compactness", "Compactness measurement is currently only supported for 2D images and 3D meshes. Please open an image or 3D mesh file.")      
-            print("[Compactness] Unsupported current kind. Open an image or 3D mesh file.")
-            return
-
-    def on_measure_straight(self):
-        """Process → Measures → Straight Line: interactive two-click distance measurement."""
-        if not self.current_path or not os.path.isfile(self.current_path):
-            print("[Straight line] No file is loaded."); return
-
-        if self.current_kind != "image":
-            print("[Straight line] Only supported for images."); return
-
-        # ensure calibration
-        result = self._ensure_calibrated()
-        if result is None:
-            return
-        u, px_size = result
-
-        print(f"[Straight line] Click two points on the image to measure distance.")
-
-        def _finish(pixel_length, p1, p2):
-            distance = pixel_length * px_size
-            self.image_label.add_line_annotation(
-                p1, p2, label=f"{distance:.2f} {u}", color=QColor(0, 200, 255))
-            self._record_metric_for(
-                self.current_path,
-                unit=u,
-                pixel_size=px_size,
-                straight_line_distance=distance)
-            print(f"[Straight line] Distance = {distance:.2f} {u}")
-
-        self.image_label.start_line_measure(_finish)
-    
-    def on_measure_lgi(self):
-        """Process → Measures → lGI: compute and show annotated result WITHOUT saving."""
-        
-        if not self.current_path or not os.path.isfile(self.current_path):
-            print("[lGI] No file is loaded."); return
-        if self.current_kind == "image":
-            try:
-                result = self._ensure_calibrated()
-                if result is None:
-                    return
-                u, px_size = result
-
-                print(f"[lGI] Measuring: {self.current_path}")
-
-                image_path = self.current_path
-                if self.last_annotated_path is not None:
-                    image_path = self.last_annotated_path
-                lGI,perimeter, perimeter_convex, annotated_bgr = compute_image_lGI(
-                    image_path,
-                    pixel_size = px_size,
-                    kernel_size= self.kernel_size,
-                    cnt_threshold=self.cnt_threshold,
-                    unit = u,
-                    add_scalebar=not bool(self.image_scale_from_scalebar.get(self.current_path, False)),
-                    draw_hallmarks=self.draw_hallmarks_on_image,
-                )
-                print(f"lGI = {lGI:.2f}.")
-
-                label_text = self.get_label_for_cropped_path(image_path)
-                if label_text:
-                    annotated_bgr = put_label_on_bgr(annotated_bgr, label_text, pos="topleft")
-                # Convert BGR ndarray → QPixmap and show (no disk write)
-                pm = self._np_bgr_to_qpixmap(annotated_bgr)
-                self.image_label.setImage(pm)
-                self.image_label.remove_last_annotation()
-                self._show_widget(self.image_label)
-                # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
-                self._active_view = "image"
-                # Ensure File/Process actions stay enabled
-                self._set_current("image", self.current_path)
-                self._record_metric_for(self.current_path, annotation=label_text,
-                    pixel_size_units = f"{self.units_length}/pixel",
-                    unit = self.units_length,
-                    pixel_size = self.pixel_size,
-                    kernel_size = self.kernel_size,
-                    perimeter=perimeter, perimeter_convex=perimeter_convex, lgi=lGI)
-
-            except Exception as ex:
-                logger.error("lGI failed: %s", ex)
-                QMessageBox.critical(self, "lGI Failed", f"{type(ex).__name__}: {ex}")
-                
-        elif self.current_kind == "nifti":
-            t0 = time.time()
-            reply = QMessageBox.question(self,"Enhance measurement",
-            "For accurate LGI computation, please provide the FreeSurfer pial surfaces for both hemispheres (lh.pial and rh.pial). Do you have these files?",   # message
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-            
-            if reply == QMessageBox.No:
-                QMessageBox.warning(self, "LGI Input Missing",
-                    "The LGI can be computed based on the NIfTI file alone, but the accuracy of the results is not guaranteed.")
-                
-                try:
-                    nif_path = self.current_path
-                    print(f"[NIfTI] Computing lGI from: {nif_path}")
-
-
-                    uid = uuid.uuid4().hex[:8]
-                    out_dir = os.path.join(self.temp_dir, f"nifti_lGI_{uid}")
-                    os.makedirs(out_dir, exist_ok=True)
-                    
-                    self.current_output_dir = out_dir
-                    labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
-
-                    lGI,saved_pngs, valid_slices = compute_nifti_lGI(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold, kernel_size= self.kernel_size,)
-                
-                    if lGI is None:
-                        return
-
-                    # record metrics (consistent with your global export; units in mm unless noted)
-                    self._record_metric_for(self.current_path, kernel_size= self.kernel_size ,lgi = lGI,)
-
-                    self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-                    
-                    mid = len(saved_pngs) // 2
-                    self.on_slice_slider_changed(mid)
-                    
-                    print(f"[NIfTI lGI] The Brain GI (Convex surface area/ surfacearea) = {lGI:.2f}. ")
-                    dt = time.time() - t0
-                    print(f"[NIfTI lGI] Done in {dt:.2f}s. Results live in TEMP.\n"
-                          f"Use File → Save Data As… to copy outputs you want to keep.")
-
-                except Exception as ex:
-                    logger.error("NIfTI lGI failed: %s", ex)
-                    QMessageBox.critical(self, "NIfTI lGI Failed", f"{type(ex).__name__}: {ex}")
-                return
-        
-            elif reply == QMessageBox.Yes:
-                nif_path = self.current_path
-#                QTimer.singleShot(0, self.on_combined_stl)
-                self.on_combined_stl()
-                stl_path = self.current_path if (self.current_path and os.path.isfile(self.current_path)) else None
-                
-                try:
-                    print(f"[NIfTI] Computing lGI from: {nif_path} based on rh & lh .pial")
-
-                    uid = uuid.uuid4().hex[:8]
-                    out_dir = os.path.join(self.temp_dir, f"STL_lGI_{uid}")
-                    os.makedirs(out_dir, exist_ok=True)
-                    
-                    self.current_output_dir = out_dir
-                    source_label, dims, gi, saved_pngs, valid_slices =compute_stl_lGI(
-                        self,
-                        file_path=stl_path,
-                        out_dir=out_dir,
-                        min_contour_area=self.cnt_threshold,
-                        kernel_size=self.kernel_size,
-                        slice_thickness=self.slice_thickness,
-                        build_solid=False,   # keep False for stability
-                    )
-                                        
-                
-                    if gi is None:
-                        return
-
-                    # record metrics (consistent with your global export; units in mm unless noted)
-                    self._record_metric_for(
-                        self.current_path,
-                        source = source_label,
-                        kernel_size = self.kernel_size,
-                        dimensions = dims,
-                        unit = "cm",
-                        slice_thickness= self.slice_thickness,
-                        lgi=gi)
-                        
-                    self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-                    
-                    mid = len(saved_pngs) // 2
-                    self.on_slice_slider_changed(mid)
-                    
-                    print(f"[STL lGI] The Brain GI (Convex surface area/ surfacearea) = {gi:.2f}. ")
-                    dt = time.time() - t0
-                    print(f"[STL lGI] Done in {dt:.2f}s. Results live in TEMP.\n"
-                          f"Use File → Save Data As… to copy outputs you want to keep.")
-
-                except Exception as ex:
-                    logger.error("STL lGI failed: %s", ex)
-                    QMessageBox.critical(self, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
-                return
-                
-        elif self.current_kind == "stl":
-        
-            t0 = time.time()
-            try:
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"STL_lgi_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                source_label, dims, gi, saved_pngs, valid_slices = compute_stl_lGI(self, file_path=self.current_path,     out_dir=out_dir, min_contour_area=self.cnt_threshold,
-                kernel_size = self.kernel_size, slice_thickness=self.slice_thickness)
-            
-                if source_label == "not_brain":
-                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
-                    return
-                elif gi is None:
-                    return
-
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(
-                    self.current_path,
-                    source = source_label,
-                    kernel_size = self.kernel_size,
-                    dimensions = dims,
-                    unit = "cm",
-                    slice_thickness= self.slice_thickness,
-                    lgi=gi)
-
-                self.two_mode_view(out_dir, saved_pngs, valid_slices)
-
-                
-                print(f"STL mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
-
-                dt = time.time() - t0
-                print(f"[STL lGI] Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-
-            except Exception as ex:
-                logger.error("STL lGI failed: %s", ex)
-                QMessageBox.critical(self, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
-            return
-            
-        elif self.is_vtk:
-            if self._flat_axis is not None:
-                self._measure_planar_vtk(mode="lGI")
-                return
-            t0 = time.time()
-            try:
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"VTL_lGI_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                
-                if all(v == 0 for v in self.physical_dim):
-                    self.load_mesh_and_ask_geometry()
-
-                u = self.units_length
-                gi, saved_pngs, valid_slices = compute_vtk_lGI(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,
-                    kernel_size = self.kernel_size, Slice_direction = self.slice_direction, Physical_dim= self.physical_dim, unit = u, slice_thickness=self.slice_thickness)
-            
-                if gi is None:
-                    return
-       
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(
-                    self.current_path,
-                    direction = self.slice_direction,
-                    kernel_size = self.kernel_size,
-                    unit = u,
-                    dimensions = self.physical_dim,
-                    slice_thickness= self.slice_thickness,
-                    lgi=gi)
-                    
-                
-                self.two_mode_view(out_dir, saved_pngs, valid_slices)
-                
-                print(f"VTK mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
-
-                dt = time.time() - t0
-                print(f"[VTK lGI] Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-                      
-            except Exception as ex:
-                logger.error("VTK lGI failed: %s", ex)
-                QMessageBox.critical(self, "VTK lGI Failed", f"{type(ex).__name__}: {ex}")
-                return
-            
-        else:
-            print("[lGI] Unsupported current kind.")
-
-            
-        
-    
-    def on_measure_sulci_depth(self):
-        """Process → Measures → All hallmarks for 2D images: compute and show annotated result WITHOUT saving."""
-        if not self.current_path or not os.path.isfile(self.current_path):
-            print("[Sulci depth] No file is loaded."); return
-            
-        if self.current_kind == "image":
-            try:
-                result = self._ensure_calibrated()
-                if result is None:
-                    return
-                u, px_size = result
-
-                print(f"[Sulci depth] Measuring: {self.current_path}")
-                print(f"[Sulci depth] Measuring with pixel size = {px_size} {u}/pixel")
-
-                image_path = self.current_path
-                if self.last_annotated_path is not None:
-                    image_path = self.last_annotated_path
-                depth, annotated_bgr = compute_image_sulci_depth(
-                    image_path,
-                    pixel_size = px_size,
-                    cnt_threshold=self.cnt_threshold,
-                    unit = u,
-                    add_scalebar=not bool(self.image_scale_from_scalebar.get(self.current_path, False))
-                )
-                print(f"[Sulci depth] Maximum Sulci Depth = {self._depth_summary(depth, u)}")
-                
-                label_text = self.get_label_for_cropped_path(image_path)
-                if label_text:
-                    annotated_bgr = put_label_on_bgr(annotated_bgr, label_text, pos="topleft")
-
-
-                # Convert BGR ndarray → QPixmap and show (no disk write)
-                pm = self._np_bgr_to_qpixmap(annotated_bgr)
-                self.image_label.setImage(pm)
-                self.image_label.remove_last_annotation()
-                self._show_widget(self.image_label)
-                # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
-                self._active_view = "image"
-                # Ensure File/Process actions stay enabled
-                self._set_current("image", self.current_path)
-                self._record_metric_for(self.current_path, annotation=label_text,
-                    pixel_size_units = f"{self.units_length}/pixel",
-                    unit = self.units_length,
-                    pixel_size = self.pixel_size,
-                    sulci_depth = depth)
-
-            except Exception as ex:
-                logger.error("Sulci depth failed: %s", ex)
-                QMessageBox.critical(self, "Sulci depth Failed", f"{type(ex).__name__}: {ex}")
-        
-        elif self.current_kind == "nifti":
-            t0 = time.time()
-            try:
-                nif_path = self.current_path
-                print(f"[NIfTI] Computing Volume from: {nif_path}")
-
-
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"nifti_volume_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
-
-                dims, depth,saved_pngs, valid_slices = compute_nifti_sulci_depth(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold)
-            
-                if depth is None:
-                    return
-
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path, unit ="mm", dimensions = dims, sulci_depth = depth,)
-
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-                
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
-                
-                print(f"[NIfTI Sulci depth] The max Brain Sulci depth across slices = {self._depth_summary(depth, 'mm')}")
-                dt = time.time() - t0
-                print(f"[NIfTI Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-
-            except Exception as ex:
-                logger.error("NIfTI Sulci depth failed: %s", ex)
-                QMessageBox.critical(self, "NIfTI Sulci depth Failed", f"{type(ex).__name__}: {ex}")
-            return
-            
-        elif self.current_kind == "stl":
-            t0 = time.time()
-            try:
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"STL_sulic_depth_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                source_label, dims, depth, saved_pngs, valid_slices = compute_stl_sulci_depth (self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold, slice_thickness=self.slice_thickness)
-            
-                if source_label == "not_brain":
-                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
-                    return
-                elif depth is None:
-                    return
-
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path, source = source_label, slice_thickness= self.slice_thickness,
-                    dimensions = dims,unit ="mm", sulci_depth = depth)
-
-                self.two_mode_view(out_dir, saved_pngs, valid_slices)
-                
-                print(f"[STL Sulci depth] The max Brain Sulci depth across slices = {self._depth_summary(depth, 'mm')}")
-                dt = time.time() - t0
-                print(f"[STL Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-
-            except Exception as ex:
-                logger.error("STL Sulci depth failed: %s", ex)
-                QMessageBox.critical(self, "STL Sulci depth Failed", f"{type(ex).__name__}: {ex}")
-            return
-            
-        elif self.is_vtk:
-            if self._flat_axis is not None:
-                self._measure_planar_vtk(mode="sulci_depth")
-                return
-            t0 = time.time()
-            try:
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"VTL_sulic_depth_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                
-                if all(v == 0 for v in self.physical_dim):
-                    self.load_mesh_and_ask_geometry()
-
-                u = self.units_length
-                depth, saved_pngs, valid_slices = compute_vtk_sulci_depth(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold,
-                Slice_direction = self.slice_direction, Physical_dim= self.physical_dim, unit = u, slice_thickness=self.slice_thickness)
-            
-                if depth is None:
-                    return
-       
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(
-                    self.current_path,
-                    direction = self.slice_direction,
-                    unit = u,
-                    dimensions = self.physical_dim,
-                    slice_thickness= self.slice_thickness,
-                    sulci_depth = depth)
-                                    
-                self.two_mode_view(out_dir, saved_pngs, valid_slices)
-                
-                if isinstance(depth, (list, tuple)) and len(depth) > 0:
-                    print("[VTK Sulci depth]")
-                    print(f"The Maximum Grooves Depth = {self._depth_summary(depth, u)}")
-
-                dt = time.time() - t0
-                print(f"[VTK Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-                      
-            except Exception as ex:
-                logger.error("VTK Sulci depth failed: %s", ex)
-                QMessageBox.critical(self, "VTK Sulci depth Failed", f"{type(ex).__name__}: {ex}")
-                return
-        else:
-            print("[Sulci depth] Unsupported current kind.")
-
-            
-            
-    def on_measure_area(self):
-        """Compute surface area for the current file and display the annotated result.
-
-        Dispatches to the correct back-end depending on ``current_kind``
-        (image, NIfTI, STL, or VTK).  Results are stored in the metrics
-        dict but not automatically saved to disk.
-        """
-        if self.current_kind == "image":
-            if not self.current_path or not os.path.isfile(self.current_path):
-                print("[Area] No image file is loaded."); return
-            try:
-                result = self._ensure_calibrated()
-                if result is None:
-                    return
-                u, px_size = result
-
-                print(f"[Area] Measuring: {self.current_path}")
-                print(f"[Area] Measuring with pixel size = {px_size} {u}/pixel")
-                
-                image_path = self.current_path
-                if self.last_annotated_path is not None:
-                    image_path = self.last_annotated_path
-                    
-                area, annotated_bgr = compute_image_area(
-                    image_path,
-                    pixel_size=px_size,
-                    cnt_threshold=self.cnt_threshold,
-                    unit = u,
-                    add_scalebar=not bool(self.image_scale_from_scalebar.get(self.current_path, False)),
-                    draw_hallmarks=self.draw_hallmarks_on_image,
-                )
-                
-                label_text = self.get_label_for_cropped_path(image_path)
-                if label_text:
-                    annotated_bgr = put_label_on_bgr(annotated_bgr, label_text, pos="topleft")
-                    
-                print(f"[Area] Result = {area:.2f} {u}^2.")
-                # Convert BGR ndarray → QPixmap and show (no disk write)
-                pm = self._np_bgr_to_qpixmap(annotated_bgr)
-                self.image_label.setImage(pm)
-                self.image_label.remove_last_annotation()
-                self._show_widget(self.image_label)
-                # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
-                self._active_view = "image"
-                # Ensure File/Process actions stay enabled
-                self._set_current("image", self.current_path)
-                self._record_metric_for(self.current_path, annotation=label_text ,
-                pixel_size_units = f"{self.units_length}/pixel",
-                pixel_size = self.pixel_size,
-                unit = self.units_length,
-                area=area)
-                
-            except Exception as ex:
-                print(f"[Area] ERROR : {ex}")
-                QMessageBox.critical(self, "[Area] Failed", f"{type(ex).__name__}: {ex}")
-        elif self.current_kind == "nifti":
-            t0 = time.time()
-            try:
-                nif_path = self.current_path
-                print(f"[NIfTI] Computing area/perimeter from: {nif_path}")
-
-
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"nifti_area_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                labels = self.nifti_selected_regions if self.nifti_selected_regions else self.labels_available
-
-                dims, area,saved_pngs, valid_slices = compute_nifti_area(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.cnt_threshold,)
-            
-                if area == 0:
-                    QMessageBox.information(self, "NIfTI Area", "All slices were filtered out (too small).")
-                    return
-
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(self.current_path, unit="cm", dimensions = dims, area = area,)
-
-                self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-                
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
-                
-                print(f"[NIfTI Area] The Brain Outer Surface Area Result = {area:.2f} cm^2. ")
-                dt = time.time() - t0
-                print(f"[NIfTI Area] Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-
-            except Exception as ex:
-                logger.error("NIfTI Area failed: %s", ex)
-                QMessageBox.critical(self, "[NIfTI Area] Failed", f"{type(ex).__name__}: {ex}")
-            return
-            
-        elif self.current_kind == "stl":
-            t0 = time.time()
-            try:
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"STL_area_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                source_label, dims,area, saved_pngs, valid_slices = compute_stl_area(self, file_path=self.current_path,     out_dir=out_dir, min_contour_area=self.cnt_threshold, slice_thickness=self.slice_thickness)
-            
-                if source_label == "not_brain":
-                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
-                    return
-                elif area is None:
-                    return
-
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(
-                    self.current_path,
-                    source = source_label,
-                    slice_thickness= self.slice_thickness,
-                    dimensions = dims,
-                    unit = "cm",
-                    area=area)
-  
-                self.two_mode_view(out_dir, saved_pngs, valid_slices)
-
-                
-                print(f"STL mesh Area Result = {area:.2f} cm^2.")
-
-
-                dt = time.time() - t0
-                print(f"[STL Area] Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-
-            except Exception as ex:
-                logger.error("STL Area failed: %s", ex)
-                QMessageBox.critical(self, "STL Area Failed", f"{type(ex).__name__}: {ex}")
-            return
-        
-        elif self.is_vtk:
-            if self._flat_axis is not None:
-                self._measure_planar_vtk(mode="area")
-                return
-            t0 = time.time()
-            try:
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"VTL_area_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                
-                self.current_output_dir = out_dir
-                
-                if all(v == 0 for v in self.physical_dim):
-                    self.load_mesh_and_ask_geometry()
-
-                u = self.units_length
-                area, saved_pngs, valid_slices = compute_vtk_area(self, file_path=self.current_path, out_dir=out_dir, min_contour_area=self.cnt_threshold, Slice_direction = self.slice_direction, Physical_dim= self.physical_dim, unit = u, slice_thickness=self.slice_thickness)
-            
-                if area is None:
-                    return
-       
-                # record metrics (consistent with your global export; units in mm unless noted)
-                self._record_metric_for(
-                    self.current_path,
-                    direction = self.slice_direction,
-                    unit = u,
-                    dimensions = self.physical_dim,
-                    slice_thickness= self.slice_thickness,
-                    area=area)
-                    
-                
-                self.two_mode_view(out_dir, saved_pngs, valid_slices)
-                
-                print(f"VTK mesh Outer Surface Area Result = {area:.2f} {u}^2.")
-
-
-                dt = time.time() - t0
-                print(f" Done in {dt:.2f}s. Results live in TEMP.\n"
-                      f"Use File → Save Data As… to copy outputs you want to keep.")
-                      
-            except Exception as ex:
-                logger.error("VTK Area failed: %s", ex)
-                QMessageBox.critical(self, "VTK area Failed", f"{type(ex).__name__}: {ex}")
-                return
-    
-        else:
-            print("[Area] Unsupported current kind. Open an image, NIfTI, or STL file.")
-
-    def on_process_batch(self):
-        """Run all-hallmarks measurement on every image in a user-selected folder.
-
-        The user is prompted to adjust the first image (annotation, scale,
-        etc.) and press Shift+Alt+E to continue.  All images in the batch
-        must share the same resolution and unit.
-        """
-        start = self.last_dir if os.path.isdir(self.last_dir) else ""
-        dir_path = QFileDialog.getExistingDirectory(
-            self, "Choose a folder", start,
-            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
-        )
-        if not dir_path:
-            return  # user canceled
-            
-        exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
-        imgs = sorted(
-        (e.path for e in os.scandir(dir_path) if e.is_file()
-         and os.path.splitext(e.name.lower())[1] in exts),
-        key=lambda p: os.path.basename(p).lower())
-        if not imgs:
-            QMessageBox.warning(self, "No images", "The selected folder contains no image files.")
-            return
-
-        self.last_dir = dir_path
-        first_pm = QPixmap(imgs[0])
-        if first_pm.isNull():
-            QMessageBox.critical(
-                self,
-                "Process Batch Failed",
-                f"Could not open image file:\n{imgs[0]}",
-            )
-            return
-        self.load_image(imgs[0])  # show first image
-
-        self._enter_adjustment_mode()
-        self.statusBar().showMessage("Adjust the image now and then press Shift+Alt+E to continue.")
-        print("[Process Batch] Adjust the image now and then press Shift+Alt+E to continue.")
-        self.wait_for_resume()   # blocks here; resumes after key press
-        self.statusBar().clearMessage()
-        self._exit_adjustment_mode()
-
-        btn = QMessageBox.warning(self,
-                    "Processing Images Batch",
-                    "All images must share the same resolution (pixel spacing) and measurement unit.",
-                    QMessageBox.Ok | QMessageBox.Cancel)
-        if btn == QMessageBox.Cancel:
-            return
-
-        result = self._ensure_calibrated()
-        if result is None:
-            return
-        u, px_size = result
-
-        uid = uuid.uuid4().hex[:8]
-        out_dir = os.path.join(self.temp_dir, f"Process_images_{uid}")
-        os.makedirs(out_dir, exist_ok=True)
-        self.current_output_dir = out_dir
-        print(f"[Process Batch] TEMP output: {out_dir}")
-
-        self.reset_view()
-
-
-        try:
-            # Fail fast: stop the whole batch if any image cannot be opened.
-            for img_path in imgs:
-                if cv2.imread(img_path) is None:
-                    raise ValueError(f"Could not read image: {img_path}")
-
-            valid_slices, saved_pngs = process_on_images_batch(dir_path, out_dir, pixel_size=px_size, kernel_size= self.kernel_size,
-                cnt_threshold = self.cnt_threshold, unit = u)
-                
-            self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-
-            mid = len(saved_pngs) // 2
-            self.on_slice_slider_changed(mid)
-            
-        except Exception as ex:
-            logger.error("Process Batch failed: %s", ex)
-            QMessageBox.critical(self, "Process Batch Failed", f"{type(ex).__name__}: {ex}")
-            return
-
-    def on_measure_curvature(self):
-        """Compute and display curvature profiles for the current 2-D image.
-
-        Generates two plot variants accessible via Ctrl+M / Ctrl+Shift+M.
-        """
-        if self.current_kind == "image":
-            try:
-                uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.temp_dir, f"Curvature_{uid}")
-                os.makedirs(out_dir, exist_ok=True)
-                self.current_output_dir = out_dir
-
-                mask, edge_pixels, curvature_values,curvature_values_s  = compute_curvature_profile(path =self.current_path, min_area = self.cnt_threshold)
-                
-                print(f"[Curvature] Analysis completed for image {self.current_path}")
-                # Convert BGR ndarray → QPixmap and show (no disk write)
-                
-                img = save_curvature_plot(out_dir,  mask, edge_pixels, curvature_values)
-                img2 = save_curvature_plot(out_dir,  mask, edge_pixels, curvature_values_s, filename="curvature_plot_2.png")
-                pm = self._np_bgr_to_qpixmap(img)
-                pm2 = self._np_bgr_to_qpixmap(img2)
-                
-                self._pms = [pm, pm2]
-                self._pm_index = 0
-                self.image_label.setImage(self._pms[self._pm_index])
-                self._show_widget(self.image_label)
-                # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
-                self.statusBar().showMessage("Use Ctrl+M to toggle between the two modes.")
-
-                self._active_view = "image"
-                # Ensure File/Process actions stay enabled
-                self._set_current("image", self.current_path)
-            except Exception as ex:
-                logger.error("Curvature failed: %s", ex)
-                QMessageBox.critical(self, "[Curvature] Failed", f"{type(ex).__name__}: {ex}")
-            return
-            
-        else:
-            print("[Curvature] Unsupported current kind. Open an image first.")
-
-    def on_optimization(self):
-        """Launch multi-objective optimisation from one or more Excel metric files.
-
-        Opens a dialog for objective/constraint configuration, runs the
-        selected algorithm (default NSGA-III), and displays Pareto-optimal
-        results.
-        """
-        # TEMP output
-        uid = uuid.uuid4().hex[:8]
-        out_dir = os.path.join(self.temp_dir, f"Optimization_{uid}")
-        os.makedirs(out_dir, exist_ok=True)
-        self.current_output_dir = out_dir
-        print(f"[Optimization] TEMP output: {out_dir}")
-        
-        start = self.last_dir if os.path.isdir(self.last_dir) else ""
-        while True:
-            excel_files, _ = QFileDialog.getOpenFileNames(self, "Select one or multiple Excel files",
-                    start, "Excel Files (*.xlsx *.xls)")
-            if not excel_files:
-                reply = QMessageBox.question(self, "No files selected",
-                            "No Excel files were selected. Would you like to try again?",
-                            QMessageBox.Retry | QMessageBox.Cancel)
-                if reply == QMessageBox.Cancel:
-                    return
-                continue
-            break
-
-        try:
-            df1, max_sulci, max_cell_density = conver_excel(excel_files)
-            if df1 is None or df1.empty:
-                QMessageBox.warning(self, "Optimization Failed", "No valid rows were found in the selected Excel files.")
-                return
-
-            self.last_dir = os.path.dirname(excel_files[0]) or self.last_dir
-            opt_dialog = OptimizationOptionsDialog(
-                self,
-                max_sulci_count=max_sulci,
-                max_cell_density=max_cell_density,
-            )
-            if not opt_dialog.exec():
-                return
-
-            self.optimization_objectives = opt_dialog.get_selected_objectives()
-            self.optimization_objective_directions = opt_dialog.get_objective_directions()
-            self.optimization_constraints = opt_dialog.get_constraints()
-            self.optimization_algorithms = opt_dialog.get_selected_algorithms()
-            self.optimization_n_gen = opt_dialog.get_termination_criterion()
-
-            if max_sulci is not None:
-                print(f"[Optimization] Max SulciCount in selected files: {max_sulci}")
-            if max_cell_density is not None:
-                print(f"[Optimization] Max CellDensity in selected files: {max_cell_density}")
-
-            results, saved_pngs, n_optimal_results = optimization(
-                self,
-                df1,
-                out_dir,
-                objectives=self.optimization_objectives,
-                objective_directions=self.optimization_objective_directions,
-                constraints=self.optimization_constraints,
-                algorithms=self.optimization_algorithms,
-                n_gen=self.optimization_n_gen,
-            )
-            if results is not None:
-                print(f"[Optimization] Optimization completed. Results saved in {out_dir}.")
-                print(f"[Optimization] Number of optimal results: {n_optimal_results}")
-                print("Use File → Save Data As… to copy outputs you want to keep.")
-
-                if isinstance(results, pd.DataFrame) and not results.empty:
-                    obj_to_column = {
-                        "perimeter_rate": "LGI",
-                        "cell_density": "CellDensity",
-                        "min_d_value": "MinDepth",
-                        "max_min_d_value": "MinDepth",
-                        "mean_d_value": "MeanDepth",
-                        "max_d_value": "MaxDepth",
-                        "area": "area", 
-                    }
-                    objective_cols = []
-                    for obj in self.optimization_objectives:
-                        col = obj_to_column.get(obj, obj)
-                        if col in results.columns and col not in objective_cols:
-                            objective_cols.append(col)
-                    cols_to_print = [c for c in ["File"] + objective_cols if c in results.columns]
-                    if cols_to_print:
-                        print("[Optimization] Pareto results:")
-                        print(results[cols_to_print].to_string(index=False))
-
-                    source_paths_seen = []
-                    for idx, r in results.reset_index(drop=True).iterrows():
-                        metric_path = r.get("__source_excel_path")
-                        if not metric_path or not isinstance(metric_path, str):
-                            metric_path = excel_files[0]
-                        source_paths_seen.append(metric_path)
-                        self._record_metric_for(
-                            path=metric_path,
-                            annotation=f"pareto_optimal_{idx + 1}",
-                            source=metric_path,
-                            area=r.get("area"),
-                            volume=r.get("Volume"),
-                            perimeter=r.get("Perimeter"),
-                            perimeter_convex=r.get("Perimeter_convex"),
-                            lgi=r.get("LGI"),
-                            File=r.get("File", f"index_{idx}"),
-                            SulciCount=r.get("SulciCount"),
-                            MinDepth=r.get("MinDepth"),
-                            MaxDepth=r.get("MaxDepth"),
-                            MeanDepth=r.get("MeanDepth"),
-                        )
-                    if source_paths_seen:
-                        self._set_current("Optimization", source_paths_seen[0])
-                    self._metrics_rebuild_for_current()
-            else:
-                print(f"[Optimization] Optimization failed or was canceled.")
-                QMessageBox.warning(self, "Optimization Failed", "Optimization failed or was canceled.")
-
-            if len(saved_pngs) == 1:
-                img_array = cv2.imread(saved_pngs[0])
-                pm = self._np_bgr_to_qpixmap(img_array)
-                self.image_label.setImage(pm)
-                self._show_widget(self.image_label)
-                self._active_view = "image"
-
-            elif saved_pngs and len(saved_pngs) > 1:
-                # Provide a default list of indices if valid_slices is not available
-                indices = list(range(len(saved_pngs)))
-                self.enable_png_navigation(saved_pngs, slice_indices=indices)
-                mid = len(saved_pngs) // 2
-                self.on_slice_slider_changed(mid)
-
-
-    
-        except Exception as ex:
-            logger.error("Optimization failed: %s", ex)
-            QMessageBox.critical(self, "Optimization Failed", f"{type(ex).__name__}: {ex}")
-            return  
-        
-    
-    def on_measure_hausdorff(self):
-        """Pick first & second images, convert and save in TEMP, compute hausdorff distance and show the plot."""
-
-        # TEMP output
-        uid = uuid.uuid4().hex[:8]
-        out_dir = os.path.join(self.temp_dir, f"Huasdorff_{uid}")
-        os.makedirs(out_dir, exist_ok=True)
-        self.current_output_dir = out_dir
-        print(f"[Hausdorff] TEMP output: {out_dir}")
-
-        if  self.current_kind !="image" and self.current_path is None:
-            start = self.last_dir if os.path.isdir(self.last_dir) else ""
-            First, _ = QFileDialog.getOpenFileName(self, "Select the first image",
-                                            start, "Images (*.png *.jpg *.jpeg )")
-            if not First:
-                return
-            
-            self.last_dir = os.path.dirname(First)
-            self.load_image(First)
-        else:
-            First = self.current_path
-        
-        self._enter_adjustment_mode()
-        self.statusBar().showMessage("Adjust now. Press Shift+Alt+E to continue.")
-        print("[Hausdorff] Adjust now. Press Shift+Alt+E to continue.")
-        self.wait_for_resume()   # blocks here; resumes after key press
-        self.statusBar().clearMessage()
-
-        result = self._ensure_calibrated()
-        if result is None:
-            return
-        u1, px_size_1 = result
-
-                        
-        annotated1, basename1, First_array, label1 =self.annotation_con(out_dir)
-        
-        self.reset_view()
-        
-        self.statusBar().showMessage("Select two images to measure the Hausdorff distance")
-        print("[Hausdorff] Select two images to measure the Hausdorff distance.")
-        
-        start = self.last_dir if os.path.isdir(self.last_dir) else ""
-        Second, _ =  QFileDialog.getOpenFileName(self, "Select the second image",
-                                            start, "Images (*.png *.jpg *.jpeg )")
-        if not Second:
-            return
-        self.load_image(Second)
-        self.last_dir = os.path.dirname(Second)
-
-        
-        self.statusBar().clearMessage()
-        
-        self._enter_adjustment_mode()
-        self.statusBar().showMessage("Adjust now. Press Shift+Alt+E to continue.")
-        print("[Hausdorff] Adjust now. Press Shift+Alt+E to continue.")
-        self.wait_for_resume()   # blocks here; resumes after key press
-        self.statusBar().clearMessage()
-        
-        result = self._ensure_calibrated()
-        if result is None:
-            return
-        u2, px_size_2 = result
-                
-        while True:
-            if u1 == u2:
-                break
-            else:
-                btn = QMessageBox.warning(
-                    self,
-                    "Hausdorff distance",
-                    "Both images must use the same measuring units to compute the Hausdorff distance.",
-                    QMessageBox.Ok | QMessageBox.Cancel)
-                if btn == QMessageBox.Cancel:
-                    return
-                ok = self.set_image_scale()
-                if ok:
-                    u2 = self.ensure_units()                 # return unit string or None on cancel
-                    px_size_2 = self.image_scales.get(self.current_path, self.pixel_size)
-                else:
-                    return
-            # Units mismatch: ask to retry or cancel
-
-
-        annotated2,basename2, Second_array, label2= self.annotation_con(out_dir)
-        self.reset_view()
-        self._exit_adjustment_mode()
-
-        mode = self.ask_align_direction()
-    
-        try:
-            img, hd, d12, d21 = calculate_hausdorff_distance(First_array, Second_array, First_label= label1 or "First", Second_label = label2 or "Second", align_mode= mode,  out_dir=out_dir )
-            
-            pm = self._np_bgr_to_qpixmap(img)
-            pm2 = self._np_bgr_to_qpixmap(annotated1)
-            pm3 = self._np_bgr_to_qpixmap(annotated2)
-                
-            self._pms = [pm, pm2, pm3]
-            self._pm_index = 0
-            self.image_label.setImage(self._pms[self._pm_index])
-            self._show_widget(self.image_label)
-            # Keep kind/path as the ORIGINAL file; Save View As… will ask user where to save what they see.
-                
-            self._active_view = "image"
-            # Ensure File/Process actions stay enabled
-            self._set_current("image", str(First))
-
-            print("[Hausdorff] The Hausdorff distance results:")
-            print(f"Between {basename1} and {basename2}: {d12} {u1}")
-            print(f"Between {basename2} and {basename1}: {d21} {u1}")
-            print(f"Maximum distance: {hd} {u1}")
-            
-            self.statusBar().showMessage("Use Ctrl+M and Ctrl+Shift+M to switch between images.")
-
-        except Exception as ex:
-            logger.error("Hausdorff failed: %s", ex)
-            QMessageBox.critical(self, "Hausdorff distance", f"{type(ex).__name__}: {ex}")
-    
-    def on_pial_to_stl(self):
-        """Pick one .pial, convert to STL in TEMP, show it, and keep source in metrics."""
-        pial = None
-        if not self.current_kind == "Freesurfer":
-            start = self.last_dir if os.path.isdir(self.last_dir) else ""
-            pial, _ = QFileDialog.getOpenFileName(self, "Select FreeSurfer Pial Surface",
-                                                  start, "FreeSurfer Surface (*.pial);;All Files (*)")
-            if not pial:
-                return
-        
-            self.last_dir = os.path.dirname(pial)
-            
-            
-        elif len(self.Freesurfer_record) == 2:
-            self.on_combined_stl()
-            return
-        
-        else:
-            pial = self.Freesurfer_record[0]['path']
-
-        # Save to TEMP (don’t pester user yet)
-        uid = uuid.uuid4().hex[:8]
-        base = os.path.splitext(os.path.basename(pial))[0]
-        temp_out = os.path.join(self.temp_dir, f"{base}_{uid}.stl")
-
-        try:
-            print(f"[Pial → STL] TEMP output: {temp_out}")
-            saved = pial_to_stl(pial, temp_out)
-
-            # Show it immediately
-            self.load_stl(saved)                   # shows in VTK window
-            print("[Pial → STL] Hint: use File → Save Data As… to keep a permanent copy.")
-        except Exception as ex:
-            logger.error("Pial → STL failed: %s", ex)
-            QMessageBox.critical(self, "Pial → STL", f"{type(ex).__name__}: {ex}")
-        
-    def on_combined_stl(self):
-        """Pick rh & lh .pial, convert + merge in TEMP, show combined STL, record provenance."""
-        rh, lh = None, None
-        if self.current_kind != "Freesurfer" or  len(self.Freesurfer_record) == 1:
-            start = self.last_dir if os.path.isdir(self.last_dir) else ""
-            while True:
-                files, _ = QFileDialog.getOpenFileNames(self, "Select Both hemisphere (e.g. rh.pial, lh.pial)",
-                                                    start, "FreeSurfer Surface (*.pial *.white *.inflated);;All Files (*)")
-                                                    
-                if not files:
-                    return
-                
-                self.last_dir = os.path.dirname(files[0])
-                if len(files) != 2:
-                    QMessageBox.warning(self, "Invalid selection", "You must select exactly two files.")
-                    continue
-                
-                names=set()
-                exts=set()
-                for f in files:
-                    base = os.path.basename(f)
-                    name, ext = os.path.splitext(base)
-                    names.add(name)
-                    exts.add(ext)
-                if not {"lh", "rh"}.issubset(names):
-                    QMessageBox.warning(
-                        self,
-                        "Invalid selection",
-                        "You must select both 'lh' and 'rh' files (e.g., lh.pial and rh.pial)."
-                    )
-                    continue
-                
-                if len(exts) != 1:
-                    reply = QMessageBox.question(
-                    self,
-                    "Confirm",
-                    "You have selected two different file types. Would you like to proceed?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No
-                   )
-                    if reply == QMessageBox.Yes:
-                        break
-                    else:
-                        continue
-                
-                rh = files[0]; lh = files[1]
-                break
-        else:
-            rh = self.Freesurfer_record[0]['path']
-            lh = self.Freesurfer_record[1]['path']
-
-        # TEMP output
-        uid = uuid.uuid4().hex[:8]
-        temp_out = os.path.join(self.temp_dir, f"brain_both_{uid}.stl")
-
-        try:
-            print(f"[Combined STL] TEMP output (combined): {temp_out}")
-            saved = pial_pair_to_combined_stl(rh, lh, temp_out)
-
-            # Show combined STL
-            self.load_stl(saved)
-            print("[Combined STL] Combined STL loaded. Use File → Save Data As… to export.")
-        except Exception as ex:
-            logger.error("Combined STL failed: %s", ex)
-            QMessageBox.critical(self, "Pial (rh & lh) → Combined STL", f"{type(ex).__name__}: {ex}")
-        
-    # -------------- Setting functions ---------------
-    def ensure_units(self) -> str:
-        """Ensure a length unit string is set, prompting once per session if needed.
-
-        Returns:
-            The active length unit string (e.g. "mm", "um", "cm").
-        """
-        if self.units_length:
-            return self.units_length
-
-        val, ok = QInputDialog.getText(
-            self,
-            "Set Units",
-            "Length unit (e.g., mm, µm, cm):",
-            text="mm",
-        )
-        if not ok or not val.strip():
-            QMessageBox.information(
-                    self,
-                    "No Input",
-                    "You closed the window without entering any values. Default unit will be used.")
-            val = "mm"
-        self.units_length = val.strip()
-
-    def _ensure_calibrated(self) -> tuple[str, float] | None:
-        """Ensure units and pixel scale are set for the current file.
-
-        Returns:
-            ``(unit, px_size)`` on success, or ``None`` if the user cancelled.
-        """
-        while True:
-            if not self.units_length or self.current_path not in self.image_scales:
-                ok = self.set_image_scale()
-                if ok:
-                    break
-                else:
-                    return None
-            else:
-                break
-        u = self.ensure_units()
-        px_size = self.image_scales.get(self.current_path, self.pixel_size)
-        return (u, px_size)
-        return self.units_length
-        
-
-    def load_mesh_and_ask_geometry(self) -> bool:
-        """Read the current VTK mesh bounds and prompt the user for physical dimensions.
-
-        Opens a dialog pre-filled with mesh extents, letting the user
-        adjust PA/LR/IS lengths with aspect-locked scaling, choose a
-        slice direction, and confirm the measurement unit.
-
-        Returns:
-            True if the user accepted the dialog, False otherwise.
-        """
-        if self.is_vtk:
-            mesh = pv.read(str(self.current_path))
-            xmin, xmax, ymin, ymax, zmin, zmax = mesh.bounds
-            if all(abs(v) > 1e-9 for v in self.physical_dim):
-                Lx0, Ly0, Lz0 = self.physical_dim
-            else:
-                Lx0, Ly0, Lz0 = xmax - xmin, ymax - ymin, zmax - zmin
-                Lx0, Ly0, Lz0 = max(Lx0, 1e-9), max(Ly0, 1e-9), max(Lz0, 1e-9)
-
-            
-            unit = self.ensure_units()
-            slice_dir = getattr(self, "slice_direction", "Y").upper()
-
-
-            dlg = GeometryDialogWithAspect(self, mesh=mesh, Lx=Lx0, Ly=Ly0, Lz=Lz0, unit=unit, slice_dir=slice_dir, flat_axis=self._flat_axis)
-            if dlg.exec() == QDialog.Accepted:
-                (Lx, Ly, Lz), slice_dir, unit = dlg.values()
-            else:
-                QMessageBox.information(
-                    self,
-                    "No Input",
-                    "You closed the window without entering any values. Default dimensions will be used.")
-                (Lx, Ly, Lz) = (Lx0, Ly0, Lz0)
-
-            self.physical_dim = (Lx, Ly, Lz)
-            self.slice_direction = slice_dir
-            self.units_length = unit
-
-            print(f"[Geometry] from mesh={self.current_path}")
-            print(f"  bounds=({xmin}, {xmax}, {ymin}, {ymax}, {zmin}, {zmax})")
-            print(f"  physical_dim={self.physical_dim} {unit}, slice_direction={slice_dir}")
-
-            return True
-        else:
-            return False
-
-    
-    def set_image_scale(self):
-        """Set the length unit and pixel size for the current file via a single dialog.
-
-        Updates ``units_length``, the per-file scale in ``image_scales``,
-        and the working ``pixel_size``.  If the user clicks the scalebar
-        button inside the dialog, falls through to ``set_scale_from_scalebar``.
-
-        Returns:
-            True if a valid scale was set, False if cancelled.
-        """
-        if not self.current_path:
-            QMessageBox.information(self, "Set Units & Pixel Size", "Load a file first.")
-            return
-
-        unit_init = self.units_length or "mm"
-        px_init = float(self.image_scales.get(self.current_path, getattr(self, "pixel_size", 0.03)))
-
-        dlg = UnitScaleDialog(self, unit_init=unit_init, pixel_size_init=px_init)
-                    
-        if dlg.exec() != QDialog.Accepted:
-            if dlg._get_status():
-                ok= self.set_scale_from_scalebar()
-                return ok
-            else:
-                return False
-        
-        unit, scale = dlg.values()
-        if not (scale > 0):
-            QMessageBox.warning(self, "Invalid value", "Pixel size must be a positive number.")
-            return False
-
-        # Store for this file and as current
-        self.units_length = unit
-        self.image_scales[self.current_path] = scale
-        self.image_scale_from_scalebar[self.current_path] = False
-        self.pixel_size = scale
-
-        # Track in metrics (so Excel shows context)
-#        label_text = self.get_label_for_cropped_path(self.last_annotated_path)
-#        self._record_metric_for (self.current_path, label= label_text  ,pixel_size= scale, pixel_size_units=f"{unit}/pixel" )
-#        row = self._ensure_metric_row(self.current_path, self.current_kind)
-#        row = self.metrics[self.current_path]
-#        row["PixelSize"] = scale
-#        row["PixelSizeUnits"] = f"{unit}/pixel"
-
-        print(f"[Units] {unit}  |  [Scale] {scale} {unit}/pixel  —  {os.path.basename(self.current_path)}")
-        return True
-            
-    def set_scale_from_scalebar(self):
-        """Activate line measurement on the image and compute scale from the drawn line.
-
-        The user draws a line over a known scalebar. On release, a dialog
-        asks for the real-world length and unit, and the pixel-to-unit
-        ratio is computed and stored.
-
-        Returns:
-            True if the scale was successfully set, False otherwise.
-        """
-        ok = False
-        if self.current_kind != "image":
-            QMessageBox.information(self, "Set Scale", "Open a 2D image to set scale from a scalebar.")
-            return
-        if self.image_label is None or self.image_label._pix.isNull():
-            QMessageBox.information(self, "Set Scale", "No image visible.")
-            return
-        print("[Scale] Draw a line over the scalebar: click, drag, release.")
-
-        loop = QEventLoop(self)
-        result = {"ok": False}
-
-        def _cb(px_len):
-            try:
-                result["ok"] = self._finish_scalebar_scale(px_len)  # returns True/False
-            finally:
-                loop.quit()
-
-        self.image_label.start_scalebar_measure(_cb)  # callback will be called later
-        loop.exec()                                   # wait here
-        return result["ok"]
-        
-        
-    def _finish_scalebar_scale(self, pixel_length: float) -> bool:
-        """Called after the user drags a line; asks for real length & unit, computes px/unit."""
-        try:
-            unit_init = self.units_length or "mm"
-            dlg = ScalebarSetScaleDialog(pixel_length, unit_init=unit_init, parent=self)
-            if dlg.exec() != QDialog.Accepted:
-                print("[Scale] Canceled.")
-                return False
-                
-            px_per_unit, unit = dlg.values()  # e.g., px/mm
-            if px_per_unit <= 0:
-                QMessageBox.warning(self, "Set Scale", "Scale must be positive.")
-                return False
-
-            # Store: keep px/mm per file; keep working mm/pixel for algorithms
-            self.units_length = unit
-            mm_per_px = 1.0 / px_per_unit
-            self.pixel_size = mm_per_px
-            self.image_scales[self.current_path] = float(mm_per_px)      # unit/px
-            self.image_scale_from_scalebar[self.current_path] = True
-
-
-            # Record in metrics
-            label_text = self.get_label_for_cropped_path(self.last_annotated_path)
-#            self._record_metric_for (self.current_path, label = label_text, pixel_size= mm_per_px, pixel_size_units=f"{unit}/pixel" )
-            print(f"[Scale] {pixel_length:.2f} px = {px_per_unit:.6f} px/{unit}  "
-                  f"→ pixel size {mm_per_px:.6f} {unit}/pixel for {os.path.basename(self.current_path)}")
-            return True
-                              
-        except Exception as ex:
-            logger.error("Set Scale failed: %s", ex)
-            QMessageBox.critical(self, "Set Scale Failed", f"{type(ex).__name__}: {ex}")
-            return False
-
-
-    def set_slice_thickness_dialog(self):
-        """Open a dialog to set the inter-slice distance for 3-D measurements."""
-        dlg = SliceThicknessDialog(self, initial=getattr(self, "slice_thickness", 0.5), maximum=(get_max_slice_thickness(self.current_path)/2))
-        if dlg.exec() == QDialog.Accepted:
-            k = dlg.value()
-            self.slice_thickness = k
-            print(f"[Slice Thickness] Set Slice Thickness to {k}")
-
-    def set_kernel_dialog(self):
-        """Open dialog to set morphology kernel size (odd)."""
-        dlg = KernelSizeDialog(self, initial=getattr(self, "kernel_size", 5))
-        if dlg.exec() == QDialog.Accepted:
-            k = dlg.value()
-            self.kernel_size = k
-            print(f"[Kernel] Set morphology kernel size to {k}")
-            # Record in metrics
-            if self.current_path:
-                label_text = self.get_label_for_cropped_path(self.last_annotated_path)
-#                self._record_metric_for(self.current_path, label = label_text, kernel_size= self.kernel_size)
-    
-    def set_cnt_threshold_dialog(self):
-        """Open a dialog to set the minimum contour area threshold in pixels."""
-        dlg = ContourThresholdDialog(self, initial=getattr(self, "cnt_threshold", 50.0))
-        if dlg.exec() == QDialog.Accepted:
-            val = dlg.value()
-            self.cnt_threshold = max(0.0, float(val))
-            print(f"[Threshold] Contour area threshold set to {self.cnt_threshold:.0f} px")
-
-
-
-    # ---------- Utils ----------
-    def _np_bgr_to_qpixmap(self, arr: np.ndarray) -> QPixmap:
-        """Convert a NumPy BGR/BGRA/grayscale image to a QPixmap.
-
-        Args:
-            arr: HxWx1, HxWx3 (BGR), or HxWx4 (BGRA) uint8 array.
-
-        Returns:
-            QPixmap ready for display in a Qt widget.
-
-        Raises:
-            ValueError: If *arr* is not uint8 or has unexpected shape.
-        """
-        if arr.dtype != np.uint8:
-            raise ValueError("Expected uint8 array.")
-        if arr.ndim != 3 or arr.shape[2] not in (1, 3, 4):
-            raise ValueError("Expected HxWx1/3/4 array.")
-
-        h, w = arr.shape[:2]
-
-        if arr.shape[2] == 3:  # BGR -> RGB
-            rgb = arr[:, :, ::-1].copy(order="C")
-            qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
-            qimg._np_ref = rgb
-        elif arr.shape[2] == 4:  # BGRA -> RGBA
-            rgba = arr[:, :, [2, 1, 0, 3]].copy(order="C")
-            qimg = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888)
-            qimg._np_ref = rgba
-        else:  # 1 channel grayscale
-            gray = arr[:, :, 0].copy(order="C")
-            qimg = QImage(gray.data, w, h, w, QImage.Format_Grayscale8)
-            qimg._np_ref = gray
-
-        return QPixmap.fromImage(qimg)
-    # ---------- Plumbing ----------
-    def _show_widget(self, w: QWidget):
-        """Show only *w* (image_label or vtk_view) and update ``_active_view``.
-
-        Args:
-            w: The widget to make visible.
-        """
-        self.image_label.setVisible(False); self.vtk_view.setVisible(False); w.setVisible(True)
-        self._active_view = "image" if w is self.image_label else "vtk"
-
-    def _append_progress(self, text: str):
-        """Append *text* to the progress console and scroll to the bottom.
-
-        Args:
-            text: Plain-text string to append.
-        """
-        self.progress_edit.moveCursor(QTextCursor.End); self.progress_edit.insertPlainText(text); self.progress_edit.moveCursor(QTextCursor.End)
-
     def closeEvent(self, e):
         """Restore original stdout/stderr and clean up the temp directory on exit.
 
@@ -3334,165 +611,16 @@ class MainWindow(QMainWindow):
         super().closeEvent(e)
         self.statusBar().clearMessage()
 
-    def _next_pm(self):
-        """Cycle forward through the pixmap carousel (Ctrl+M)."""
-        if not self._pms:
-            return
-        self._pm_index = (self._pm_index + 1) % len(self._pms)
-        self.image_label.setImage(self._pms[self._pm_index])
 
-    def _prev_pm(self):
-        """Cycle backward through the pixmap carousel (Ctrl+Shift+M)."""
-        if not self._pms:
-            return
-        self._pm_index = (self._pm_index - 1) % len(self._pms)
-        self.image_label.setImage(self._pms[self._pm_index])
-    # ----- slice controls -----
-    def _sync_slice_controls(self):
-        """Synchronise the slice slider range and value with the VTK viewer's current volume."""
-        if self.vtk_view.has_slice():
-            lo, hi = self.vtk_view.slice_range()
-            self.slice_slider.blockSignals(True); self.slice_slider.setMinimum(lo); self.slice_slider.setMaximum(hi)
-            self.slice_slider.setValue((lo+hi)//2); self.slice_slider.blockSignals(False)
-            self._set_slice_controls(True); self._update_slice_readout(); self.vtk_view.set_slice((lo+hi)//2)
-        else: self._set_slice_controls(False)
-    def _set_slice_controls(self, vis: bool):
-        """Toggle visibility of all slice-navigation widgets.
-
-        Args:
-            vis: True to show, False to hide.
-        """
-        for w in (self.slice_slider, self.orient_combo, self.slice_caption, self.slice_value_label): w.setVisible(vis)
-        if not vis: self.slice_value_label.setText("—")
-    def _update_slice_readout(self):
-        """Refresh the slice index / mm label next to the slider."""
-        if not self.slice_caption.isVisible(): self.slice_value_label.setText("—"); return
-        lo = self.slice_slider.minimum(); hi = self.slice_slider.maximum(); idx = self.slice_slider.value(); pos_mm = self.vtk_view.slice_index_to_mm(idx)
-        self.slice_value_label.setText(f"{idx}/{hi}  ({pos_mm:.2f} mm)")
         
-    def on_slice_slider_changed(self, v: int):
-        """Single handler for the slice slider (works for both NIfTI and PNG preview)."""
-        if self.slice_nav_mode == "png" and self.slice_nav_items:
-            idx = max(0, min(v, len(self.slice_nav_items) - 1))
-            path = self.slice_nav_items[idx]
-            # Show the PNG on the image pane
-            self._show_png_on_image_label(path)
-            self._update_slice_readout()
-        elif self.slice_nav_mode == "nifti":
-            self.show_nifti_slice(v)
-            self._active_view = "image"
-            self._update_slice_readout()
-        elif self.slice_nav_mode == "vtk":
-            self._active_view = "vtk"
-            idx = max(0, min(v, len(self.slice_nav_items) - 1))
-            self._show_widget(self.vtk_view)
-            self.vtk_view.delete_slice_section()
-            self.vtk_view.show_slice_with_mesh (mesh_file=self.current_path,
-                slice_file= self.current_output_3D_slices,
-                slice_value=idx)
-            self._update_slice_readout()
-        else:
-            self.vtk_view.set_slice(v)
-            self._update_slice_readout()
 
                 
-    def _on_orientation_changed(self, text: str):
-        """Handle a change in the orientation combo box (Axial/Coronal/Sagittal).
-
-        Args:
-            text: The newly selected orientation label.
-        """
-        self.vtk_view.set_orientation(text)
-        if self.vtk_view.has_slice():
-            lo, hi = self.vtk_view.slice_range()
-            self.slice_slider.blockSignals(True); self.slice_slider.setMinimum(lo); self.slice_slider.setMaximum(hi)
-            self.slice_slider.setValue(max(lo, min(hi, self.slice_slider.value())))
-            self.slice_slider.blockSignals(False)
-            self._update_slice_readout()
-        if self.slice_nav_mode == "nifti":
-            self._nifti_set_orientation(text);
-            self._update_slice_readout()
                     
-    def _on_view_changed(self, text: str, path: Optional[str] = None):
-        """Switch between 2-D and 3-D display modes for NIfTI or mesh data.
-
-        Args:
-            text: "2D" or "3D".
-            path: Optional override for the file path to load.
-        """
-        if self.current_kind == "nifti":
-            if text == "3D":
-                self.slice_nav_mode = None
-                rdr = vtkNIFTIImageReader(); rdr.SetFileName(self.current_path if path is None else path); rdr.Update(); img = rdr.GetOutput()
-                self.vtk_view.show_image2d(img);  self._show_widget(self.vtk_view); self._sync_slice_controls()
-                self._on_orientation_changed(self.orient_combo.currentText())
-            elif text == "2D":
-                self.slice_nav_mode = "nifti"
-                self._nifti_set_orientation(self.orient_combo.currentText(), path);
-        elif self.is_vtk or self.current_kind == "stl":
-            if text == "3D":
-                self._show_widget(self.vtk_view)
-                self.slice_nav_mode = "vtk"
-                self.vtk_view.show_slice_with_mesh(mesh_file=self.current_path, slice_file= self.current_output_3D_slices, slice_value= self.slice_slider.value())
-            elif text == "2D":
-                self.vtk_view.delete_slice_section()
-                self._show_widget(self.image_label)
-                self.slice_nav_mode = "png"
-                self.on_slice_slider_changed(self.slice_slider.value())
                 
             
             
-    def _show_png_on_image_label(self, png_path: str):
-        """Load a PNG file and display it on the image label widget.
-
-        Args:
-            png_path: Path to the PNG preview image.
-        """
-        from PySide6.QtGui import QPixmap
-        pm = QPixmap(png_path)
-        if pm.isNull():
-            print(f"Could not load preview image: {png_path}")
-            return
-        self.image_label.setImage(pm)
-        self._show_widget(self.image_label)   # show the image pane, keep kind='nifti'
-        self._active_view = "image"
 
 
-    def _nifti_set_orientation(self, view: str, path: Optional[str] = None):
-        """Set the NIfTI slice axis from a label and reconfigure the slider.
-
-        Args:
-            view: Orientation label, one of "Sagittal (X)", "Coronal (Y)",
-                or "Axial (Z)".
-            path: Optional override for the NIfTI file path.
-                Defaults to ``self.current_path``.
-        """
-        import nibabel as nib
-
-        img = nib.load(self.current_path if path is None else path)
-            # Use dataobj (lazy) but rounding requires actual values; this will page from disk
-        vol = img.get_fdata(dtype=float)
-        if vol is None:
-            print("[NIfTI] No data loaded."); return
-
-        a = np.asarray(vol)
-        if a.ndim == 4:
-            a = a[..., 0]
-#        Axial (Z)", "Coronal (Y)", "Sagittal (X)
-        axis_map = {"Sagittal (X)": 0, "Coronal (Y)": 1, "Axial (Z)": 2}
-        self.nifti_axis = axis_map.get(view, 2)
-
-        self.nifti_depth = int(a.shape[self.nifti_axis])
-        mid = max(0, self.nifti_depth // 2)
-
-        if hasattr(self, "slice_slider"):
-            self.slice_slider.blockSignals(True)
-            self.slice_slider.setMinimum(0)
-            self.slice_slider.setMaximum(max(0, self.nifti_depth - 1))
-            self.slice_slider.setValue(mid)
-            self.slice_slider.blockSignals(False)
-
-        self.show_nifti_slice(mid)
 
     # ----- DnD -----
     def dragEnterEvent(self, e):
@@ -3514,13 +642,13 @@ class MainWindow(QMainWindow):
         if not local: return
         print(f"Dropped: {local}")
         eext = ext(local)
-        if eext in IMAGE_EXTS: self.load_image(local)
-        elif eext in NIFTI_EXTS: self.load_nifti(local)
-        elif eext == ".stl": self.load_stl(local)
-        elif eext == ".vtk": self.load_vtk(local)
+        if eext in IMAGE_EXTS: self.file_mgr.load_image(local)
+        elif eext in NIFTI_EXTS: self.file_mgr.load_nifti(local)
+        elif eext == ".stl": self.file_mgr.load_stl(local)
+        elif eext == ".vtk": self.file_mgr.load_vtk(local)
         elif eext == ".vti":
             rdr = vtkXMLImageDataReader(); rdr.SetFileName(local); rdr.Update(); img = rdr.GetOutput()
-            self.vtk_view.show_image2d(img); self._show_widget(self.vtk_view); self._sync_slice_controls()
+            self.vtk_view.show_image2d(img); self.view.show_widget(self.vtk_view); self.view.sync_slice_controls()
             print(f"VTI loaded (drop). Extent={img.GetExtent()} Spacing={img.GetSpacing()} Range={img.GetScalarRange()}"); self._set_current("vtk_image", local)
         else:
             QMessageBox.information(self, "Unsupported", f"Unsupported file: {local}")
@@ -3561,7 +689,7 @@ class MainWindow(QMainWindow):
             for action in self.all_actions:
                 action.setEnabled(action in allowed_actions)
             self.menu_recent.setEnabled(False)
-            self.reset_png_navigation()
+            self.view.reset_png_navigation()
             self._update_process_actions()
             return
 
@@ -3590,7 +718,7 @@ class MainWindow(QMainWindow):
             ]:
                 action.setEnabled(has_file)
 
-        self.reset_png_navigation()
+        self.view.reset_png_navigation()
         self._update_process_actions()
 
 
@@ -3623,7 +751,7 @@ class MainWindow(QMainWindow):
             self.act_set_image_scale.setEnabled(False)
             self.act_set_scale.setEnabled(False)
             self.nav_tb.hide()
-            self._set_zoom_controls_visible(False)
+            self.view.set_zoom_controls_visible(False)
 
             
         if kind == "nifti":
@@ -3648,7 +776,7 @@ class MainWindow(QMainWindow):
             self.act_set_image_scale.setEnabled(False)
             self.act_set_scale.setEnabled(False)
             self.nav_tb.show()
-            self._set_zoom_controls_visible(False)
+            self.view.set_zoom_controls_visible(False)
             for w in (self.orient_combo, self.view_mode, self.slice_caption, self.slice_slider, self.slice_value_label):
                 w.setVisible(True)
 
@@ -3676,7 +804,7 @@ class MainWindow(QMainWindow):
             self.nav_tb.show()
             for w in (self.orient_combo, self.view_mode, self.slice_caption, self.slice_slider, self.slice_value_label):
                 w.setVisible(False)
-            self._set_zoom_controls_visible(True)
+            self.view.set_zoom_controls_visible(True)
 
         if kind is not None and kind.startswith("vtk"):
             self.act_set_physical_dim.setEnabled(True)
@@ -3684,55 +812,11 @@ class MainWindow(QMainWindow):
         else:
             self.act_set_physical_dim.setEnabled(False)
 
-    def _set_zoom_controls_visible(self, visible: bool):
-        """Show or hide image zoom controls in the navigation toolbar."""
-        self.zoom_controls.setVisible(bool(visible))
 
             
 
-    def enable_png_navigation(self, png_paths: list[str], slice_indices: list[int] | None = None, start_index: int | None = None):
-        """Switch the slice slider to browse a list of PNG previews."""
-        if not png_paths:
-            return
-        self.slice_nav_mode = "png"
-        self.slice_nav_items = list(png_paths)
-        self.slice_nav_index_map = list(slice_indices) if slice_indices is not None else [None] * len(png_paths)
-
-        self.nav_tb.show()
-        self.slice_slider.setEnabled(True)
-        
-        self.slice_slider.blockSignals(True)
-        self.slice_slider.setMinimum(slice_indices[0])
-        self.slice_slider.setMaximum(slice_indices[-1])
-        self.slice_slider.setSingleStep(1)
-        self.slice_slider.setPageStep(5)
-        init = start_index if isinstance(start_index, int) else len(self.slice_nav_items) // 2
-        init = max(0, min(init, len(self.slice_nav_items) - 1))
-        self.slice_slider.setValue(init)
-        self.slice_slider.blockSignals(False)
-        self.orient_combo.setEnabled(False)
-        
-        if self.current_kind != "stl":
-            # Show initial PNG
-            self.on_slice_slider_changed(init)
-            # Make sure the image pane is visible
-            self._show_widget(self.image_label)
-            self.view_mode.setEnabled(False)
 
 
-    def reset_png_navigation(self):
-        """Return the slider to normal NIfTI navigation."""
-        self.slice_nav_mode = "nifti" if self.current_kind == "nifti" else None
-        self.slice_nav_items = []
-        self.slice_nav_index_map = []
-        # You may want to re-range the slider back to your NIfTI volume depth here.
-        if self.slice_nav_mode == "nifti" and hasattr(self, "nifti_depth"):
-            self.slice_slider.blockSignals(True)
-            self.slice_slider.setMinimum(0)
-            self.slice_slider.setMaximum(max(0, self.nifti_depth - 1))
-            self.slice_slider.blockSignals(False)
-            self.view_mode.setEnabled(True)
-            self.orient_combo.setEnabled(True)
 
     def _dir_has_files(self, d: str) -> bool:
         """Return True if directory *d* contains at least one file (recursive).
@@ -3751,47 +835,8 @@ class MainWindow(QMainWindow):
         return False
         
         
-    def disable_png_navigation(self):
-        """Exit PNG navigation mode and reset slice controls."""
-        if getattr(self, "slice_nav_mode", None) != "png":
-            return
-        self.slice_nav_mode = None
-        self.slice_nav_items = []
-        self.slice_nav_index_map = []
-        if hasattr(self, "slice_slider"):
-            self.slice_slider.setEnabled(False)
-        if hasattr(self, "slice_value_label"):
-            self.slice_value_label.clear()
-        if hasattr(self, "image_label"):
-            self.image_label.clear()
       
       
-    def two_mode_view(self, out_dir, saved_pngs, valid_slices):
-        """Set up dual 2-D/3-D navigation for STL or VTK measurement results.
-
-        Enables the PNG slice browser in 2-D mode and, if switched to
-        3-D, overlays slices on the original mesh.
-
-        Args:
-            out_dir: Temporary output directory containing result PNGs and
-                the combined ``all_slices_mesh.vtk`` file.
-            saved_pngs: Ordered list of PNG paths for 2-D preview.
-            valid_slices: Corresponding integer slice indices.
-        """
-        self.current_output_3D_slices = os.path.join(out_dir, "all_slices_mesh.vtk")
-        self.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
-        self.nav_tb.show()
-        self.slice_slider.setEnabled(True)
-        self.view_mode.setEnabled(True)
-        self.view_mode.setCurrentText("2D")
-        mid = len(saved_pngs) // 2
-        if self.view_mode.currentText() ==  "2D":
-            self.on_slice_slider_changed(mid)
-        elif self.view_mode.currentText() ==  "3D":
-            self.vtk_view.show_slice_with_mesh(
-            mesh_file=self.current_path,
-            slice_file= self.current_output_3D_slices,
-                    slice_value=mid)
         
     
     def reset_view(self):
@@ -3846,7 +891,7 @@ class MainWindow(QMainWindow):
                 if pm.isNull():
                     QMessageBox.warning(self, "Reset View", f"Failed to open image:\n{path}")
                     return
-                self._show_widget(self.image_label)
+                self.view.show_widget(self.image_label)
                 self.image_label.setImage(pm)
                 self._active_view = "image"
                 _hide_image_widgets()  # hides slider etc., label shown above via _show_widget
@@ -3854,12 +899,12 @@ class MainWindow(QMainWindow):
             elif kind == "nifti":
                 # reuse your existing loader to reset orientation/slider
                 self._set_current("nifti", path)
-                self._on_view_changed(self.view_mode.currentText())
+                self.view.on_view_changed(self.view_mode.currentText())
 
             elif kind == "stl" or (kind is not None and kind.startswith("vtk")):
                 poly = _read_mesh(path)
                 # show in your VTK view
-                self._show_widget(self.vtk_view)
+                self.view.show_widget(self.vtk_view)
                 self.vtk_view.show_polydata(poly)
                 # hide image UI
                 _hide_image_widgets()
@@ -3867,9 +912,9 @@ class MainWindow(QMainWindow):
 
             # turn off any PNG navigation
             if hasattr(self, "disable_png_navigation"):
-                self.disable_png_navigation()
+                self.view.disable_png_navigation()
 
-            self._append_progress("\n[View] Reloaded and cleared annotations.\n")
+            self.view.append_progress("\n[View] Reloaded and cleared annotations.\n")
             self.statusBar().showMessage("Reloaded; annotations cleared.", 3000)
 
         except Exception as ex:
@@ -3892,7 +937,7 @@ class MainWindow(QMainWindow):
 
         def _on_done(img_rect, cropped_qimg):
             base_name = os.path.basename(self.current_path)
-            default_n = self._roi_counter_by_source.get(base_name, 0) + 1
+            default_n = self.metrics_store._roi_counter_by_source.get(base_name, 0) + 1
             default_label = f"ROI-{default_n}"
             label_text, ok = QInputDialog.getText(self, "Annotation Label", f"Label for {base_name}:", text=default_label)
             if not ok or not str(label_text).strip():
@@ -3904,17 +949,17 @@ class MainWindow(QMainWindow):
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             out_path = os.path.join(out_dir, f"{os.path.splitext(base_name)[0]}_roi_{ts}.png")
             ok_save = cropped_qimg.save(out_path)
-            self.annotation_records.append(str(label_text))
-            self.annotations_by_source.setdefault(base_name, []).append(str(label_text))
-            self._roi_counter_by_source[base_name] = default_n
+            self.metrics_store.annotation_records.append(str(label_text))
+            self.metrics_store.annotations_by_source.setdefault(base_name, []).append(str(label_text))
+            self.metrics_store._roi_counter_by_source[base_name] = default_n
 
             if ok_save:
                 # keep the path(s) for later use
                 self.last_annotated_path = out_path
-                self.annotation_labels_by_path[out_path] = str(label_text or "")
+                self.metrics_store.annotation_labels_by_path[out_path] = str(label_text or "")
 
                 print(f"[Annotate] Saved ROI → {out_path}")
-                self._append_progress(f"[Annotate] ROI {img_rect.getRect()} → {out_path}")
+                self.view.append_progress(f"[Annotate] ROI {img_rect.getRect()} → {out_path}")
                 self.current_output_dir = out_dir
                 try:
                     self.statusBar().showMessage(f"Saved ROI: {out_path}", 5000)
@@ -3942,48 +987,15 @@ class MainWindow(QMainWindow):
         # normalize to avoid mismatches
         key = os.path.abspath(os.path.expanduser(path))
         # fast path: direct dict
-        if key in self.annotation_labels_by_path:
-            return self.annotation_labels_by_path[key]
+        if key in self.metrics_store.annotation_labels_by_path:
+            return self.metrics_store.annotation_labels_by_path[key]
         # fallback: try raw key and search records if you keep them
         else:
             return None
 
 #--------------- select and show labels -------------------------------
 
-    def _color_for_label(self, lab: int) -> QColor:
-        """Return a deterministic vivid QColor for a given integer label.
 
-        Uses the golden-ratio method to spread hues evenly.
-
-        Args:
-            lab: Integer label ID.
-
-        Returns:
-            A saturated QColor unique to *lab*.
-        """
-        from colorsys import hsv_to_rgb
-        hue = (lab * 0.61803398875) % 1.0
-        r, g, b = hsv_to_rgb(hue, 0.75, 0.95)
-        return QColor(int(r*255), int(g*255), int(b*255))
-
-    def _color_square_icon(self, col: QColor, size: int = 12) -> QIcon:
-        """Create a small square icon filled with *col*.
-
-        Args:
-            col: Fill colour.
-            size: Icon side length in pixels. Defaults to 12.
-
-        Returns:
-            QIcon containing the coloured square.
-        """
-        pm = QPixmap(size, size); pm.fill(Qt.transparent)
-        p = QPainter(pm)
-        try:
-            p.fillRect(0, 0, size, size, col)
-            p.setPen(QPen(Qt.black, 1)); p.drawRect(0, 0, size-1, size-1)
-        finally:
-            p.end()
-        return QIcon(pm)
         
     def choose_regions_dock(self):
         """Show or create the ROI-selection dock for NIfTI label regions.
@@ -3998,8 +1010,8 @@ class MainWindow(QMainWindow):
         idx = int(self.slice_slider.value()) if hasattr(self, "slice_slider") else 0
         self.view_mode.setCurrentText("2D")
         self.view_mode.setEnabled(False)
-        self._nifti_set_orientation(self.orient_combo.currentText())
-        self.on_slice_slider_changed(idx)
+        self.view.nifti_set_orientation(self.orient_combo.currentText())
+        self.view.on_slice_slider_changed(idx)
 
         # Determine labels
         labels_available = sorted(set(int(x) for x in self.labels_available))
@@ -4011,7 +1023,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "nifti_label_lut"):
             self.nifti_label_lut = {}
         for lab in labels_available:
-            self.nifti_label_lut.setdefault(lab, self._color_for_label(lab))
+            self.nifti_label_lut.setdefault(lab, self.view._color_for_label(lab))
 
         # Current & defaults
         current = set(getattr(self, "nifti_selected_regions", self.nifti_selected_regions_default))
@@ -4028,14 +1040,14 @@ class MainWindow(QMainWindow):
                     return
                 self.nifti_selected_regions = set(selected)
                 try:
-                    self._append_progress(f"[Regions] Selected labels: {sorted(selected)} \n")
+                    self.view.append_progress(f"[Regions] Selected labels: {sorted(selected)} \n")
                     self.statusBar().showMessage(f"Regions set: {sorted(selected)}", 3000)
                 except Exception:
                     print("[Regions] Selected:", sorted(selected))
                 # Optional: refresh display
                 if hasattr(self, "show_nifti_slice"):
                     idx2 = int(self.slice_slider.value()) if hasattr(self, "slice_slider") else 0
-                    self.show_nifti_slice(idx2)
+                    self.view.show_nifti_slice(idx2)
             self._regions_dock.applied.connect(on_apply)
 
             # If dock is closed, re-enable view mode
@@ -4049,124 +1061,7 @@ class MainWindow(QMainWindow):
         self._regions_dock.show()
         self._regions_dock.raise_()
 
-    def _compose_label_overlay(
-        self,
-        img2d: np.ndarray,          # can be (H,W) grayscale OR (H,W,3) RGB
-        label2d: np.ndarray,        # (H,W) integer labels
-        selected: set[int],
-        alpha: float = 0.5
-    ) -> QImage:
-        """Blend coloured label regions onto a grayscale or RGB base image.
 
-        Args:
-            img2d: Base image, either (H, W) grayscale or (H, W, 3) RGB.
-            label2d: Integer label map of shape (H, W).
-            selected: Set of label IDs to overlay.
-            alpha: Blend opacity for the overlay colours. Defaults to 0.5.
-
-        Returns:
-            QImage with the selected labels tinted over the base.
-        """
-        # --- make a grayscale base in [0,255] ---
-        if img2d.ndim == 3 and img2d.shape[-1] == 3:
-            # convert RGB to luma for percentile windowing
-            f = (0.299 * img2d[..., 0] + 0.587 * img2d[..., 1] + 0.114 * img2d[..., 2]).astype(np.float32, copy=False)
-        else:
-            f = img2d.astype(np.float32, copy=False)
-
-        lo, hi = np.percentile(f, (1, 99))
-        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
-            lo, hi = float(np.nanmin(f)), float(np.nanmax(f))
-            if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
-                lo, hi = 0.0, 1.0
-
-        gray = (np.clip((f - lo) / (hi - lo), 0.0, 1.0) * 255.0).astype(np.uint8)
-
-        # base RGB made from grayscale
-        rgb = np.dstack([gray, gray, gray]).astype(np.float32, copy=False)
-
-        # --- overlay only selected labels ---
-        if selected:
-            for lab in selected:
-                mask = (label2d == lab)
-                if not np.any(mask):
-                    continue
-                c = self.nifti_label_lut.get(lab, self._color_for_label(lab))
-                overlay_color = np.array([float(c.red()), float(c.green()), float(c.blue())], dtype=np.float32)
-                # blend on the masked pixels; rgb[mask] is (N,3)
-                rgb[mask] = (1.0 - alpha) * rgb[mask] + alpha * overlay_color[None, :]
-
-        # --- to QImage ---
-        rgb_u8 = np.ascontiguousarray(np.clip(rgb, 0, 255).astype(np.uint8))
-        h, w, _ = rgb_u8.shape
-        qimg = QImage(rgb_u8.data, w, h, rgb_u8.strides[0], QImage.Format_RGB888)
-        return qimg.copy()  # detach from NumPy buffer
-
-    def show_nifti_slice(self, idx, axis=None):
-        """Render a single NIfTI slice on the image label with optional label overlay.
-
-        Reads the volume from disk, extracts the 2-D slice along the
-        active axis, applies windowing, optional region-colour overlay,
-        and a physical scalebar.
-
-        Args:
-            idx: Slice index along the current (or specified) axis.
-            axis: Override axis (0=sagittal, 1=coronal, 2=axial).
-                Defaults to ``self.nifti_axis``.
-        """
-        img = nib.load(self.current_path)
-        vol = img.get_fdata(dtype=float)
-        if vol is None:
-            return
-
-        a = np.asarray(vol)
-        if a.ndim == 4:
-            a = a[..., 0]  # take first volume
-
-        ax = self.nifti_axis if axis is None else int(axis)
-        depth = a.shape[ax]
-        i = max(0, min(int(idx), depth - 1))
-
-        # Slice
-        sl = a[i, :, :] if ax == 0 else (a[:, i, :] if ax == 1 else a[:, :, i])
-
-        # Normalize to [0,255]
-        f = sl.astype(np.float32, copy=False)
-        lo, hi = np.percentile(f, (1, 99))
-        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
-            lo, hi = float(np.nanmin(f)), float(np.nanmax(f))
-            if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
-                lo, hi = 0.0, 1.0
-        gray = (np.clip((f - lo) / (hi - lo), 0.0, 1.0) * 255.0).astype(np.uint8)
-        gray = np.ascontiguousarray(gray)
-
-        qimg = None
-        if self.label_overlay_enabled and self.nifti_selected_regions:
-            # Prepare label overlay
-            L = getattr(self, "nifti_label_data", None) or a
-            if L.ndim == 4:
-                L = L[..., 0]
-            label2d = np.rint(
-                L[i, :, :] if ax == 0 else (L[:, i, :] if ax == 1 else L[:, :, i])
-            ).astype(np.int32)
-
-            # Expand grayscale to RGB for overlay
-            rgb = np.dstack([gray, gray, gray])
-            rgb = np.ascontiguousarray(rgb)
-            qimg = self._compose_label_overlay(rgb, label2d, self.nifti_selected_regions)
-            self._last_frame_rgb = rgb  # keep alive
-        else:
-            # Just grayscale, no overlay
-            h, w = gray.shape
-            qimg = QImage(gray.data, w, h, gray.strides[0], QImage.Format_Grayscale8)
-            self._last_frame_gray = gray  # keep alive
-
-        zooms = img.header.get_zooms()[:3]  # (z0,z1,z2) voxel sizes in mm
-        qimg, self.mm_per_px_bar , self.bar_mm = add_scalebar(qimg, zooms, ax)
-        self.image_label.setImage(QPixmap.fromImage(qimg))
-        self._show_widget(self.image_label)
-#        if hasattr(self, "_update_slice_label"):
-#            self._update_slice_label(i, depth, mode="nifti")
 
     def ask_processing_options(self):
         """Show a dialog for optional image-processing tweaks (colour, smoothing, scalebar).
@@ -4217,7 +1112,7 @@ class MainWindow(QMainWindow):
         smooth = options["smooth_kind"],
         smooth_strength = options["smooth_strength"])
         self.pixel_size = self.bar_mm/ length_px
-        self.load_image(out_path)
+        self.file_mgr.load_image(out_path)
 
 # -------------------------------------------------------
 
@@ -4238,183 +1133,8 @@ class MainWindow(QMainWindow):
 
         nii_output = nifti_extractor (self, self.current_path, out_dir, valid_labels = labels)
                 
-        self.load_nifti(nii_output)
+        self.file_mgr.load_nifti(nii_output)
 # ---- Metrics Dock (per-path, reads from self.metrics) -----------------------
-
-    def _init_metrics_dock(self):
-        """Create the Metrics dock widget, its table model, and wire toolbar actions.
-
-        Called once from ``__init__``.  The dock starts hidden and is
-        shown via *Show Results* or after a measurement is recorded.
-        """
-        # Ensure container exists
-        if not hasattr(self, "metrics") or not isinstance(self.metrics, dict):
-            self.metrics = {}  # {path: [dict, ...]}
-
-        self.metricsDock = QDockWidget("Metrics", self)
-        self.metricsDock.setObjectName("MetricsDock")
-        self.metricsDock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
-
-        host = QWidget()
-        v = QVBoxLayout(host); v.setContentsMargins(0, 0, 0, 0)
-
-        # Toolbar
-        tb = QToolBar()
-        act_copy   = QAction("Copy", self);   act_copy.setShortcut(QKeySequence.Copy)
-        act_export = QAction("Export Excel…", self)
-        act_clear  = QAction("Clear (this file)", self)
-        tb.addAction(act_copy); tb.addAction(act_export); tb.addSeparator(); tb.addAction(act_clear)
-        v.addWidget(tb)
-
-        # Table
-        self.metricsView = QTableView()
-        self.metricsView.setSortingEnabled(True)
-        self.metricsView.horizontalHeader().setStretchLastSection(True)
-        self.metricsView.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        v.addWidget(self.metricsView)
-
-        self.metricsDock.setWidget(host)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.metricsDock)
-        self.metricsDock.hide()
-
-        # Model
-        self._metrics_model = QStandardItemModel(0, 0, self)
-        self.metricsView.setModel(self._metrics_model)
-
-        # Wire actions
-        act_copy.triggered.connect(self._metrics_copy_selection)
-        # Your existing exporter should read from self.metrics; leave as-is:
-        act_export.triggered.connect(self.export_metrics_excel)
-        act_clear.triggered.connect(self._metrics_clear_current_file)
-
-    def _metrics_headers(self):
-        """Return the ordered list of column header strings for the metrics table.
-
-        Returns:
-            List of column name strings matching the keys used in
-            ``self.metrics`` row dicts.
-        """
-        return [
-            "File", "Kind", "Label", "Annotation", "Source", "SliceDirection",
-            "PixelSize", "PixelSizeUnits", "KernelSize","LengthUnit", "SliceThickness",
-            "Length(PA)", "Width(LR)", "Height(IS)",
-            "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciCount", "MinDepth", "MaxDepth","MeanDepth",
-            "LGI", "Compactness", 
-        ]
-
-    def show_results_dock(self):
-        """Refresh and display the Metrics dock for the currently loaded file."""
-        self._metrics_rebuild_for_current()
-        self.metricsDock.show()
-        self.metricsDock.raise_()
-
-    def _metrics_rebuild_for_current(self):
-        """Rebuild the table for the currently open file from self.metrics."""
-        headers = self._metrics_headers()
-        m = self._metrics_model
-        m.clear()
-        m.setHorizontalHeaderLabels(headers)
-
-        cur_path = getattr(self, "current_path", None)
-        rows = []
-        if cur_path and cur_path in self.metrics:
-            for rec in (self.metrics.get(cur_path) or []):
-                if not isinstance(rec, dict):
-                    continue
-                rows.append([rec.get(h, "") for h in headers])
-
-        # Append rows
-        for row in rows:
-            items = []
-            for val in row:
-                txt = "" if val is None else str(val)
-                it = QStandardItem(txt)
-                # right-align numeric-looking cells
-                try:
-                    f = float(txt)
-                    it.setText(f"{f:.3f}")
-                    it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                except Exception:
-                    pass
-                items.append(it)
-            m.appendRow(items)
-
-        # Show/hide dock depending on content
-#        if rows:
-#            self.metricsDock.show()
-#        else:
-#            self.metricsDock.hide()
-
-    def _metrics_append_record(self):
-        """Append the newest metrics row for the current file into the table model.
-
-        Should be called immediately after adding a new entry to
-        ``self.metrics[current_path]`` so the dock stays in sync.
-        """
-        cur_path = getattr(self, "current_path", None)
-        if not cur_path or cur_path not in self.metrics:
-            return
-        seq = self.metrics[cur_path]
-        if not seq:
-            return
-        rec = seq[-1]
-        if not isinstance(rec, dict):
-            return
-
-        headers = self._metrics_headers()
-        # Ensure model columns exist; if not, rebuild fully once
-        if self._metrics_model.columnCount() != len(headers):
-            self._metrics_rebuild_for_current()
-            return
-
-        row_vals = [rec.get(h, "") for h in headers]
-        items = []
-        for val in row_vals:
-            txt = "" if val is None else str(val)
-            it = QStandardItem(txt)
-            try:
-                f = float(txt)
-                it.setText(f"{f:.3f}")
-                it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            except Exception:
-                pass
-            items.append(it)
-
-        self._metrics_model.appendRow(items)
-
-    def _metrics_copy_selection(self):
-        """Copy selected table cells as CSV (with header)."""
-        sel = self.metricsView.selectionModel()
-        if not sel or not sel.hasSelection():
-            return
-        idxs = sorted(sel.selectedIndexes(), key=lambda i: (i.row(), i.column()))
-        # Build a dict row -> {col: text}
-        rows = {}
-        model = self._metrics_model
-        for i in idxs:
-            rows.setdefault(i.row(), {})[i.column()] = model.item(i.row(), i.column()).text()
-
-        header = ",".join(self._metrics_headers())
-        lines = [header]
-        for r in sorted(rows):
-            cols = []
-            for c in range(model.columnCount()):
-                cols.append(rows[r].get(c, ""))
-            lines.append(",".join(cols))
-        QApplication.clipboard().setText("\n".join(lines))
-
-    def _metrics_clear_current_file(self):
-        """Clear in-memory metrics for the current file and refresh the table."""
-        cur_path = getattr(self, "current_path", None)
-        if not cur_path:
-            return
-        self.metrics[cur_path] = []
-        self._metrics_rebuild_for_current()
-        try:
-            self._append_progress(f"[Metrics] Cleared metrics for {cur_path} \n")
-        except Exception:
-            pass
 
 
 # ------------------ hausdorff helpers ------------------
@@ -4481,7 +1201,7 @@ class MainWindow(QMainWindow):
         if label_text:
             annotated_bgr = put_label_on_bgr(annotated, label_text, pos="topleft")
     
-        self._record_metric_for(self.current_path, label=label_text ,
+        self.metrics_store.record_metric_for(self.current_path, label=label_text ,
                 pixel_size_units = f"{self.units_length}/pixel",
                 pixel_size = self.pixel_size,
                 unit = self.units_length)
@@ -4550,7 +1270,7 @@ class MainWindow(QMainWindow):
             print (f"[Load Freesurfer file] the {ext} map of {os.path.dirname(surf_path)} imported successfully" )
             File_info = {'name': name, 'ext': ext  ,'path': surf_path}
             self.Freesurfer_record.append(File_info)
-            self._show_widget(self.vtk_view)
+            self.view.show_widget(self.vtk_view)
             self.vtk_view.show_pial_surface(surf_path)
             self.last_dir = os.path.dirname(surf_path)
             
@@ -4607,7 +1327,7 @@ class MainWindow(QMainWindow):
 
                 self.Freesurfer_record.extend(files)
                 break
-            self._show_widget(self.vtk_view)
+            self.view.show_widget(self.vtk_view)
             self.vtk_view.show_pial_both(lh_file, rh_file)
 
         self._set_current("Freesurfer", self.Freesurfer_record[0]['path'])
@@ -4666,7 +1386,7 @@ class MainWindow(QMainWindow):
                 break
 
             # call the viewer function
-            self._show_widget(self.vtk_view)
+            self.view.show_widget(self.vtk_view)
             self.vtk_view.show_freesurfer_morph(path, morph_path)
             
         elif len(self.Freesurfer_record) == 2:
@@ -4732,7 +1452,7 @@ class MainWindow(QMainWindow):
                 # valid selection → exit loop
                 break
                 
-            self._show_widget(self.vtk_view)
+            self.view.show_widget(self.vtk_view)
             self.vtk_view.show_freesurfer_morph_both(lh_file,lh_morph, rh_file,rh_morph)
 
         else:
@@ -4756,7 +1476,7 @@ class MainWindow(QMainWindow):
         path = browser.selected_path()
         if not path:
             return
-        self.load_image(path)
+        self.file_mgr.load_image(path)
 
     def choose_gestational_week_2D_cropped(self):
         """Open a cropped 2D fetal brain section for a user-chosen gestational week."""
@@ -4775,7 +1495,7 @@ class MainWindow(QMainWindow):
         path = browser.selected_path()
         if not path:
             return
-        self.load_image(path)
+        self.file_mgr.load_image(path)
 
 
 # ---------------------------

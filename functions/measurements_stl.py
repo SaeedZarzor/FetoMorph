@@ -186,7 +186,7 @@ def compute_stl_allmarks(
         outer_perim_px = sum(cv2.arcLength(c, True) for c in outer_filtered)
         inner_perim_mm = inner_perim_px * mm_per_px
         outer_perim_mm = outer_perim_px * mm_per_px
-        area_mm        = area_px * (mm_per_px ** 2)
+        area_mm  = area_px * (mm_per_px ** 2)
 
         depth = []
         if inner_filtered:
@@ -218,7 +218,7 @@ def compute_stl_allmarks(
         # Accumulate
         sum_inner_mm += inner_perim_mm
         sum_outer_mm += outer_perim_mm
-        sum_area     += area_perim_mm
+        sum_area     += area_mm
 #        GI_slice = (inner_perim_mm / outer_perim_mm) if outer_perim_mm > 0 else 0.0
 
         # Save annotated slice
@@ -643,13 +643,13 @@ def compute_stl_volume(
         cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
 
         # Perimeters (mm)
-        area_perim_px  = sum(cv2.contourArea(c)     for c in inner_filtered)
-        area_perim_mm  = area_perim_px * (mm_per_px ** 2)
+        area_px  = sum(cv2.contourArea(c)     for c in inner_filtered)
+        area_mm  = area_px * (mm_per_px ** 2)
 
 
-        rows.append([idx, len(inner_filtered), area_perim_mm])
+        rows.append([idx, len(inner_filtered), area_mm])
         # Accumulate
-        sum_area     += area_perim_mm
+        sum_area     += area_mm
 
         # Save annotated slice
         slice_path = os.path.join(out_dir_slices, f"slice_{idx:03d}.png")
