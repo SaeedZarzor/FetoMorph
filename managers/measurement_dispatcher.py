@@ -175,7 +175,7 @@ class MeasurementDispatcher:
 
         except Exception as ex:
             logger.error("Planar VTK {mode} failed: %s", ex)
-            QMessageBox.critical(self, f"Planar VTK {mode} Failed", f"{type(ex).__name__}: {ex}")
+            QMessageBox.critical(self.mw, f"Planar VTK {mode} Failed", f"{type(ex).__name__}: {ex}")
 
     # ---------- Process menu (stubs) ----------
     def on_measure_allmarks(self):
@@ -245,7 +245,7 @@ class MeasurementDispatcher:
                     
             except Exception as ex:
                 logger.error("All hallmarks failed: %s", ex)
-                QMessageBox.critical(self, "All hallmarks Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "All hallmarks Failed", f"{type(ex).__name__}: {ex}")
         elif self.mw.current_kind == "nifti":
             t0 = time.time()
             try:
@@ -293,7 +293,7 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("NIfTI hallmarks failed: %s", ex)
-                QMessageBox.critical(self, "NIfTI All hallmarks Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "NIfTI All hallmarks Failed", f"{type(ex).__name__}: {ex}")
             return
             
         elif self.mw.current_kind == "stl":
@@ -308,7 +308,7 @@ class MeasurementDispatcher:
                 kernel_size = self.mw.kernel_size, slice_thickness=self.mw.slice_thickness)
             
                 if source_label == "not_brain":
-                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
+                    QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
                     return
                 elif area is None:
                     return
@@ -337,13 +337,19 @@ class MeasurementDispatcher:
                 print(f"STL mesh Compactness = {compactness:.2f} .")
                 print(f"The Maximum Grooves Depth = {MetricsStore.depth_summary(depth, 'cm')}")
 
+                if compactness > 1.0:
+                    QMessageBox.warning(self.mw, "Compactness Warning",
+                        f"Compactness = {compactness:.2f} exceeds 1.0.\n"
+                        "The expected range is [0, 1]. This may indicate incorrect "
+                        "physical dimensions or unit settings.")
+
                 dt = time.time() - t0
                 print(f"[STL hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
             
             except Exception as ex:
                 logger.error("STL hallmarks failed: %s", ex)
-                QMessageBox.critical(self, "STL hallmarks Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "STL hallmarks Failed", f"{type(ex).__name__}: {ex}")
                 return
         
         elif self.mw.is_vtk:
@@ -392,13 +398,19 @@ class MeasurementDispatcher:
                 print(f"VTK mesh Compactness = {compactness:.2f} .")
                 print(f"VTK mesh Maximum Sulci Depth = {MetricsStore.depth_summary(depth, u)}")
 
+                if compactness > 1.0:
+                    QMessageBox.warning(self.mw, "Compactness Warning",
+                        f"Compactness = {compactness:.2f} exceeds 1.0.\n"
+                        "The expected range is [0, 1]. This may indicate incorrect "
+                        "physical dimensions or unit settings.")
+
                 dt = time.time() - t0
                 print(f"[VTK hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
                       
             except Exception as ex:
                 logger.error("VTK hallmarks failed: %s", ex)
-                QMessageBox.critical(self, "VTK hallmarks Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "VTK hallmarks Failed", f"{type(ex).__name__}: {ex}")
                 return
             
         else:
@@ -446,7 +458,7 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("NIfTI volume failed: %s", ex)
-                QMessageBox.critical(self, "NIfTI Volume Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "NIfTI Volume Failed", f"{type(ex).__name__}: {ex}")
             return
         elif self.mw.current_kind == "stl":
             t0 = time.time()
@@ -459,7 +471,7 @@ class MeasurementDispatcher:
                 source_label, dims,volume, saved_pngs, valid_slices = compute_stl_volume(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness)
             
                 if source_label == "not_brain":
-                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
+                    QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
                     return
                 elif volume is None:
                     return
@@ -485,13 +497,13 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("STL Volume failed: %s", ex)
-                QMessageBox.critical(self, "STL Volume Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "STL Volume Failed", f"{type(ex).__name__}: {ex}")
             return
             
         elif self.mw.is_vtk:
             if self.mw._flat_axis is not None:
                 print("[Volume] Not applicable for planar 2D meshes.")
-                QMessageBox.information(self, "Volume", "Volume measurement is not applicable for planar 2D meshes.")
+                QMessageBox.information(self.mw, "Volume", "Volume measurement is not applicable for planar 2D meshes.")
                 return
             t0 = time.time()
             try:
@@ -530,7 +542,7 @@ class MeasurementDispatcher:
                       
             except Exception as ex:
                 logger.error("VTK Volume failed: %s", ex)
-                QMessageBox.critical(self, "VTK hallmarks Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "VTK hallmarks Failed", f"{type(ex).__name__}: {ex}")
                 return
                 
         else:
@@ -585,7 +597,7 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("Perimeter failed: %s", ex)
-                QMessageBox.critical(self, "Perimeter Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "Perimeter Failed", f"{type(ex).__name__}: {ex}")
             
         elif self.mw.is_vtk:
             if self.mw._flat_axis is not None:
@@ -650,7 +662,7 @@ class MeasurementDispatcher:
                 base_name = os.path.basename(self.mw.current_path)
                 print(f"[Compactness] for {base_name}: Compactness(3D)={comp:.4f}")
                 if comp > 1.0:
-                    QMessageBox.warning(self, "Compactness Warning",
+                    QMessageBox.warning(self.mw, "Compactness Warning",
                         f"Compactness = {comp:.4f} exceeds 1.0.\n"
                         "The expected range is [0, 1]. This may indicate incorrect "
                         "physical dimensions or unit settings.")
@@ -659,7 +671,7 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("Compactness failed: %s", ex)
-                QMessageBox.critical(self, "Compactness Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "Compactness Failed", f"{type(ex).__name__}: {ex}")
             return
 
         # ── 2D image ───────────────────────────────────────────────────
@@ -693,7 +705,7 @@ class MeasurementDispatcher:
                 base_name = os.path.basename(image_path)
                 print(f"[Compactness] for {base_name}: Compactness={compactness_2D_value:.4f}")
                 if compactness_2D_value > 1.0:
-                    QMessageBox.warning(self, "Compactness Warning",
+                    QMessageBox.warning(self.mw, "Compactness Warning",
                         f"Compactness = {compactness_2D_value:.4f} exceeds 1.0.\n"
                         "The expected range is [0, 1]. This may indicate an issue "
                         "with contour detection or image quality.")
@@ -701,9 +713,9 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("Compactness failed: %s", ex)
-                QMessageBox.critical(self, "Compactness Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "Compactness Failed", f"{type(ex).__name__}: {ex}")
         else:
-            QMessageBox.information(self, "Compactness", "Compactness measurement is currently only supported for 2D images and 3D meshes. Please open an image or 3D mesh file.")      
+            QMessageBox.information(self.mw, "Compactness", "Compactness measurement is currently only supported for 2D images and 3D meshes. Please open an image or 3D mesh file.")      
             print("[Compactness] Unsupported current kind. Open an image or 3D mesh file.")
             return
 
@@ -785,16 +797,16 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("lGI failed: %s", ex)
-                QMessageBox.critical(self, "lGI Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "lGI Failed", f"{type(ex).__name__}: {ex}")
                 
         elif self.mw.current_kind == "nifti":
             t0 = time.time()
-            reply = QMessageBox.question(self,"Enhance measurement",
+            reply = QMessageBox.question(self.mw,"Enhance measurement",
             "For accurate LGI computation, please provide the FreeSurfer pial surfaces for both hemispheres (lh.pial and rh.pial). Do you have these files?",   # message
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
             
             if reply == QMessageBox.No:
-                QMessageBox.warning(self, "LGI Input Missing",
+                QMessageBox.warning(self.mw, "LGI Input Missing",
                     "The LGI can be computed based on the NIfTI file alone, but the accuracy of the results is not guaranteed.")
                 
                 try:
@@ -829,7 +841,7 @@ class MeasurementDispatcher:
 
                 except Exception as ex:
                     logger.error("NIfTI lGI failed: %s", ex)
-                    QMessageBox.critical(self, "NIfTI lGI Failed", f"{type(ex).__name__}: {ex}")
+                    QMessageBox.critical(self.mw, "NIfTI lGI Failed", f"{type(ex).__name__}: {ex}")
                 return
         
             elif reply == QMessageBox.Yes:
@@ -882,7 +894,7 @@ class MeasurementDispatcher:
 
                 except Exception as ex:
                     logger.error("STL lGI failed: %s", ex)
-                    QMessageBox.critical(self, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
+                    QMessageBox.critical(self.mw, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
                 return
                 
         elif self.mw.current_kind == "stl":
@@ -898,7 +910,7 @@ class MeasurementDispatcher:
                 kernel_size = self.mw.kernel_size, slice_thickness=self.mw.slice_thickness)
             
                 if source_label == "not_brain":
-                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
+                    QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
                     return
                 elif gi is None:
                     return
@@ -924,7 +936,7 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("STL lGI failed: %s", ex)
-                QMessageBox.critical(self, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
             return
             
         elif self.mw.is_vtk:
@@ -970,7 +982,7 @@ class MeasurementDispatcher:
                       
             except Exception as ex:
                 logger.error("VTK lGI failed: %s", ex)
-                QMessageBox.critical(self, "VTK lGI Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "VTK lGI Failed", f"{type(ex).__name__}: {ex}")
                 return
             
         else:
@@ -1028,7 +1040,7 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("Sulci depth failed: %s", ex)
-                QMessageBox.critical(self, "Sulci depth Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "Sulci depth Failed", f"{type(ex).__name__}: {ex}")
         
         elif self.mw.current_kind == "nifti":
             t0 = time.time()
@@ -1064,7 +1076,7 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("NIfTI Sulci depth failed: %s", ex)
-                QMessageBox.critical(self, "NIfTI Sulci depth Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "NIfTI Sulci depth Failed", f"{type(ex).__name__}: {ex}")
             return
             
         elif self.mw.current_kind == "stl":
@@ -1078,7 +1090,7 @@ class MeasurementDispatcher:
                 source_label, dims, depth, saved_pngs, valid_slices = compute_stl_sulci_depth (self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness)
             
                 if source_label == "not_brain":
-                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
+                    QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
                     return
                 elif depth is None:
                     return
@@ -1096,7 +1108,7 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("STL Sulci depth failed: %s", ex)
-                QMessageBox.critical(self, "STL Sulci depth Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "STL Sulci depth Failed", f"{type(ex).__name__}: {ex}")
             return
             
         elif self.mw.is_vtk:
@@ -1142,7 +1154,7 @@ class MeasurementDispatcher:
                       
             except Exception as ex:
                 logger.error("VTK Sulci depth failed: %s", ex)
-                QMessageBox.critical(self, "VTK Sulci depth Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "VTK Sulci depth Failed", f"{type(ex).__name__}: {ex}")
                 return
         else:
             print("[Sulci depth] Unsupported current kind.")
@@ -1203,7 +1215,7 @@ class MeasurementDispatcher:
                 
             except Exception as ex:
                 print(f"[Area] ERROR : {ex}")
-                QMessageBox.critical(self, "[Area] Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[Area] Failed", f"{type(ex).__name__}: {ex}")
         elif self.mw.current_kind == "nifti":
             t0 = time.time()
             try:
@@ -1221,7 +1233,7 @@ class MeasurementDispatcher:
                 dims, area,saved_pngs, valid_slices = compute_nifti_area(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.mw.cnt_threshold,)
             
                 if area == 0:
-                    QMessageBox.information(self, "NIfTI Area", "All slices were filtered out (too small).")
+                    QMessageBox.information(self.mw, "NIfTI Area", "All slices were filtered out (too small).")
                     return
 
                 # record metrics (consistent with your global export; units in mm unless noted)
@@ -1239,7 +1251,7 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("NIfTI Area failed: %s", ex)
-                QMessageBox.critical(self, "[NIfTI Area] Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[NIfTI Area] Failed", f"{type(ex).__name__}: {ex}")
             return
             
         elif self.mw.current_kind == "stl":
@@ -1253,7 +1265,7 @@ class MeasurementDispatcher:
                 source_label, dims,area, saved_pngs, valid_slices = compute_stl_area(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness)
             
                 if source_label == "not_brain":
-                    QMessageBox.warning(self, "Mesh ignored", "The computation has been canceled")
+                    QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
                     return
                 elif area is None:
                     return
@@ -1279,7 +1291,7 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("STL Area failed: %s", ex)
-                QMessageBox.critical(self, "STL Area Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "STL Area Failed", f"{type(ex).__name__}: {ex}")
             return
         
         elif self.mw.is_vtk:
@@ -1324,7 +1336,7 @@ class MeasurementDispatcher:
                       
             except Exception as ex:
                 logger.error("VTK Area failed: %s", ex)
-                QMessageBox.critical(self, "VTK area Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "VTK area Failed", f"{type(ex).__name__}: {ex}")
                 return
     
         else:
@@ -1351,7 +1363,7 @@ class MeasurementDispatcher:
          and os.path.splitext(e.name.lower())[1] in exts),
         key=lambda p: os.path.basename(p).lower())
         if not imgs:
-            QMessageBox.warning(self, "No images", "The selected folder contains no image files.")
+            QMessageBox.warning(self.mw, "No images", "The selected folder contains no image files.")
             return
 
         self.mw.last_dir = dir_path
@@ -1372,7 +1384,7 @@ class MeasurementDispatcher:
         self.mw.statusBar().clearMessage()
         self.mw._exit_adjustment_mode()
 
-        btn = QMessageBox.warning(self,
+        btn = QMessageBox.warning(self.mw,
                     "Processing Images Batch",
                     "All images must share the same resolution (pixel spacing) and measurement unit.",
                     QMessageBox.Ok | QMessageBox.Cancel)
@@ -1409,7 +1421,7 @@ class MeasurementDispatcher:
             
         except Exception as ex:
             logger.error("Process Batch failed: %s", ex)
-            QMessageBox.critical(self, "Process Batch Failed", f"{type(ex).__name__}: {ex}")
+            QMessageBox.critical(self.mw, "Process Batch Failed", f"{type(ex).__name__}: {ex}")
             return
 
     def on_measure_curvature(self):
@@ -1446,7 +1458,7 @@ class MeasurementDispatcher:
                 self.mw._set_current("image", self.mw.current_path)
             except Exception as ex:
                 logger.error("Curvature failed: %s", ex)
-                QMessageBox.critical(self, "[Curvature] Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[Curvature] Failed", f"{type(ex).__name__}: {ex}")
             return
             
         else:
@@ -1471,7 +1483,7 @@ class MeasurementDispatcher:
             excel_files, _ = QFileDialog.getOpenFileNames(self, "Select one or multiple Excel files",
                     start, "Excel Files (*.xlsx *.xls)")
             if not excel_files:
-                reply = QMessageBox.question(self, "No files selected",
+                reply = QMessageBox.question(self.mw, "No files selected",
                             "No Excel files were selected. Would you like to try again?",
                             QMessageBox.Retry | QMessageBox.Cancel)
                 if reply == QMessageBox.Cancel:
@@ -1482,7 +1494,7 @@ class MeasurementDispatcher:
         try:
             df1, max_sulci, max_cell_density = conver_excel(excel_files)
             if df1 is None or df1.empty:
-                QMessageBox.warning(self, "Optimization Failed", "No valid rows were found in the selected Excel files.")
+                QMessageBox.warning(self.mw, "Optimization Failed", "No valid rows were found in the selected Excel files.")
                 return
 
             self.mw.last_dir = os.path.dirname(excel_files[0]) or self.mw.last_dir
@@ -1566,7 +1578,7 @@ class MeasurementDispatcher:
                     self.mw.metrics_store.rebuild_for_current()
             else:
                 print(f"[Optimization] Optimization failed or was canceled.")
-                QMessageBox.warning(self, "Optimization Failed", "Optimization failed or was canceled.")
+                QMessageBox.warning(self.mw, "Optimization Failed", "Optimization failed or was canceled.")
 
             if len(saved_pngs) == 1:
                 img_array = cv2.imread(saved_pngs[0])
@@ -1586,7 +1598,7 @@ class MeasurementDispatcher:
     
         except Exception as ex:
             logger.error("Optimization failed: %s", ex)
-            QMessageBox.critical(self, "Optimization Failed", f"{type(ex).__name__}: {ex}")
+            QMessageBox.critical(self.mw, "Optimization Failed", f"{type(ex).__name__}: {ex}")
             return  
         
     
@@ -1705,7 +1717,7 @@ class MeasurementDispatcher:
 
         except Exception as ex:
             logger.error("Hausdorff failed: %s", ex)
-            QMessageBox.critical(self, "Hausdorff distance", f"{type(ex).__name__}: {ex}")
+            QMessageBox.critical(self.mw, "Hausdorff distance", f"{type(ex).__name__}: {ex}")
     
     def on_pial_to_stl(self):
         """Pick one .pial, convert to STL in TEMP, show it, and keep source in metrics."""
@@ -1741,7 +1753,7 @@ class MeasurementDispatcher:
             print("[Pial → STL] Hint: use File → Save Data As… to keep a permanent copy.")
         except Exception as ex:
             logger.error("Pial → STL failed: %s", ex)
-            QMessageBox.critical(self, "Pial → STL", f"{type(ex).__name__}: {ex}")
+            QMessageBox.critical(self.mw, "Pial → STL", f"{type(ex).__name__}: {ex}")
         
     def on_combined_stl(self):
         """Pick rh & lh .pial, convert + merge in TEMP, show combined STL, record provenance."""
@@ -1757,7 +1769,7 @@ class MeasurementDispatcher:
                 
                 self.mw.last_dir = os.path.dirname(files[0])
                 if len(files) != 2:
-                    QMessageBox.warning(self, "Invalid selection", "You must select exactly two files.")
+                    QMessageBox.warning(self.mw, "Invalid selection", "You must select exactly two files.")
                     continue
                 
                 names=set()
@@ -1807,5 +1819,5 @@ class MeasurementDispatcher:
             print("[Combined STL] Combined STL loaded. Use File → Save Data As… to export.")
         except Exception as ex:
             logger.error("Combined STL failed: %s", ex)
-            QMessageBox.critical(self, "Pial (rh & lh) → Combined STL", f"{type(ex).__name__}: {ex}")
+            QMessageBox.critical(self.mw, "Pial (rh & lh) → Combined STL", f"{type(ex).__name__}: {ex}")
         

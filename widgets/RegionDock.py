@@ -96,13 +96,20 @@ class RegionsDock(QDockWidget):
         self.lst.clear()
         self._label_to_color = label_to_color or {}
         self._live_selected = set(selected)
+        parent = self.parent()
+        icon_factory = None
+        if parent is not None:
+            if hasattr(parent, "_color_square_icon"):
+                icon_factory = parent._color_square_icon
+            elif hasattr(parent, "view") and hasattr(parent.view, "_color_square_icon"):
+                icon_factory = parent.view._color_square_icon
         for lab in sorted(set(int(x) for x in labels_available)):
             it = QListWidgetItem(str(lab))
             it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
             it.setCheckState(Qt.Checked if lab in selected else Qt.Unchecked)
             # optional icon (color square)
-            if lab in self._label_to_color:
-                it.setIcon(self.parent()._color_square_icon(self._label_to_color[lab]))
+            if lab in self._label_to_color and icon_factory is not None:
+                it.setIcon(icon_factory(self._label_to_color[lab]))
             self.lst.addItem(it)
         self._block_item_changed = False
 
@@ -146,10 +153,15 @@ class RegionsDock(QDockWidget):
             self._live_selected.discard(lab)
         # live preview hook to parent (if desired)
         parent = self.parent()
-        if hasattr(parent, "show_nifti_slice") and getattr(parent, "current_kind", None) == "nifti":
+        if (
+            parent is not None
+            and getattr(parent, "current_kind", None) == "nifti"
+            and hasattr(parent, "view")
+            and hasattr(parent.view, "show_nifti_slice")
+        ):
             idx = int(getattr(parent, "slice_slider", None).value()) if hasattr(parent, "slice_slider") else 0
             parent.nifti_selected_regions = set(self._live_selected)
-            parent.show_nifti_slice(idx)
+            parent.view.show_nifti_slice(idx)
 
     def _apply_typed(self):
         self._set_checks_from_set(self._parse_labels(self.quick_edit.text()))
@@ -186,4 +198,3 @@ class RegionsDock(QDockWidget):
     def closeEvent(self, e):
         super().closeEvent(e)
         self.closed.emit()
-

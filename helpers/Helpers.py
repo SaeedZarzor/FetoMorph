@@ -25,7 +25,7 @@ def image_annotation_style(
     h: int,
     w: int | None = None,
     *,
-    style: str = "regular",
+    style: str = "bold",
     cap: int = 30,
 ) -> tuple[int, float, int]:
     """Return (thickness, font_scale, radius_px) based on image dimensions."""
@@ -35,8 +35,9 @@ def image_annotation_style(
 
     base_div = {"thin": 380, "regular": 320, "bold": 260}[style]
     thickness = max(1, min(int(round(h / base_div)), cap))
-    font_scale = float(np.clip(base / 500.0, 0.9, 3.8))
-    radius_px = int(np.clip(round(base / 150.0), 3, 22))
+    font_scale = float(np.clip(base / 700.0, 0.8, 5.0))
+    radius_px = int(np.clip(round(base / 100), 2.0, 30))
+    # print(f"[Style] {style} → thickness={thickness}, font_scale={font_scale:.2f}, radius_px={radius_px}")
     return thickness, font_scale, radius_px
 
 def draw_hallmarks_values_on_image(
@@ -49,12 +50,19 @@ def draw_hallmarks_values_on_image(
     lgi: float | None = None,
     compactness: float | None = None,
     unit: str = "mm",
+    box_position: str | None = "topleft",
     anchor_ratio: tuple[float, float] = (0.02, 0.05),
     anchor_px: tuple[int, int] | None = None,
     margin: int | None = None,
     margin_ratio: float = 0.012,
 ) -> np.ndarray:
-    """Draw Area/Perimeter/LGI/Compactness as a non-overlapping text block."""
+    """Draw Area/Perimeter/LGI/Compactness as a non-overlapping text block.
+
+    Args:
+        box_position: Preset for textbox placement:
+            "topleft", "topright", "bottomleft", "bottomright", "center".
+            If unknown, placement falls back to anchor settings.
+    """
     if bgr is None or not isinstance(bgr, np.ndarray) or bgr.ndim != 3:
         return bgr
 
@@ -84,16 +92,65 @@ def draw_hallmarks_values_on_image(
     if not lines:
         return out
 
-    sizes = [cv2.getTextSize(t, font, font_scale, thickness) for t in lines]
-    text_w = max(s[0][0] for s in sizes)
-    line_h = max(s[0][1] + s[1] for s in sizes)
-    line_gap = max(2, int(round(line_h * 0.25)))
 
-    box_w = text_w + 2 * margin
-    box_h = (line_h * len(lines)) + (line_gap * (len(lines) - 1)) + 2 * margin
+
+    def _box_metrics(fs: float) -> tuple[int, int, int, int]:
+        sizes = [cv2.getTextSize(t, font, fs, thickness) for t in lines]
+        tw = max(s[0][0] for s in sizes)
+        lh = max(s[0][1] + s[1] for s in sizes)
+        lg = max(2, int(round(lh * 0.25)))
+        bw = tw + 2 * margin
+        bh = (lh * len(lines)) + (lg * (len(lines) - 1)) + 2 * margin
+        return tw, lh, lg, bw, bh
+
+    # Keep textbox width within 15%..30% of image width by scaling font size.
+    min_ratio, max_ratio = 0.15, 0.30
+    text_w, line_h, line_gap, box_w, box_h = _box_metrics(float(font_scale))
+    # Skip overlay when image is extremely small relative to the text block.
+    # Rule: if the box dimension is smaller than one-quarter of any image dimension.
+
+    if w > 0:
+        if box_w > w/2 or box_h > h/2:
+            return out
+        else:
+            ratio = box_w / float(w)
+            # Shrink/grow gradually until textbox width ratio fits the target band.
+            n_iter = 0
+            while ratio > max_ratio and font_scale > 0.3 and n_iter < 40:
+                font_scale = max(0.3, float(font_scale) * 0.9)
+                text_w, line_h, line_gap, box_w, box_h = _box_metrics(font_scale)
+                ratio = box_w / float(w)
+                n_iter += 1
+
+            n_iter = 0
+            while ratio < min_ratio and font_scale < 8.0 and n_iter < 40:
+                font_scale = min(8.0, float(font_scale) * 1.1)
+                text_w, line_h, line_gap, box_w, box_h = _box_metrics(font_scale)
+                # Bail out if growing would dominate a very small image.
+                if box_w > w/2 or box_h > h/2:
+                    return out
+                ratio = box_w / float(w)
+                n_iter += 1
+
 
     if anchor_px is not None:
         x1, y1 = int(anchor_px[0]), int(anchor_px[1])
+    elif isinstance(box_position, str):
+        pos = box_position.strip().lower()
+        if pos == "topleft":
+            x1, y1 = margin, margin
+        elif pos == "topright":
+            x1, y1 = w - box_w - margin, margin
+        elif pos == "bottomleft":
+            x1, y1 = margin, h - box_h - margin
+        elif pos == "bottomright":
+            x1, y1 = w - box_w - margin, h - box_h - margin
+        elif pos == "center":
+            x1, y1 = (w - box_w) // 2, (h - box_h) // 2
+        else:
+            rx = float(np.clip(anchor_ratio[0], 0.0, 1.0))
+            ry = float(np.clip(anchor_ratio[1], 0.0, 1.0))
+            x1, y1 = int(round(w * rx)), int(round(h * ry))
     else:
         rx = float(np.clip(anchor_ratio[0], 0.0, 1.0))
         ry = float(np.clip(anchor_ratio[1], 0.0, 1.0))

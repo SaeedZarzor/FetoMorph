@@ -24,7 +24,7 @@ import pyvista as pv
 from PySide6.QtWidgets import QMessageBox
 
 logger = logging.getLogger("fetomorph.vtk")
-from helpers.Helpers import compute_kernel_convex, contours_exclude, calc_scale, get_red_rect_offset, slice_at, make_scale_cube, compactness_3D, compactness_2D
+from helpers.Helpers import compute_kernel_convex, contours_exclude, calc_scale, get_red_rect_offset, slice_at, make_scale_cube, compactness_3D, compactness_2D, image_annotation_style
 from helpers.check_mesh import check_brain
 from typing import Any, Literal, Sequence
 from constants import BINARY_THRESHOLD_VTK, RED_CHANNEL_MIN, GREEN_CHANNEL_MAX, DEFECT_FIXED_POINT
@@ -147,6 +147,8 @@ def compute_vtk_allmarks(
         mm_per_px = calc_scale(img_rgb, cube_len*mesh_dim_scaled[0])
 
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        h_img, w_img = bgr.shape[:2]
+        thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
@@ -159,14 +161,14 @@ def compute_vtk_allmarks(
         # Exclude red reference-cube contours from brain measurements.
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
         kernel = compute_kernel_convex(max(1, int(kernel_size)))
         closed = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel)
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         outer_candidates = contours_exclude(outer_candidates, red_rect, bw.shape)
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), 1)
+        cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), thickness)
 
         area_perim_px  = sum(cv2.contourArea(c)     for c in inner_filtered)
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
@@ -189,10 +191,10 @@ def compute_vtk_allmarks(
                             start = tuple(cnt[s][0])
                             end = tuple(cnt[e][0])
                             far = tuple(cnt[f][0])
-                            bgr = cv2.line(bgr, start, end, [255, 0, 0], 1)
+                            bgr = cv2.line(bgr, start, end, [255, 0, 0], thickness)
                             if d > DEFECT_FIXED_POINT:
                                 depth_mm = d * mm_per_px / DEFECT_FIXED_POINT
-                                bgr = cv2.circle(bgr, far, 2, [255, 255, 0], -1)
+                                bgr = cv2.circle(bgr, far, radius_px, [255, 255, 0], -1)
                                 depth.append(depth_mm)
                 
         mean_depth = (sum(depth)/len(depth)) if depth else None
@@ -371,6 +373,8 @@ def compute_vtk_lGI(
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        h_img, w_img = bgr.shape[:2]
+        thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
@@ -383,7 +387,7 @@ def compute_vtk_lGI(
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
         # Outer contours via morph close, exclude red + area filter
         kernel = compute_kernel_convex(max(1, int(kernel_size)))
@@ -391,7 +395,7 @@ def compute_vtk_lGI(
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         outer_candidates = contours_exclude(outer_candidates, red_rect, bw.shape)
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), 1)
+        cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), thickness)
 
         # Perimeters (mm)
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
@@ -556,6 +560,8 @@ def compute_vtk_volume(
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        h_img, w_img = bgr.shape[:2]
+        thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
@@ -568,7 +574,7 @@ def compute_vtk_volume(
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 255, 255), 2)
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 255, 255), thickness)
 
         
 
@@ -726,6 +732,8 @@ def compute_vtk_area(
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        h_img, w_img = bgr.shape[:2]
+        thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
@@ -738,7 +746,7 @@ def compute_vtk_area(
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
         # Perimeters (mm)
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
@@ -895,6 +903,8 @@ def compute_vtk_sulci_depth(
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        h_img, w_img = bgr.shape[:2]
+        thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
@@ -907,7 +917,7 @@ def compute_vtk_sulci_depth(
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
         depth = []
         if inner_filtered:
@@ -921,10 +931,10 @@ def compute_vtk_sulci_depth(
                             start = tuple(cnt[s][0])
                             end = tuple(cnt[e][0])
                             far = tuple(cnt[f][0])
-                            bgr = cv2.line(bgr, start, end, [255, 0, 0], 1)
+                            bgr = cv2.line(bgr, start, end, [255, 0, 0], thickness)
                             if d > DEFECT_FIXED_POINT:
                                 depth_mm = d * mm_per_px / DEFECT_FIXED_POINT
-                                bgr = cv2.circle(bgr, far, 2, [255, 255, 0], -1)
+                                bgr = cv2.circle(bgr, far, radius_px, [255, 255, 0], -1)
                                 depth.append(depth_mm)
                 
         mean_depth = (sum(depth)/len(depth)) if depth else None
@@ -1072,6 +1082,8 @@ def compute_compactness_vtk(parent,
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        h_img, w_img = bgr.shape[:2]
+        thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
@@ -1084,7 +1096,7 @@ def compute_compactness_vtk(parent,
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
         # Convert pixel measurements to physical units
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)

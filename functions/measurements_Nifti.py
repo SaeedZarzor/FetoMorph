@@ -25,7 +25,7 @@ from PySide6.QtWidgets import QMessageBox
 
 logger = logging.getLogger("fetomorph.nifti")
 from scipy.ndimage import binary_opening, binary_closing, label
-from helpers.Helpers import compute_kernel_convex, defect_mm_per_px_and_fixed
+from helpers.Helpers import compute_kernel_convex, defect_mm_per_px_and_fixed, image_annotation_style
 from nibabel.affines import apply_affine
 from constants import DEFECT_FIXED_POINT
 
@@ -176,8 +176,10 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
             # Create a grayscale image for visualization
             annotated = np.stack([slice_mask * 255] * 3, axis=-1)  # Convert binary mask to RGB
             annotated = annotated.reshape((annotated.shape[0], annotated.shape[1], 3))
-            cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), 1)  # Red contours (original)
-            cv2.drawContours(annotated, filtered_outer_contours, -1, (0, 255, 0), 1)  # green
+            h_img, w_img = annotated.shape[:2]
+            thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
+            cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)  # Red contours (original)
+            cv2.drawContours(annotated, filtered_outer_contours, -1, (0, 255, 0), thickness)  # green
             
             depth = []
             if filtered_contours:
@@ -191,7 +193,7 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                                 start = tuple(cnt[s][0])
                                 end = tuple(cnt[e][0])
                                 far = tuple(cnt[f][0])
-                                annotated = cv2.line(annotated, start, end, [255, 0, 0], 1)
+                                annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
                                 if d > DEFECT_FIXED_POINT:
                                     if pixel_size_x!=pixel_size_z:
                                         mm_per_px, mm_per_fixed = defect_mm_per_px_and_fixed(start, end, far, pixel_size_x, pixel_size_z)
@@ -203,7 +205,7 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                                     # Depth filter: keep defects between 0.5% and 25% of
                                     # brain IS-extent.  dims[2] is in cm, ×10 → mm.
                                     if depth_mm < (0.25* dims[2]*10)  and depth_mm > (0.005* dims[2]*10):
-                                        annotated = cv2.circle(annotated, far, 2, [255, 255, 0], -1)
+                                        annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
                                         depth.append(depth_mm)
 
             mean_depth = (sum(depth)/len(depth)) if depth else None
@@ -480,7 +482,9 @@ def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[
             # Create a grayscale image for visualization
             annotated = np.stack([slice_mask * 255] * 3, axis=-1)  # Convert binary mask to RGB
             annotated = annotated.reshape((annotated.shape[0], annotated.shape[1], 3))
-            cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), 1)  # Red contours (original)
+            h_img, w_img = annotated.shape[:2]
+            thickness, _, _ = image_annotation_style(h_img, w_img, style="regular")
+            cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)  # Red contours (original)
                             
             sheet1.append([idx, inner_perimeter])
                     
@@ -624,8 +628,10 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
             # Create a grayscale image for visualization
             annotated = np.stack([slice_mask * 255] * 3, axis=-1)  # Convert binary mask to RGB
             annotated = annotated.reshape((annotated.shape[0], annotated.shape[1], 3))
-            cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), 1)  # Red contours (original)
-            cv2.drawContours(annotated, filtered_outer_contours, -1, (0, 255, 0), 1)  # green
+            h_img, w_img = annotated.shape[:2]
+            thickness, _, _ = image_annotation_style(h_img, w_img, style="regular")
+            cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)  # Red contours (original)
+            cv2.drawContours(annotated, filtered_outer_contours, -1, (0, 255, 0), thickness)  # green
 
 
                 
@@ -774,7 +780,9 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
             # Create a grayscale image for visualization
             annotated = np.stack([slice_mask * 255] * 3, axis=-1)  # Convert binary mask to RGB
             annotated = annotated.reshape((annotated.shape[0], annotated.shape[1], 3))
-            cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), 1)  # Red contours (original)
+            h_img, w_img = annotated.shape[:2]
+            thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
+            cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)  # Red contours (original)
                 
             depth = []
             if filtered_contours:
@@ -788,7 +796,7 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
                                 start = tuple(cnt[s][0])
                                 end = tuple(cnt[e][0])
                                 far = tuple(cnt[f][0])
-                                annotated = cv2.line(annotated, start, end, [255, 0, 0], 2)
+                                annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
                                 if d > DEFECT_FIXED_POINT:
                                     if pixel_size_x!=pixel_size_z:
                                         mm_per_px, mm_per_fixed = defect_mm_per_px_and_fixed(start, end, far, pixel_size_x, pixel_size_z)
@@ -798,7 +806,7 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
                                     depth_mm = d *mm_per_fixed
                                     
                                     if depth_mm < (0.25* dims[2]*10)  and depth_mm > (0.005* dims[2]*10):
-                                        annotated = cv2.circle(annotated, far, 2, [255, 255, 0], -1)
+                                        annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
                                         depth.append(depth_mm)
                                         
             total_depth.extend(depth)
@@ -841,6 +849,5 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
     else:
         QMessageBox.information(parent, "[NIfTI Sulci depth]", "All slices were filtered out (too small).")
         return
-
 
 

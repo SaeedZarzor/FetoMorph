@@ -1045,7 +1045,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     print("[Regions] Selected:", sorted(selected))
                 # Optional: refresh display
-                if hasattr(self, "show_nifti_slice"):
+                if hasattr(self, "view") and hasattr(self.view, "show_nifti_slice"):
                     idx2 = int(self.slice_slider.value()) if hasattr(self, "slice_slider") else 0
                     self.view.show_nifti_slice(idx2)
             self._regions_dock.applied.connect(on_apply)

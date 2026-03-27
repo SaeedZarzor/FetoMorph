@@ -59,7 +59,7 @@ def compute_image_allmarks(
    
     annotated = image.copy()
     W, H = annotated.shape[:2]
-    thickness, font_scale, radius_px = image_annotation_style(H, W, style="bold")
+    thickness, font_scale, radius_px = image_annotation_style(H, W, style="thin")
 
     if filtered_contours:
         cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
@@ -141,6 +141,7 @@ def compute_image_allmarks(
             lgi=perimeter_Rate,
             compactness=comp,
             unit=unit,
+            box_position="topleft",
             anchor_ratio=(0.02, 0.05),
         )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
@@ -193,6 +194,7 @@ def compute_image_perimeter(
             perimeter=perimeter,
             lgi=None,
             unit=unit,
+            box_position="topleft",
             anchor_ratio=(0.02, 0.05),
         )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
@@ -250,6 +252,7 @@ def compute_image_area(
             area=area_units2,
             lgi=None,
             unit=unit,
+            box_position="topleft",
             anchor_ratio=(0.02, 0.05),
         )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
@@ -350,6 +353,7 @@ def compute_image_lGI(
             thickness=thickness,
             lgi=perimeter_Rate,
             unit=unit,
+            box_position="topleft",
             anchor_ratio=(0.02, 0.05),
         )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
@@ -391,7 +395,7 @@ def compute_image_sulci_depth(
    
     annotated = image.copy()
     W, H = annotated.shape[:2]
-    thickness, font_scale, radius_px = image_annotation_style(H, W, style="regular")
+    thickness, font_scale, radius_px = image_annotation_style(H, W, style="bold")
     
     if filtered_contours:
         cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
@@ -469,6 +473,7 @@ def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> tuple
         annotated,
         thickness=thickness,
         compactness=compactness_2D_value,
+        box_position="topleft",
         anchor_ratio=(0.02, 0.05),
     )
 

@@ -25,7 +25,7 @@ import pyvista as pv
 from PySide6.QtWidgets import QMessageBox
 
 logger = logging.getLogger("fetomorph.stl")
-from helpers.Helpers import compute_kernel_convex, contours_exclude, calc_scale, get_red_rect_offset, make_scale_cube, compactness_2D, compactness_3D
+from helpers.Helpers import compute_kernel_convex, contours_exclude, calc_scale, get_red_rect_offset, make_scale_cube, compactness_2D, compactness_3D, image_annotation_style
 from helpers.check_mesh import check_brain
 from constants import BINARY_THRESHOLD_DEFAULT, RED_CHANNEL_MIN, GREEN_CHANNEL_MAX, DEFECT_FIXED_POINT
 
@@ -158,6 +158,8 @@ def compute_stl_allmarks(
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        h_img, w_img = bgr.shape[:2]
+        thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
@@ -170,7 +172,7 @@ def compute_stl_allmarks(
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
         # Outer contours via morph close, exclude red + area filter
         kernel = compute_kernel_convex(max(1, int(kernel_size)))
@@ -178,7 +180,7 @@ def compute_stl_allmarks(
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         outer_candidates = contours_exclude(outer_candidates, red_rect, bw.shape)
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), 1)
+        cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), thickness)
 
         # Perimeters (mm)
         area_px        = sum(cv2.contourArea(c)     for c in inner_filtered)
@@ -200,11 +202,11 @@ def compute_stl_allmarks(
                             start = tuple(cnt[s][0])
                             end = tuple(cnt[e][0])
                             far = tuple(cnt[f][0])
-                            bgr = cv2.line(bgr, start, end, [255, 0, 0], 1)
+                            bgr = cv2.line(bgr, start, end, [255, 0, 0], thickness)
                             if d > DEFECT_FIXED_POINT:
                                 depth_mm = d * mm_per_px / DEFECT_FIXED_POINT
                                 if depth_mm < (0.25 * max_dim) and depth_mm > (0.005* max_dim):
-                                    bgr = cv2.circle(bgr, far, 2, [255, 255, 0], -1)
+                                    bgr = cv2.circle(bgr, far, radius_px, [255, 255, 0], -1)
                                     depth.append(depth_mm)
                 
         mean_depth = (sum(depth)/len(depth)) if depth else None
@@ -403,6 +405,8 @@ def compute_stl_lGI(
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        h_img, w_img = bgr.shape[:2]
+        thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
@@ -415,7 +419,7 @@ def compute_stl_lGI(
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
         # Outer contours via morph close, exclude red + area filter
         kernel = compute_kernel_convex(max(1, int(kernel_size)))
@@ -423,7 +427,7 @@ def compute_stl_lGI(
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         outer_candidates = contours_exclude(outer_candidates, red_rect, bw.shape)
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), 1)
+        cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), thickness)
 
         # Perimeters (mm)
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
@@ -628,6 +632,8 @@ def compute_stl_volume(
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        h_img, w_img = bgr.shape[:2]
+        thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
@@ -640,7 +646,7 @@ def compute_stl_volume(
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
         # Perimeters (mm)
         area_px  = sum(cv2.contourArea(c)     for c in inner_filtered)
@@ -813,6 +819,8 @@ def compute_stl_area(
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        h_img, w_img = bgr.shape[:2]
+        thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
@@ -825,7 +833,7 @@ def compute_stl_area(
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
 
         # Perimeters (mm)
@@ -995,6 +1003,8 @@ def compute_stl_sulci_depth(
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        h_img, w_img = bgr.shape[:2]
+        thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
@@ -1007,7 +1017,7 @@ def compute_stl_sulci_depth(
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
         depth = []
         if inner_filtered:
@@ -1021,12 +1031,12 @@ def compute_stl_sulci_depth(
                             start = tuple(cnt[s][0])
                             end = tuple(cnt[e][0])
                             far = tuple(cnt[f][0])
-                            bgr = cv2.line(bgr, start, end, [255, 0, 0], 1)
+                            bgr = cv2.line(bgr, start, end, [255, 0, 0], thickness)
                             if d > DEFECT_FIXED_POINT:
                                 mm_per_fixed = mm_per_px / DEFECT_FIXED_POINT
                                 depth_mm = d *mm_per_fixed
                                 if depth_mm < (0.25* max_dim) and depth_mm > (0.005* max_dim):
-                                    bgr = cv2.circle(bgr, far, 2, [255, 255, 0], -1)
+                                    bgr = cv2.circle(bgr, far, radius_px, [255, 255, 0], -1)
                                     depth.append(depth_mm)
                 
         mean_depth = (sum(depth)/len(depth)) if depth else None
@@ -1199,6 +1209,8 @@ def compute_compactness_stl(
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        h_img, w_img = bgr.shape[:2]
+        thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
 
@@ -1211,7 +1223,7 @@ def compute_compactness_stl(
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), 1)
+        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
         # Convert pixel measurements to physical units
         area_px = sum(cv2.contourArea(c) for c in inner_filtered)
