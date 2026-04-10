@@ -233,7 +233,7 @@ def compute_stl_allmarks(
         # Slices that don't look like a full MRI fall back to the original
         # fixed-millimeter rule and stay "unclassified".
         slice_kind, slice_kind_conf = classify_slice_kind(bgr)
-        use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.6
+        use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.7
         # Sulci classification: bin each kept defect by its depth as a
         # fraction of `max_dim` (longest brain extent in mm).
         depth_sets = empty_depth_sets()
@@ -1056,7 +1056,7 @@ def compute_stl_sulci_depth(
 
         # Classify the rendered slice and gate the percent filter on it.
         slice_kind, slice_kind_conf = classify_slice_kind(bgr)
-        use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.6
+        use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.7
         # Sulci classification: bin each kept defect by its depth as a
         # fraction of `max_dim` (longest brain extent in mm).
         depth_sets = empty_depth_sets()

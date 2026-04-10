@@ -107,7 +107,7 @@ def process_on_images_batch(directory_path,
         # filter and per-defect classification; cropped bands fall back to the
         # original fixed-millimeter rule and remain "unclassified".
         slice_kind, slice_kind_conf = classify_slice_kind(image)
-        use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.6
+        use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.7
         # Slice length = longest side of the brain's bounding box (physical units),
         # not the raw image size. Falls back to image extent if no brain contour was found.
         if filtered_contours:
