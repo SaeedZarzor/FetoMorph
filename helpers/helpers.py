@@ -9,8 +9,158 @@ from __future__ import annotations
 
 from deps import *
 from functions.nifti_to_image import draw_new_scale_bar
+from constants import (
+    SULCUS_PRIMARY_MIN_FRACTION,
+    SULCUS_PRIMARY_MAX_FRACTION,
+    SULCUS_SECONDARY_MIN_FRACTION,
+    SULCUS_SECONDARY_MAX_FRACTION,
+    SULCUS_TERTIARY_MIN_FRACTION,
+    SULCUS_TERTIARY_MAX_FRACTION,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# Marker colours (BGR) used to draw classified sulci on annotated images.
+# Unclassified depths (in the filter window but outside every category)
+# get a neutral light-gray marker so they remain visually distinct.
+SULCUS_CLASS_COLORS = {
+    "primary":      (255,   0,   0),  # blue
+    "secondary":    (  0, 215, 255),  # gold
+    "tertiary":     (255, 255,   0),  # cyan
+    "unclassified": (200, 200, 200),  # light gray
+}
+
+
+def classify_sulcus_depth(depth_value: float, slice_length: float) -> str:
+    """Bin a sulcus depth into primary / secondary / tertiary by % of slice length.
+
+    Returns ``"unclassified"`` when the depth falls outside every range.
+    Only meaningful when ``slice_length`` is the longest side of the brain's
+    bounding box (or equivalent physical extent) in the same unit as
+    ``depth_value``.
+    """
+    if slice_length <= 0:
+        return "unclassified"
+    frac = depth_value / slice_length
+    if SULCUS_PRIMARY_MIN_FRACTION <= frac <= SULCUS_PRIMARY_MAX_FRACTION:
+        return "primary"
+    if SULCUS_SECONDARY_MIN_FRACTION <= frac < SULCUS_SECONDARY_MAX_FRACTION:
+        return "secondary"
+    if SULCUS_TERTIARY_MIN_FRACTION <= frac <= SULCUS_TERTIARY_MAX_FRACTION:
+        return "tertiary"
+    return "unclassified"
+
+
+def empty_depth_sets() -> dict:
+    """Return a fresh ``{primary, secondary, tertiary, unclassified}`` dict of lists."""
+    return {"primary": [], "secondary": [], "tertiary": [], "unclassified": []}
+
+
+def flatten_depth_sets(depth_sets: dict) -> list:
+    """Sort each class set descending and return one combined sorted list."""
+    for _k in depth_sets:
+        depth_sets[_k].sort(reverse=True)
+    flat = (
+        depth_sets["primary"]
+        + depth_sets["secondary"]
+        + depth_sets["tertiary"]
+        + depth_sets["unclassified"]
+    )
+    flat.sort(reverse=True)
+    return flat
+
+
+def format_sulcus_class_summary(depth_sets: dict) -> str:
+    """One-line console summary of per-class sulcus counts."""
+    return (
+        "Sulci classification: "
+        f"primary(blue)={len(depth_sets['primary'])}, "
+        f"secondary(gold)={len(depth_sets['secondary'])}, "
+        f"tertiary(cyan)={len(depth_sets['tertiary'])}, "
+        f"unclassified(light gray)={len(depth_sets['unclassified'])}"
+    )
+
+
+# ----------------------------------------------------------------------
+# Shared per-class sulcus export helpers
+# ----------------------------------------------------------------------
+
+SULCUS_CLASSES = ("primary", "secondary", "tertiary", "unclassified")
+
+
+def sulcus_export_columns(unit: str = "mm") -> list:
+    """Return the per-class sulcus column headers for an Excel export.
+
+    For each class (primary/secondary/tertiary/unclassified) we export:
+    a count, three raw value cells (``v1``..``v3``), and three summary
+    stats (``min``/``max``/``mean``). Whether the raw cells or the
+    summary cells are populated for a given row is decided per-row by
+    :func:`sulcus_export_cells` based on a 3-value threshold.
+    """
+    cols: list = []
+    for k in SULCUS_CLASSES:
+        prefix = k.capitalize()
+        cols.extend([
+            f"{prefix}_count",
+            f"{prefix}_v1_{unit}",
+            f"{prefix}_v2_{unit}",
+            f"{prefix}_v3_{unit}",
+            f"{prefix}_min_{unit}",
+            f"{prefix}_max_{unit}",
+            f"{prefix}_mean_{unit}",
+        ])
+    return cols
+
+
+def sulcus_export_cells(depth_sets: dict) -> list:
+    """Build the per-class cells for one row of an Excel export.
+
+    For each class:
+    - count cell holds ``len(values)``
+    - if count ≤ 3: the values populate ``v1``..``v3`` (padded with ``None``)
+      and the min/max/mean cells are ``None``
+    - if count > 3: ``v1``..``v3`` are ``None`` and min/max/mean hold the
+      summary stats
+    """
+    cells: list = []
+    for k in SULCUS_CLASSES:
+        vals = list(depth_sets.get(k, []))
+        n = len(vals)
+        cells.append(n)
+        if n <= 3:
+            padded = (vals + [None, None, None])[:3]
+            cells.extend(padded)
+            cells.extend([None, None, None])
+        else:
+            cells.extend([None, None, None])
+            cells.extend([min(vals), max(vals), sum(vals) / n])
+    return cells
+
+
+def pad_row(row, width: int) -> list:
+    """Pad a ragged summary row to a fixed DataFrame width with ``None``s."""
+    return list(row) + [None] * (width - len(row))
+
+
+def drop_empty_columns(df):
+    """Drop any DataFrame column whose every cell is ``None`` / ``NaN`` / ``""``.
+
+    ``0`` counts as a real value (e.g. a per-class ``_count`` of zero is
+    informative). No column is special-cased: every column is checked.
+    """
+    keep_cols: list = []
+    for col in df.columns:
+        for v in df[col]:
+            if v is None:
+                continue
+            if isinstance(v, float) and np.isnan(v):
+                continue
+            if v == "":
+                continue
+            keep_cols.append(col)
+            break
+    return df[keep_cols]
 
 def image_annotation_style(
     h: int,

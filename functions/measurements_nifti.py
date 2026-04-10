@@ -17,8 +17,22 @@ from __future__ import annotations
 from deps import *
 from scipy.ndimage import binary_opening, binary_closing, label
 from nibabel.affines import apply_affine
-from helpers.helpers import compute_kernel_convex, defect_mm_per_px_and_fixed, image_annotation_style
-from constants import DEFECT_FIXED_POINT
+from helpers.helpers import (
+    compute_kernel_convex,
+    defect_mm_per_px_and_fixed,
+    image_annotation_style,
+    SULCUS_CLASS_COLORS,
+    SULCUS_CLASSES,
+    classify_sulcus_depth,
+    empty_depth_sets,
+    flatten_depth_sets,
+    format_sulcus_class_summary,
+    sulcus_export_columns,
+    sulcus_export_cells,
+    pad_row,
+    drop_empty_columns,
+)
+from constants import DEFECT_FIXED_POINT, SULCUS_TERTIARY_MIN_FRACTION, SULCUS_PRIMARY_MAX_FRACTION
 
 logger = logging.getLogger("fetomorph.nifti")
 
@@ -132,8 +146,9 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
     valid_slices = []
     saved_pngs = []
     total_depth = []
-    
-    
+    slice_class_data: list = []
+
+
     # Loop through all slices and save each as an image
     if len(brain_slices) > 0:
         for idx in brain_slices:  # Iterate over slices (z-dimension)
@@ -174,7 +189,12 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
             cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)  # Red contours (original)
             cv2.drawContours(annotated, filtered_outer_contours, -1, (0, 255, 0), thickness)  # green
             
-            depth = []
+            # Sulci classification: bin each kept defect by its depth as a
+            # fraction of the brain's IS-extent (mm). All four sets are
+            # flattened back into `depth` so the rest of the pipeline keeps
+            # working unchanged.
+            _is_extent_mm = dims[2] * 10
+            depth_sets = empty_depth_sets()
             if filtered_contours:
                 for cnt in filtered_contours:
                     hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)  # Compute convex hull
@@ -194,20 +214,27 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                                         mm_per_fixed = pixel_size_x / DEFECT_FIXED_POINT
 
                                     depth_mm = d *mm_per_fixed
-                                    
-                                    # Depth filter: keep defects between 0.5% and 25% of
-                                    # brain IS-extent.  dims[2] is in cm, ×10 → mm.
-                                    if depth_mm < (0.25* dims[2]*10)  and depth_mm > (0.005* dims[2]*10):
-                                        annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
-                                        depth.append(depth_mm)
 
+                                    # Depth filter: keep defects within
+                                    # SULCI_DEPTH_MIN_FRACTION..SULCI_DEPTH_MAX_FRACTION
+                                    # of brain IS-extent. dims[2] is in cm, ×10 → mm.
+                                    if (SULCUS_TERTIARY_MIN_FRACTION * _is_extent_mm) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * _is_extent_mm):
+                                        sulcus_class = classify_sulcus_depth(depth_mm, _is_extent_mm)
+                                        marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                                        depth_sets[sulcus_class].append(depth_mm)
+                                        annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
+
+            depth = flatten_depth_sets(depth_sets)
+            print(f"[NIfTI allmarks] slice {idx}: {format_sulcus_class_summary(depth_sets)}")
             mean_depth = (sum(depth)/len(depth)) if depth else None
             total_depth.extend(depth)
+            slice_class_data.append(depth_sets)
             sheet1.append([idx, slice_area, inner_perimeter, outer_perimeter,
                 len(depth),                         # n_defects
                 (min(depth) if depth else None),    # min_depth_mm
                 (max(depth) if depth else None),    # max_depth_mm
-                mean_depth                          # mean_depth_mm
+                mean_depth,                         # mean_depth_mm
+                *sulcus_export_cells(depth_sets),
                 ])
 
             slice_path = os.path.join(out_dir_slices, f"brain_slice_{idx:03d}.png")
@@ -223,18 +250,49 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
         # then /100 → cm².
         Area = sum_inner * pixel_size_y /100
         GI_total = sum_inner / sum_outer if sum_outer > 0 else 0
+        # Snapshot mm-unit depths for the per-mm Excel summary row before
+        # the in-place cm conversion below.
+        total_depth_mm = list(total_depth)
         # Convert depth values from mm to cm for reporting.
         total_depth = [x / 10 for x in total_depth]
-    
-        mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
-        
-        sheet1.append(["Volume cm^3",round(brain_volume,2), "Surface Area cm^2",round(Area,2)])
-        sheet1.append(["GI",round(GI_total,2)])
-        sheet1.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices_cm",(round(mean_total, 2) if mean_total is not None else None)])
-        sheet1.append(["Max_sulci_across_slices_cm",(round(max(total_depth),2) if total_depth else None),
-        "Min_sulci_across_slices_cm",(round(min(total_depth),2) if total_depth else None)])
 
-        df = pd.DataFrame(sheet1, columns=["Slice", "Inner_area_mm^2" ,"Inner_Perimeter_mm", "Outer_Perimeter_mm", "Sulci_count", "min_depth_mm", "max_depth_mm", "mean_depth_mm"])
+        # Build the integrated Sulci_overall_summary row.
+        base_cols = [
+            "Slice", "Inner_area_mm^2", "Inner_Perimeter_mm", "Outer_Perimeter_mm",
+            "Sulci_count", "min_depth_mm", "max_depth_mm", "mean_depth_mm",
+        ]
+        per_class_cols = sulcus_export_columns("mm")
+        cols = base_cols + per_class_cols
+        total_width = len(cols)
+
+        overall_depth_sets = empty_depth_sets()
+        for dsets in slice_class_data:
+            if dsets is None:
+                continue
+            for k in SULCUS_CLASSES:
+                overall_depth_sets[k].extend(dsets.get(k, []))
+
+        overall_n = len(total_depth_mm)
+        overall_min = min(total_depth_mm) if total_depth_mm else None
+        overall_max = max(total_depth_mm) if total_depth_mm else None
+        overall_mean = (sum(total_depth_mm) / overall_n) if overall_n else None
+
+        summary_base = [None] * len(base_cols)
+        summary_base[0] = "Sulci_overall_summary"
+        summary_base[base_cols.index("Sulci_count")]    = overall_n
+        summary_base[base_cols.index("min_depth_mm")]   = overall_min
+        summary_base[base_cols.index("max_depth_mm")]   = overall_max
+        summary_base[base_cols.index("mean_depth_mm")]  = overall_mean
+        sheet1.append(pad_row(
+            [*summary_base, *sulcus_export_cells(overall_depth_sets)],
+            total_width,
+        ))
+
+        sheet1.append(pad_row(["Volume cm^3", round(brain_volume, 2), "Surface Area cm^2", round(Area, 2)], total_width))
+        sheet1.append(pad_row(["GI", round(GI_total, 2)], total_width))
+
+        df = pd.DataFrame(sheet1, columns=cols)
+        df = drop_empty_columns(df)
         xlsx_path = os.path.join(out_dir, "Brain_Allmarks.xlsx")
         df.to_excel(xlsx_path, index=False)
             
@@ -750,8 +808,9 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
     valid_slices = []
     saved_pngs = []
     total_depth = []
-    
-    
+    slice_class_data: list = []
+
+
     # Loop through all slices and save each as an image
     if len(brain_slices) > 0:
         for idx in brain_slices:  # Iterate over slices (z-dimension)
@@ -764,7 +823,7 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
 #            else:
             valid_slices.append(idx)
 
-                
+
             # Inner contour
             inner_contours, _ = cv2.findContours(slice_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             filtered_contours = [cnt for cnt in inner_contours if cv2.contourArea(cnt) > min_contour_area]
@@ -777,7 +836,10 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
             thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
             cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)  # Red contours (original)
                 
-            depth = []
+            # Sulci classification: bin each kept defect by its depth as a
+            # fraction of the brain's IS-extent (mm).
+            _is_extent_mm = dims[2] * 10
+            depth_sets = empty_depth_sets()
             if filtered_contours:
                 for cnt in filtered_contours:
                     hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)  # Compute convex hull
@@ -797,34 +859,70 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
                                         mm_per_fixed = pixel_size_x / DEFECT_FIXED_POINT
 
                                     depth_mm = d *mm_per_fixed
-                                    
-                                    if depth_mm < (0.25* dims[2]*10)  and depth_mm > (0.005* dims[2]*10):
-                                        annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
-                                        depth.append(depth_mm)
-                                        
+
+                                    # Depth filter: keep defects within
+                                    # SULCI_DEPTH_MIN_FRACTION..SULCI_DEPTH_MAX_FRACTION
+                                    # of brain IS-extent. dims[2] is in cm, ×10 → mm.
+                                    if (SULCI_DEPTH_MIN_FRACTION * _is_extent_mm) < depth_mm < (SULCI_DEPTH_MAX_FRACTION * _is_extent_mm):
+                                        sulcus_class = classify_sulcus_depth(depth_mm, _is_extent_mm)
+                                        marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                                        depth_sets[sulcus_class].append(depth_mm)
+                                        annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
+
+            depth = flatten_depth_sets(depth_sets)
+            print(f"[NIfTI sulci] slice {idx}: {format_sulcus_class_summary(depth_sets)}")
             total_depth.extend(depth)
+            slice_class_data.append(depth_sets)
             mean_depth = (sum(depth)/len(depth)) if depth else None
-            
+
             sheet1.append([idx,
                 len(depth),                         # n_defects
                 (min(depth) if depth else None),    # min_depth_mm
                 (max(depth) if depth else None),    # max_depth_mm
-                mean_depth                          # mean_depth_mm
+                mean_depth,                         # mean_depth_mm
+                *sulcus_export_cells(depth_sets),
                 ])
                     
             slice_path = os.path.join(out_dir_slices, f"brain_slice_{idx:03d}.png")
             cv2.imwrite(slice_path, annotated)
             saved_pngs.append(slice_path)
         
+        # Snapshot mm-unit depths for the per-mm Excel summary row before
+        # the in-place cm conversion below (which only affects the value
+        # returned to the dispatcher).
+        total_depth_mm = list(total_depth)
         total_depth = [x / 10 for x in total_depth]
-    
-        mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
-        
-        sheet1.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices_cm",(round(mean_total, 2) if mean_total is not None else None)])
-        sheet1.append(["Max_sulci_across_slices_cm",(round(max(total_depth),2) if total_depth else None),
-        "Min_sulci_across_slices_cm",(round(min(total_depth),2) if total_depth else None)])
 
-        df = pd.DataFrame(sheet1, columns=["Slice","Sulci_count", "min_depth_mm", "max_depth_mm", "mean_depth_mm"])
+        base_cols = ["Slice", "Sulci_count", "min_depth_mm", "max_depth_mm", "mean_depth_mm"]
+        per_class_cols = sulcus_export_columns("mm")
+        cols = base_cols + per_class_cols
+        total_width = len(cols)
+
+        overall_depth_sets = empty_depth_sets()
+        for dsets in slice_class_data:
+            if dsets is None:
+                continue
+            for k in SULCUS_CLASSES:
+                overall_depth_sets[k].extend(dsets.get(k, []))
+
+        overall_n = len(total_depth_mm)
+        overall_min = min(total_depth_mm) if total_depth_mm else None
+        overall_max = max(total_depth_mm) if total_depth_mm else None
+        overall_mean = (sum(total_depth_mm) / overall_n) if overall_n else None
+
+        summary_base = [None] * len(base_cols)
+        summary_base[0] = "Sulci_overall_summary"
+        summary_base[base_cols.index("Sulci_count")]   = overall_n
+        summary_base[base_cols.index("min_depth_mm")]  = overall_min
+        summary_base[base_cols.index("max_depth_mm")]  = overall_max
+        summary_base[base_cols.index("mean_depth_mm")] = overall_mean
+        sheet1.append(pad_row(
+            [*summary_base, *sulcus_export_cells(overall_depth_sets)],
+            total_width,
+        ))
+
+        df = pd.DataFrame(sheet1, columns=cols)
+        df = drop_empty_columns(df)
         xlsx_path = os.path.join(out_dir, "Brain_Sulci.xlsx")
         df.to_excel(xlsx_path, index=False)
             

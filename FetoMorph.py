@@ -841,7 +841,7 @@ class MainWindow(QMainWindow):
     
     def reset_view(self):
         """Reload the original file, clear all on-screen annotations, and reset navigation."""
-        for meth in ("cancel_square_selection", "cancel_scalebar_measure", "clear_annotations"):
+        for meth in ("cancel_square_selection", "cancel_scalebar_measure", "clear_annotations", "clear_line_annotations"):
             if hasattr(self.image_label, meth):
                 getattr(self.image_label, meth)()
 

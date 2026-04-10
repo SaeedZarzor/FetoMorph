@@ -151,7 +151,12 @@ class MetricsStore:
                 "Volume": None,
                 "Perimeter": None,
                 "Perimeter_convex": None,
+                "SliceKind": None,
                 "SulciCount": None,
+                "PrimarySulciCount": None,
+                "SecondarySulciCount": None,
+                "TertiarySulciCount": None,
+                "UnclassifiedSulciCount": None,
                 "MinDepth": None,
                 "MaxDepth": None,
                 "MeanDepth": None,
@@ -204,6 +209,10 @@ class MetricsStore:
             new_on_param_change=True,
         )
 
+        sk = vals.pop("slice_kind", None)
+        if sk is not None:
+            row["SliceKind"] = sk
+
         sd = vals.pop("sulci_depth", None)
         if sd is not None:
             if isinstance(sd, (list, tuple)):
@@ -217,6 +226,13 @@ class MetricsStore:
                     row["MeanDepth"] = sum(sd) / n
             else:
                 raise ValueError("sulci_depth must be an iterable")
+
+        sds = vals.pop("sulci_depth_sets", None)
+        if sds is not None and isinstance(sds, dict):
+            row["PrimarySulciCount"] = len(sds.get("primary", []))
+            row["SecondarySulciCount"] = len(sds.get("secondary", []))
+            row["TertiarySulciCount"] = len(sds.get("tertiary", []))
+            row["UnclassifiedSulciCount"] = len(sds.get("unclassified", []))
 
         ld = vals.pop("dimensions", None)
         if ld is not None:
@@ -256,7 +272,10 @@ class MetricsStore:
             "PixelSize", "PixelSizeUnits", "KernelSize", "LengthUnit", "SliceThickness",
             "Length(PA)", "Width(LR)", "Height(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciCount", "MinDepth", "MaxDepth", "MeanDepth",
+            "SliceKind",
+            "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
+            "TertiarySulciCount", "UnclassifiedSulciCount",
+            "MinDepth", "MaxDepth", "MeanDepth",
             "LGI", "Compactness",
         ]
 
@@ -375,7 +394,10 @@ class MetricsStore:
             "PixelSize", "PixelSizeUnits", "KernelSize", "LengthUnit", "SliceThickness",
             "Length(PA)", "Width(LR)", "Height(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciCount", "MinDepth", "MaxDepth", "MeanDepth",
+            "SliceKind",
+            "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
+            "TertiarySulciCount", "UnclassifiedSulciCount",
+            "MinDepth", "MaxDepth", "MeanDepth",
             "LGI", "Compactness",
         ]
         cols = base_cols + metric_cols
@@ -408,7 +430,9 @@ class MetricsStore:
             "PixelSize", "KernelSize", "SliceThickness",
             "Length(PA)", "Width(LR)", "Height(IS)",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciCount", "MinDepth", "MaxDepth", "MeanDepth",
+            "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
+            "TertiarySulciCount", "UnclassifiedSulciCount",
+            "MinDepth", "MaxDepth", "MeanDepth",
             "LGI", "Compactness",
         ]
         has_any_metric = df[real_metric_cols].notna().any(axis=1)

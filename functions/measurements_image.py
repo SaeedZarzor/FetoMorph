@@ -10,8 +10,26 @@ All pixel → physical-unit conversions use ``pixel_size`` (mm/px).
 from __future__ import annotations
 
 from deps import *
-from helpers.helpers import image_annotation_style, compute_kernel_convex, compactness_2D, _add_scalebar_on_annotated, draw_hallmarks_values_on_image
-from constants import BINARY_THRESHOLD_DEFAULT, DEFECT_FIXED_POINT
+from helpers.helpers import (
+    image_annotation_style,
+    compute_kernel_convex,
+    compactness_2D,
+    _add_scalebar_on_annotated,
+    draw_hallmarks_values_on_image,
+    SULCUS_CLASS_COLORS,
+    classify_sulcus_depth,
+    empty_depth_sets,
+    flatten_depth_sets,
+    format_sulcus_class_summary,
+)
+from helpers.slice_kind_classifier import classify_slice_kind, SliceKind
+from constants import (
+    BINARY_THRESHOLD_DEFAULT,
+    DEFECT_FIXED_POINT,
+    MIN_PIXEL_SIZE_FOR_DEPTH_LABELS,
+    SULCUS_PRIMARY_MAX_FRACTION,
+    SULCUS_TERTIARY_MIN_FRACTION,
+)
 
 
 def compute_image_allmarks(
@@ -22,7 +40,7 @@ def compute_image_allmarks(
     unit: str = "mm",
     add_scalebar: bool | None = True,
     draw_hallmarks: bool = True,
-) -> tuple[float, float, float, float, float, list, np.ndarray]:
+) -> tuple[float, float, float, float, float, list, dict, np.ndarray, SliceKind]:
     """Compute all hallmarks (area, perimeters, GI, sulci depths) from an image.
 
     Pipeline:
@@ -41,7 +59,8 @@ def compute_image_allmarks(
         draw_hallmarks: If True, draw hallmark numeric values on the image.
 
     Returns:
-        Tuple of ``(area, perimeter, perimeter_convex, GI, depths, annotated_bgr)``.
+        Tuple of ``(area, perimeter, perimeter_convex, GI, compactness,
+        depths, depth_sets, annotated_bgr, slice_kind)``.
     """
     margin = 6
 
@@ -59,6 +78,24 @@ def compute_image_allmarks(
     annotated = image.copy()
     W, H = annotated.shape[:2]
     thickness, font_scale, radius_px = image_annotation_style(H, W, style="thin")
+
+    # If the input is a full MRI slice (sagittal/coronal/axial), depth defects
+    # are filtered as a fraction of the slice's largest in-plane physical
+    # extent (mirrors the 0.5%-25% rule used in measurements_nifti.py:198).
+    # Cropped sub-slice bands fall back to the original fixed-millimeter rule.
+    slice_kind, slice_kind_conf = classify_slice_kind(image)
+    use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.6
+    print(f"Classified slice kind: {slice_kind} (confidence {slice_kind_conf:.2f}), using {'percent' if use_percent_filter else 'fixed'} filter for sulci depth.")
+    # Slice length = longest side of the brain's bounding box (physical units),
+    # not the raw image size. Falls back to image extent if no brain contour was found.
+    if filtered_contours:
+        _bx, _by, _bw_px, _bh_px = cv2.boundingRect(np.vstack(filtered_contours))
+        slice_length = max(_bw_px, _bh_px) * pixel_size
+    else:
+        slice_length = max(W, H) * pixel_size
+
+    if use_percent_filter:
+        print(f"The sulcus depth filter thresholds are {(SULCUS_TERTIARY_MIN_FRACTION * slice_length):.2f} {unit} (min) and {(SULCUS_PRIMARY_MAX_FRACTION * slice_length):.2f} {unit} (max).")
 
     if filtered_contours:
         cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
@@ -93,7 +130,10 @@ def compute_image_allmarks(
     comp = compactness_2D(area, perimeter) 
 
     # --- Sulci depth via convexity defects ---
-    depth = []
+    # When use_percent_filter is True (full MRI slices), depths are split into
+    # four named sets (primary / secondary / tertiary / unclassified). The flat
+    # `depth` list returned to the dispatcher is the union of all four.
+    depth_sets = empty_depth_sets()
     for cnt in filtered_contours:
         hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
         if hull is not None and len(hull) >= 3 and len(cnt) > 3 and np.all(np.diff(hull.ravel()) > 0):
@@ -108,27 +148,46 @@ def compute_image_allmarks(
                     end = tuple(cnt[e][0])
                     far = tuple(cnt[f][0])
                     annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
-                    # Convert fixed-point depth to mm; keep only defects > 0.5 mm
+                    # Convert fixed-point depth to physical units. Full MRI
+                    # slices use a percent-of-slice-length window; cropped
+                    # bands keep the original fixed-millimeter threshold.
                     depth_value = d * pixel_size / DEFECT_FIXED_POINT
-                    if (depth_value) > 0.5:
-                        annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
-                        depth.append(depth_value)
-                        label = f"{depth_value:.2f} {unit}"
-                        tx = min(max(0, int(far[0] + radius_px + 4)), max(0, W - 1))
-                        ty = min(max(0, int(far[1] - radius_px - 4)), max(0, H - 1))
-                        cv2.putText(
-                            annotated,
-                            label,
-                            (tx, ty),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            font_scale * 0.75,
-                            (255, 255, 0),
-                            max(1, thickness - 1),
-                            cv2.LINE_AA,
-                        )
+                    if use_percent_filter:
+                        keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length)
+                    else:
+                        keep = depth_value > (0.5 if unit == "mm" else 0.05 if unit == "cm" else 0)
 
+                    # Classify by % of slice_length (full MRI slices only).
+                    if keep:
+                        if use_percent_filter:
+                            sulcus_class = classify_sulcus_depth(depth_value, slice_length)
+                        else:
+                            sulcus_class = "unclassified"
 
-            depth.sort(reverse=True)
+                        marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                        depth_sets[sulcus_class].append(depth_value)
+                        annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
+                        # Skip numeric labels when pixel_size is small (dense
+                        # images would otherwise be cluttered by overlapping
+                        # text); the marker circle is still drawn.
+                        if pixel_size <= MIN_PIXEL_SIZE_FOR_DEPTH_LABELS:
+                            label = f"{depth_value:.2f} {unit}"
+                            tx = min(max(0, int(far[0] + radius_px + 4)), max(0, W - 1))
+                            ty = min(max(0, int(far[1] - radius_px - 4)), max(0, H - 1))
+                            cv2.putText(
+                                annotated,
+                                label,
+                                (tx, ty),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                font_scale * 0.75,
+                                marker_color,
+                                max(1, thickness - 1),
+                                cv2.LINE_AA,
+                            )
+
+    depth = flatten_depth_sets(depth_sets)
+    if use_percent_filter:
+        print(format_sulcus_class_summary(depth_sets))
 
     if draw_hallmarks:
         annotated = draw_hallmarks_values_on_image(
@@ -144,7 +203,7 @@ def compute_image_allmarks(
             anchor_ratio=(0.02, 0.05),
         )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
-    return area, perimeter, perimeter_convex ,perimeter_Rate, comp, depth, annotated  # BGR ndarray
+    return area, perimeter, perimeter_convex ,perimeter_Rate, comp, depth, depth_sets, annotated, slice_kind  # BGR ndarray
 
 
 def compute_image_perimeter(
@@ -154,10 +213,10 @@ def compute_image_perimeter(
     unit: str = "mm",
     add_scalebar: bool | None = True,
     draw_hallmarks: bool = True,
-) -> tuple[float, np.ndarray]:
+) -> tuple[float, np.ndarray, SliceKind]:
     """
     Compute foreground perimeter from a 2D image by thresholding & contour filtering.
-    Returns the area (in pixel_size units) and an annotated BGR image (np.ndarray).
+    Returns ``(perimeter, annotated_bgr, slice_kind)``.
 
     No files are written here.
     """
@@ -166,8 +225,8 @@ def compute_image_perimeter(
     image = cv2.imread(file_path)
     if image is None:
         raise ValueError(f"Could not read image: {file_path}")
-    
-    
+
+    slice_kind, _ = classify_slice_kind(image)
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
@@ -178,7 +237,7 @@ def compute_image_perimeter(
     annotated = image.copy()
     W, H = annotated.shape[:2]
     thickness, font_scale, _ = image_annotation_style(H, W, style="regular")
-    
+
     if filtered:
         cv2.drawContours(annotated, filtered, -1, (0, 0, 255), thickness)
 
@@ -197,7 +256,7 @@ def compute_image_perimeter(
             anchor_ratio=(0.02, 0.05),
         )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
-    return perimeter, annotated  # BGR ndarray
+    return perimeter, annotated, slice_kind  # BGR ndarray
 
 
 def compute_image_area(
@@ -207,10 +266,10 @@ def compute_image_area(
     unit: str = "mm",
     add_scalebar: bool | None = True,
     draw_hallmarks: bool = True,
-) -> tuple[float, np.ndarray]:
+) -> tuple[float, np.ndarray, SliceKind]:
     """
     Compute foreground area from a 2D image by thresholding & contour filtering.
-    Returns the area (in pixel_size^2 units) and an annotated BGR image (np.ndarray).
+    Returns ``(area, annotated_bgr, slice_kind)``.
 
     No files are written here.
     """
@@ -219,8 +278,8 @@ def compute_image_area(
     image = cv2.imread(file_path)
     if image is None:
         raise ValueError(f"Could not read image: {file_path}")
-    
-    
+
+    slice_kind, _ = classify_slice_kind(image)
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
@@ -231,7 +290,7 @@ def compute_image_area(
     annotated = image.copy()
     W, H = annotated.shape[:2]
     thickness, _, _ = image_annotation_style(H, W, style="regular")
-    
+
     if filtered:
         cv2.drawContours(annotated, filtered, -1, (0, 0, 255), thickness)
 
@@ -255,7 +314,7 @@ def compute_image_area(
             anchor_ratio=(0.02, 0.05),
         )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
-    return area_units2, annotated  # BGR ndarray
+    return area_units2, annotated, slice_kind  # BGR ndarray
 
 def compute_image_lGI(
     file_path: str,
@@ -265,7 +324,7 @@ def compute_image_lGI(
     unit: str = "mm",
     add_scalebar: bool | None = True,
     draw_hallmarks: bool = True,
-)  -> tuple[float, float, float, np.ndarray]: 
+)  -> tuple[float, float, float, np.ndarray, SliceKind]:
     """Compute the local Gyrification Index from a 2-D brain-slice image.
 
     GI = inner perimeter / outer perimeter, where "outer" is derived by
@@ -279,13 +338,16 @@ def compute_image_lGI(
         unit: Label for output units.
 
     Returns:
-        Tuple of ``(GI_ratio, inner_perim_mm, outer_perim_mm, annotated_bgr)``.
+        Tuple of ``(GI_ratio, inner_perim_mm, outer_perim_mm,
+        annotated_bgr, slice_kind)``.
     """
     margin =6
 
     image = cv2.imread(file_path)
     if image is None:
         raise ValueError(f"Could not read image: {file_path}")
+
+    slice_kind, _ = classify_slice_kind(image)
 
     print(file_path + " is processing")
     im_bw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
@@ -356,7 +418,7 @@ def compute_image_lGI(
             anchor_ratio=(0.02, 0.05),
         )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
-    return perimeter_Rate, perimeter_u, perimeter_convex_u, annotated  # BGR ndarray
+    return perimeter_Rate, perimeter_u, perimeter_convex_u, annotated, slice_kind  # BGR ndarray
 
         
 def compute_image_sulci_depth(
@@ -365,7 +427,7 @@ def compute_image_sulci_depth(
     cnt_threshold: float,
     unit: str = "mm",
     add_scalebar: bool | None = True,
-) -> tuple[list, np.ndarray]:
+) -> tuple[list, dict, np.ndarray, SliceKind]:
     """Compute sulci depths from convexity defects on a 2-D brain-slice image.
 
     For each contour, computes the convex hull and then identifies
@@ -379,7 +441,7 @@ def compute_image_sulci_depth(
         unit: Label for output units.
 
     Returns:
-        Tuple of ``(depth_list_mm, annotated_bgr)``.
+        Tuple of ``(depth_list_mm, depth_sets, annotated_bgr, slice_kind)``.
     """
     image = cv2.imread(file_path)
     if image is None:
@@ -395,12 +457,31 @@ def compute_image_sulci_depth(
     annotated = image.copy()
     W, H = annotated.shape[:2]
     thickness, font_scale, radius_px = image_annotation_style(H, W, style="bold")
-    
+
+    # See compute_image_allmarks: full MRI slices use a percent window;
+    # cropped sub-slice bands keep the fixed-millimeter rule.
+    slice_kind, slice_kind_conf = classify_slice_kind(image)
+    use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.6
+    # Slice length = longest side of the brain's bounding box (physical units),
+    # not the raw image size. Falls back to image extent if no brain contour was found.
+    if filtered_contours:
+        _bx, _by, _bw_px, _bh_px = cv2.boundingRect(np.vstack(filtered_contours))
+        slice_length = max(_bw_px, _bh_px) * pixel_size
+    else:
+        slice_length = max(W, H) * pixel_size
+
+    print(f"Classified slice kind: {slice_kind} (confidence {slice_kind_conf:.2f}), using {'percent' if use_percent_filter else 'fixed'} filter for sulci depth.")  
+    if use_percent_filter:
+        print(f"The sulcus depth filter thresholds are {(SULCUS_TERTIARY_MIN_FRACTION * slice_length):.2f} {unit} (min) and {(SULCUS_PRIMARY_MAX_FRACTION * slice_length):.2f} {unit} (max).")
+
     if filtered_contours:
         cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
 
-            
-    depth = []
+
+    # When use_percent_filter is True (full MRI slices), depths are split into
+    # four named sets (primary / secondary / tertiary / unclassified). The flat
+    # `depth` list returned to the dispatcher is the union of all four.
+    depth_sets = empty_depth_sets()
     for cnt in filtered_contours:
         hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
         if hull is not None and len(hull) >= 3 and len(cnt) > 3 and np.all(np.diff(hull.ravel()) > 0):
@@ -415,37 +496,57 @@ def compute_image_sulci_depth(
                     end = tuple(cnt[e][0])
                     far = tuple(cnt[f][0])
                     annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
-                    # Convert fixed-point depth to mm; keep defects > 0.5 mm
-                    if (d * pixel_size / DEFECT_FIXED_POINT) > 0.5:
-                        depth_value = d * pixel_size / DEFECT_FIXED_POINT
-                        annotated = cv2.circle(annotated, far, radius_px, [255, 255, 0], -1)
-                        depth.append(depth_value)
-                        label = f"{depth_value:.2f} {unit}"
-                        tx = min(max(0, int(far[0] + radius_px + 4)), max(0, W - 1))
-                        ty = min(max(0, int(far[1] - radius_px - 4)), max(0, H - 1))
-                        cv2.putText(
-                            annotated,
-                            label,
-                            (tx, ty),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            font_scale * 0.75,
-                            (255, 255, 0),
-                            max(1, thickness - 1),
-                            cv2.LINE_AA,
-                        )
+                    # Convert fixed-point depth to physical units. Full MRI
+                    # slices use a percent-of-slice-length window; cropped
+                    # bands keep the original fixed-millimeter threshold.
+                    depth_value = d * pixel_size / DEFECT_FIXED_POINT
+                    if use_percent_filter:
+                        keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length)
+                    else:
+                        keep = depth_value > (0.5 if unit == "mm" else 0.05 if unit == "cm" else 0)
+                    if keep:
+                        # Classify by % of slice_length (full MRI slices only).
+                        if use_percent_filter:
+                            sulcus_class = classify_sulcus_depth(depth_value, slice_length)
+                        else:
+                            sulcus_class = "unclassified"
+                        marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                        depth_sets[sulcus_class].append(depth_value)
+                        annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
+                        # Skip numeric labels when pixel_size is small (dense
+                        # images would otherwise be cluttered by overlapping
+                        # text); the marker circle is still drawn.
+                        if pixel_size <= MIN_PIXEL_SIZE_FOR_DEPTH_LABELS:
+                            label = f"{depth_value:.2f} {unit}"
+                            tx = min(max(0, int(far[0] + radius_px + 4)), max(0, W - 1))
+                            ty = min(max(0, int(far[1] - radius_px - 4)), max(0, H - 1))
+                            cv2.putText(
+                                annotated,
+                                label,
+                                (tx, ty),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                font_scale * 0.75,
+                                marker_color,
+                                max(1, thickness - 1),
+                                cv2.LINE_AA,
+                            )
 
-            depth.sort(reverse=True)
+    depth = flatten_depth_sets(depth_sets)
+    if use_percent_filter:
+        print(format_sulcus_class_summary(depth_sets))
 
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
-    return depth, annotated  # BGR ndarray
+    return depth, depth_sets, annotated, slice_kind  # BGR ndarray
 
 
-def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> tuple[float, np.ndarray]:
+def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> tuple[float, np.ndarray, SliceKind]:
     margin = 6
     image = cv2.imread(file_path)
     if image is None:
         raise ValueError(f"Could not read image: {file_path}")
-    
+
+    slice_kind, _ = classify_slice_kind(image)
+
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
 
@@ -476,7 +577,7 @@ def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> tuple
         anchor_ratio=(0.02, 0.05),
     )
 
-    return compactness_2D_value, annotated  # BGR ndarray
+    return compactness_2D_value, annotated, slice_kind  # BGR ndarray
 
 def put_label_on_bgr(
     bgr: np.ndarray,

@@ -25,6 +25,24 @@ GREEN_CHANNEL_MAX = 50  # G channel must stay below this
 #   depth_in_pixels = raw_d / 256
 DEFECT_FIXED_POINT = 256
 
+# Minimum pixel_size (mm/px) at which sulci-depth numeric labels are drawn on
+# the annotated image. Below this, the image is so dense that text labels
+# overlap and clutter the result, so the markers are still drawn but the
+# numeric value text is suppressed.
+MIN_PIXEL_SIZE_FOR_DEPTH_LABELS = 0.4
+
+# ---------------------------------------------------------------------------
+# Sulcus depth classification (full MRI slices only). Each defect that
+# survives the SULCI_DEPTH_*_FRACTION filter is binned into one of these
+# categories using its depth as a fraction of the brain's slice length.
+# Defects that fall outside every range stay in an "unclassified" bucket
+# but still appear in the depth list.
+SULCUS_PRIMARY_MIN_FRACTION = 0.15    # 15% of slice length
+SULCUS_PRIMARY_MAX_FRACTION = 0.50    # 50%
+SULCUS_SECONDARY_MIN_FRACTION = 0.05  # 5%
+SULCUS_SECONDARY_MAX_FRACTION = 0.15  # 15%
+SULCUS_TERTIARY_MIN_FRACTION = 0.015  # 1.5%
+SULCUS_TERTIARY_MAX_FRACTION = 0.05  # 5%
 # ---------------------------------------------------------------------------
 # Default NIfTI segmentation region labels
 # ---------------------------------------------------------------------------

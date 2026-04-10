@@ -35,6 +35,24 @@ class MeasurementDispatcher:
     def __init__(self, mw: MainWindow) -> None:
         self.mw = mw
 
+    def _ensure_stl_slice_direction(self) -> bool:
+        """Prompt the user to choose a slice direction for STL processing.
+
+        Sets ``self.mw.slice_direction`` and returns True if the user
+        confirmed, False if they cancelled.
+        """
+        items = ["X (Sagittal)", "Y (Coronal)", "Z (Axial)"]
+        current_idx = {"X": 0, "Y": 1, "Z": 2}.get(self.mw.slice_direction, 1)
+        choice, ok = QInputDialog.getItem(
+            self.mw, "Slice Direction",
+            "Choose the slicing axis:",
+            items, current_idx, False,
+        )
+        if not ok:
+            return False
+        self.mw.slice_direction = choice[0]  # first char: "X", "Y", or "Z"
+        return True
+
     def _measure_planar_vtk(self, mode: str = "allmarks"):
         """Measure a planar VTK mesh by capturing a 2D screenshot and running image measurements.
 
@@ -83,26 +101,27 @@ class MeasurementDispatcher:
             cv2.imwrite(img_path, bgr)
 
             # Call measurement function
+            depth_sets = None
             if mode == "allmarks":
-                area, perimeter, perimeter_convex, lGI, compactness, depth, annotated_bgr = compute_image_allmarks(
+                area, perimeter, perimeter_convex, lGI, compactness, depth, depth_sets, annotated_bgr, slice_kind = compute_image_allmarks(
                     img_path, pixel_size=pixel_size, kernel_size=self.mw.kernel_size,
                     cnt_threshold=self.mw.cnt_threshold, unit=u, add_scalebar=False,
                     draw_hallmarks=self.mw.draw_hallmarks_on_image)
             elif mode == "perimeter":
-                perimeter, annotated_bgr = compute_image_perimeter(
+                perimeter, annotated_bgr, slice_kind = compute_image_perimeter(
                     img_path, pixel_size=pixel_size, cnt_threshold=self.mw.cnt_threshold, unit=u, add_scalebar=False,
                     draw_hallmarks=self.mw.draw_hallmarks_on_image)
             elif mode == "area":
-                area, annotated_bgr = compute_image_area(
+                area, annotated_bgr, slice_kind = compute_image_area(
                     img_path, pixel_size=pixel_size, cnt_threshold=self.mw.cnt_threshold, unit=u, add_scalebar=False,
                     draw_hallmarks=self.mw.draw_hallmarks_on_image)
             elif mode == "lGI":
-                lGI, perimeter, perimeter_convex, annotated_bgr = compute_image_lGI(
+                lGI, perimeter, perimeter_convex, annotated_bgr, slice_kind = compute_image_lGI(
                     img_path, pixel_size=pixel_size, kernel_size=self.mw.kernel_size,
                     cnt_threshold=self.mw.cnt_threshold, unit=u, add_scalebar=False,
                     draw_hallmarks=self.mw.draw_hallmarks_on_image)
             elif mode == "sulci_depth":
-                depth, annotated_bgr = compute_image_sulci_depth(
+                depth, depth_sets, annotated_bgr, slice_kind = compute_image_sulci_depth(
                     img_path, pixel_size=pixel_size, cnt_threshold=self.mw.cnt_threshold, unit=u, add_scalebar=False)
             else:
                 print(f"[Planar VTK] Unknown mode: {mode}")
@@ -136,26 +155,30 @@ class MeasurementDispatcher:
             if mode == "allmarks":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
                     kernel_size=self.mw.kernel_size, area=area, perimeter=perimeter,
-                    perimeter_convex=perimeter_convex, lgi=lGI, compactness=compactness, sulci_depth=depth)
+                    perimeter_convex=perimeter_convex, lgi=lGI, compactness=compactness,
+                    sulci_depth=depth, sulci_depth_sets=depth_sets, slice_kind=slice_kind)
                 print(f"[Planar VTK allmarks] area={area:.2f} {u}^2, perimeter={perimeter:.2f} {u}, GI={lGI:.2f}")
                 print(f"[Planar VTK allmarks] Maximum Sulci Depth = {MetricsStore.depth_summary(depth, u)}")
 
             elif mode == "perimeter":
-                self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim, perimeter=perimeter)
+                self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
+                    perimeter=perimeter, slice_kind=slice_kind)
                 print(f"[Planar VTK perimeter] perimeter={perimeter:.2f} {u}")
             elif mode == "area":
-                self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim, area=area)
+                self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
+                    area=area, slice_kind=slice_kind)
                 print(f"[Planar VTK area] area={area:.2f} {u}^2")
             elif mode == "lGI":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
-                    kernel_size=self.mw.kernel_size, lgi=lGI)
+                    kernel_size=self.mw.kernel_size, lgi=lGI, slice_kind=slice_kind)
                 print(f"[Planar VTK lGI] GI={lGI:.2f}")
             elif mode == "compactness":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
-                    kernel_size=self.mw.kernel_size, compactness=compactness)
+                    kernel_size=self.mw.kernel_size, compactness=compactness, slice_kind=slice_kind)
                 print(f"[Planar VTK compactness] Compactness={compactness:.2f}")
             elif mode == "sulci_depth":
-                self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim, sulci_depth=depth)
+                self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
+                    sulci_depth=depth, sulci_depth_sets=depth_sets, slice_kind=slice_kind)
                 if isinstance(depth, (list, tuple)) and len(depth) > 0:
                     summary = ", ".join(f"{float(v):.2f}" for v in depth[:3])
                     print(f"[Planar VTK sulci depth] Maximum depths = {MetricsStore.depth_summary(depth, u)}")
@@ -186,7 +209,7 @@ class MeasurementDispatcher:
                 if self.mw.last_annotated_path is not None:
                     image_path = self.mw.last_annotated_path
                     
-                area, perimeter, perimeter_convex, lGI, compactness, depth, annotated_bgr = compute_image_allmarks(
+                area, perimeter, perimeter_convex, lGI, compactness, depth, depth_sets, annotated_bgr, slice_kind = compute_image_allmarks(
                     image_path,
                     pixel_size=px_size,
                     kernel_size= self.mw.kernel_size,
@@ -231,7 +254,9 @@ class MeasurementDispatcher:
                     perimeter_convex = perimeter_convex,
                     lgi=lGI,
                     compactness=compactness,
-                    sulci_depth = depth)
+                    sulci_depth = depth,
+                    sulci_depth_sets = depth_sets,
+                    slice_kind = slice_kind)
                     
             except Exception as ex:
                 logger.error("All hallmarks failed: %s", ex)
@@ -271,7 +296,7 @@ class MeasurementDispatcher:
                 self.mw.view.on_slice_slider_changed(mid)
                 
                 print(f"[NIfTI hallmarks] Results:")
-                print("The Brain Volume Result = {volume:.2f} cm^3.")
+                print(f"The Brain Volume Result = {volume:.2f} cm^3.")
                 print(f"The Brain Outer Surface Area Result = {area:.2f} cm^2.")
                 print(f"The Brain GI (Convex surface area/ surfacearea) = {gi:.2f} .")
                 print(f"Maximum Sulci Depth = {MetricsStore.depth_summary(depth, 'cm')}")
@@ -287,15 +312,17 @@ class MeasurementDispatcher:
             return
             
         elif self.mw.current_kind == "stl":
+            if not self._ensure_stl_slice_direction():
+                return
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
                 out_dir = os.path.join(self.mw.temp_dir, f"STL_allmarks_{uid}")
                 os.makedirs(out_dir, exist_ok=True)
-                
+
                 self.mw.current_output_dir = out_dir
                 source_label, dims, area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_stl_allmarks(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
-                kernel_size = self.mw.kernel_size, slice_thickness=self.mw.slice_thickness)
+                kernel_size = self.mw.kernel_size, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
             
                 if source_label == "not_brain":
                     QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
@@ -451,6 +478,8 @@ class MeasurementDispatcher:
                 QMessageBox.critical(self.mw, "NIfTI Volume Failed", f"{type(ex).__name__}: {ex}")
             return
         elif self.mw.current_kind == "stl":
+            if not self._ensure_stl_slice_direction():
+                return
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -458,7 +487,7 @@ class MeasurementDispatcher:
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.mw.current_output_dir = out_dir
-                source_label, dims,volume, saved_pngs, valid_slices = compute_stl_volume(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness)
+                source_label, dims,volume, saved_pngs, valid_slices = compute_stl_volume(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
             
                 if source_label == "not_brain":
                     QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
@@ -557,7 +586,7 @@ class MeasurementDispatcher:
                 if self.mw.last_annotated_path is not None:
                     image_path = self.mw.last_annotated_path
                 
-                perimeter, annotated_bgr = compute_image_perimeter(
+                perimeter, annotated_bgr, slice_kind = compute_image_perimeter(
                     image_path,
                     pixel_size = px_size,
                     cnt_threshold = self.mw.cnt_threshold,
@@ -583,7 +612,8 @@ class MeasurementDispatcher:
                     pixel_size_units = f"{self.mw.units_length}/pixel",
                     unit= self.mw.units_length,
                     pixel_size = self.mw.pixel_size,
-                    perimeter=perimeter)
+                    perimeter=perimeter,
+                    slice_kind=slice_kind)
 
             except Exception as ex:
                 logger.error("Perimeter failed: %s", ex)
@@ -625,9 +655,12 @@ class MeasurementDispatcher:
                     self.mw.current_output_dir = out_dir
 
                     if self.mw.current_kind == "stl":
+                        if not self._ensure_stl_slice_direction():
+                            return
                         source_label, dims, comp, saved_pngs, valid_slices = compute_compactness_stl(
                             self, file_path=self.mw.current_path, out_dir=out_dir,
-                            min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness)
+                            min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness,
+                            Slice_direction=self.mw.slice_direction)
                         if source_label == "not_brain":
                             return
 
@@ -680,12 +713,13 @@ class MeasurementDispatcher:
                 area = last_row.get("Area") if last_row else None
                 perimeter = last_row.get("Perimeter") if last_row else None
 
+                slice_kind = None
                 if area is not None and perimeter is not None:
                     area = float(area)
                     perimeter = float(perimeter)
                     compactness_2D_value = compactness_2D(area, perimeter)
                 else:
-                    compactness_2D_value, annotated_bgr = compute_compactness_2D(image_path, cnt_threshold=self.mw.cnt_threshold)
+                    compactness_2D_value, annotated_bgr, slice_kind = compute_compactness_2D(image_path, cnt_threshold=self.mw.cnt_threshold)
                     pm = ViewManager.np_bgr_to_qpixmap(annotated_bgr)
                     self.mw.image_label.setImage(pm)
                     self.mw.image_label.remove_last_annotation()
@@ -755,7 +789,7 @@ class MeasurementDispatcher:
                 image_path = self.mw.current_path
                 if self.mw.last_annotated_path is not None:
                     image_path = self.mw.last_annotated_path
-                lGI,perimeter, perimeter_convex, annotated_bgr = compute_image_lGI(
+                lGI,perimeter, perimeter_convex, annotated_bgr, slice_kind = compute_image_lGI(
                     image_path,
                     pixel_size = px_size,
                     kernel_size= self.mw.kernel_size,
@@ -783,7 +817,8 @@ class MeasurementDispatcher:
                     unit = self.mw.units_length,
                     pixel_size = self.mw.pixel_size,
                     kernel_size = self.mw.kernel_size,
-                    perimeter=perimeter, perimeter_convex=perimeter_convex, lgi=lGI)
+                    perimeter=perimeter, perimeter_convex=perimeter_convex, lgi=lGI,
+                    slice_kind=slice_kind)
 
             except Exception as ex:
                 logger.error("lGI failed: %s", ex)
@@ -856,6 +891,7 @@ class MeasurementDispatcher:
                         kernel_size=self.mw.kernel_size,
                         slice_thickness=self.mw.slice_thickness,
                         build_solid=False,   # keep False for stability
+                        Slice_direction=self.mw.slice_direction,
                     )
                                         
                 
@@ -888,7 +924,8 @@ class MeasurementDispatcher:
                 return
                 
         elif self.mw.current_kind == "stl":
-        
+            if not self._ensure_stl_slice_direction():
+                return
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -897,7 +934,7 @@ class MeasurementDispatcher:
                 
                 self.mw.current_output_dir = out_dir
                 source_label, dims, gi, saved_pngs, valid_slices = compute_stl_lGI(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
-                kernel_size = self.mw.kernel_size, slice_thickness=self.mw.slice_thickness)
+                kernel_size = self.mw.kernel_size, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
             
                 if source_label == "not_brain":
                     QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
@@ -999,7 +1036,7 @@ class MeasurementDispatcher:
                 image_path = self.mw.current_path
                 if self.mw.last_annotated_path is not None:
                     image_path = self.mw.last_annotated_path
-                depth, annotated_bgr = compute_image_sulci_depth(
+                depth, depth_sets, annotated_bgr, slice_kind = compute_image_sulci_depth(
                     image_path,
                     pixel_size = px_size,
                     cnt_threshold=self.mw.cnt_threshold,
@@ -1026,7 +1063,9 @@ class MeasurementDispatcher:
                     pixel_size_units = f"{self.mw.units_length}/pixel",
                     unit = self.mw.units_length,
                     pixel_size = self.mw.pixel_size,
-                    sulci_depth = depth)
+                    sulci_depth = depth,
+                    sulci_depth_sets = depth_sets,
+                    slice_kind = slice_kind)
 
             except Exception as ex:
                 logger.error("Sulci depth failed: %s", ex)
@@ -1070,6 +1109,8 @@ class MeasurementDispatcher:
             return
             
         elif self.mw.current_kind == "stl":
+            if not self._ensure_stl_slice_direction():
+                return
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -1077,7 +1118,7 @@ class MeasurementDispatcher:
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.mw.current_output_dir = out_dir
-                source_label, dims, depth, saved_pngs, valid_slices = compute_stl_sulci_depth (self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness)
+                source_label, dims, depth, saved_pngs, valid_slices = compute_stl_sulci_depth (self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
             
                 if source_label == "not_brain":
                     QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
@@ -1174,7 +1215,7 @@ class MeasurementDispatcher:
                 if self.mw.last_annotated_path is not None:
                     image_path = self.mw.last_annotated_path
                     
-                area, annotated_bgr = compute_image_area(
+                area, annotated_bgr, slice_kind = compute_image_area(
                     image_path,
                     pixel_size=px_size,
                     cnt_threshold=self.mw.cnt_threshold,
@@ -1201,7 +1242,8 @@ class MeasurementDispatcher:
                 pixel_size_units = f"{self.mw.units_length}/pixel",
                 pixel_size = self.mw.pixel_size,
                 unit = self.mw.units_length,
-                area=area)
+                area=area,
+                slice_kind=slice_kind)
                 
             except Exception as ex:
                 print(f"[Area] ERROR : {ex}")
@@ -1245,6 +1287,8 @@ class MeasurementDispatcher:
             return
             
         elif self.mw.current_kind == "stl":
+            if not self._ensure_stl_slice_direction():
+                return
             t0 = time.time()
             try:
                 uid = uuid.uuid4().hex[:8]
@@ -1252,7 +1296,7 @@ class MeasurementDispatcher:
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.mw.current_output_dir = out_dir
-                source_label, dims,area, saved_pngs, valid_slices = compute_stl_area(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness)
+                source_label, dims,area, saved_pngs, valid_slices = compute_stl_area(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
             
                 if source_label == "not_brain":
                     QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
@@ -1341,7 +1385,7 @@ class MeasurementDispatcher:
         """
         start = self.mw.last_dir if os.path.isdir(self.mw.last_dir) else ""
         dir_path = QFileDialog.getExistingDirectory(
-            self, "Choose a folder", start,
+            self.mw, "Choose a folder", start,
             QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
         )
         if not dir_path:
@@ -1470,7 +1514,7 @@ class MeasurementDispatcher:
         
         start = self.mw.last_dir if os.path.isdir(self.mw.last_dir) else ""
         while True:
-            excel_files, _ = QFileDialog.getOpenFileNames(self, "Select one or multiple Excel files",
+            excel_files, _ = QFileDialog.getOpenFileNames(self.mw, "Select one or multiple Excel files",
                     start, "Excel Files (*.xlsx *.xls)")
             if not excel_files:
                 reply = QMessageBox.question(self.mw, "No files selected",
@@ -1604,7 +1648,7 @@ class MeasurementDispatcher:
 
         if  self.mw.current_kind !="image" and self.mw.current_path is None:
             start = self.mw.last_dir if os.path.isdir(self.mw.last_dir) else ""
-            First, _ = QFileDialog.getOpenFileName(self, "Select the first image",
+            First, _ = QFileDialog.getOpenFileName(self.mw, "Select the first image",
                                             start, "Images (*.png *.jpg *.jpeg )")
             if not First:
                 return
@@ -1634,7 +1678,7 @@ class MeasurementDispatcher:
         print("[Hausdorff] Select two images to measure the Hausdorff distance.")
         
         start = self.mw.last_dir if os.path.isdir(self.mw.last_dir) else ""
-        Second, _ =  QFileDialog.getOpenFileName(self, "Select the second image",
+        Second, _ =  QFileDialog.getOpenFileName(self.mw, "Select the second image",
                                             start, "Images (*.png *.jpg *.jpeg )")
         if not Second:
             return
@@ -1714,7 +1758,7 @@ class MeasurementDispatcher:
         pial = None
         if not self.mw.current_kind == "Freesurfer":
             start = self.mw.last_dir if os.path.isdir(self.mw.last_dir) else ""
-            pial, _ = QFileDialog.getOpenFileName(self, "Select FreeSurfer Pial Surface",
+            pial, _ = QFileDialog.getOpenFileName(self.mw, "Select FreeSurfer Pial Surface",
                                                   start, "FreeSurfer Surface (*.pial);;All Files (*)")
             if not pial:
                 return
@@ -1751,7 +1795,7 @@ class MeasurementDispatcher:
         if self.mw.current_kind != "Freesurfer" or  len(self.mw.Freesurfer_record) == 1:
             start = self.mw.last_dir if os.path.isdir(self.mw.last_dir) else ""
             while True:
-                files, _ = QFileDialog.getOpenFileNames(self, "Select Both hemisphere (e.g. rh.pial, lh.pial)",
+                files, _ = QFileDialog.getOpenFileNames(self.mw, "Select Both hemisphere (e.g. rh.pial, lh.pial)",
                                                     start, "FreeSurfer Surface (*.pial *.white *.inflated);;All Files (*)")
                                                     
                 if not files:

@@ -16,11 +16,73 @@ Unit conversions:
 from __future__ import annotations
 
 from deps import *
-from helpers.helpers import compute_kernel_convex, contours_exclude, calc_scale, get_red_rect_offset, make_scale_cube, compactness_2D, compactness_3D, image_annotation_style
+from helpers.helpers import (
+    compute_kernel_convex,
+    contours_exclude,
+    calc_scale,
+    get_red_rect_offset,
+    make_scale_cube,
+    slice_at,
+    compactness_2D,
+    compactness_3D,
+    image_annotation_style,
+    SULCUS_CLASS_COLORS,
+    SULCUS_CLASSES,
+    classify_sulcus_depth,
+    empty_depth_sets,
+    flatten_depth_sets,
+    format_sulcus_class_summary,
+    sulcus_export_columns,
+    sulcus_export_cells,
+    pad_row,
+    drop_empty_columns,
+)
+from helpers.slice_kind_classifier import classify_slice_kind
 from helpers.check_mesh import check_brain
-from constants import BINARY_THRESHOLD_DEFAULT, RED_CHANNEL_MIN, GREEN_CHANNEL_MAX, DEFECT_FIXED_POINT
+from constants import (
+    BINARY_THRESHOLD_DEFAULT,
+    RED_CHANNEL_MIN,
+    GREEN_CHANNEL_MAX,
+    DEFECT_FIXED_POINT,
+    SULCUS_TERTIARY_MIN_FRACTION,
+    SULCUS_PRIMARY_MAX_FRACTION,
+)
 
 logger = logging.getLogger("fetomorph.stl")
+
+
+def _stl_slice_setup(mesh, brain_dim, Slice_direction: str, pixel_spacing: float = 0.1):
+    """Compute direction-dependent slicing parameters for STL rendering.
+
+    Returns a dict with keys: axis_index, pre_axis, next_axis, low, high,
+    image_width, image_height, view_fn_name, cube_len, max_dim.
+    """
+    axis_index = {"X": 0, "Y": 1, "Z": 2}[Slice_direction]
+    pre_axis = (axis_index - 1) % 3
+    next_axis = (axis_index + 1) % 3
+
+    bounds_pairs = list(zip(mesh.bounds[::2], mesh.bounds[1::2]))
+    low, high = bounds_pairs[axis_index]
+
+    image_width = int(np.clip(np.ceil(brain_dim[pre_axis] / pixel_spacing), 64, 4096))
+    image_height = int(np.clip(np.ceil(brain_dim[next_axis] / pixel_spacing), 64, 4096))
+    view_fn_name = {"X": "view_yz", "Y": "view_xz", "Z": "view_xy"}[Slice_direction]
+    cube_len = max(1e-6, brain_dim[axis_index] / 10.0)
+    max_dim = max(brain_dim[pre_axis], brain_dim[next_axis])
+
+    return {
+        "axis_index": axis_index,
+        "pre_axis": pre_axis,
+        "next_axis": next_axis,
+        "low": low,
+        "high": high,
+        "image_width": image_width,
+        "image_height": image_height,
+        "view_fn_name": view_fn_name,
+        "cube_len": cube_len,
+        "max_dim": max_dim,
+    }
+
 
 # ----------------- main API -----------------
 def compute_stl_allmarks(
@@ -29,7 +91,8 @@ def compute_stl_allmarks(
     out_dir: str,
     min_contour_area: float = 20.0,
     kernel_size: int = 5,
-    slice_thickness: float = 0.5):
+    slice_thickness: float = 0.5,
+    Slice_direction: str = "Y"):
     """Compute all hallmarks (volume, area, GI, sulci depths) from an STL mesh.
 
     Slices the mesh along Y, renders each cross-section with a red scale
@@ -67,47 +130,37 @@ def compute_stl_allmarks(
 
     brain_dim_cm = [dim/10 for dim in brain_dim]
     brain_dim_cm = sorted(brain_dim_cm, reverse=True)
-    # --- Slice positions along Y
+
+    # --- Direction-dependent slicing setup
+    sd = _stl_slice_setup(mesh, brain_dim, Slice_direction)
+
     if slice_thickness <= 0:
         slice_thickness = 0.5
-    slice_positions = np.arange(y_min, y_max, slice_thickness)
+    slice_positions = np.arange(sd["low"], sd["high"], slice_thickness)
     N = len(slice_positions)
     if N == 0:
-        print("[STL All Hallmarks] No slices to process (thickness too large vs. Y range).")
+        print(f"[STL All Hallmarks] No slices to process (thickness too large vs. {Slice_direction} range).")
         return 0.0, [], []
 
-    # Effective thickness to exactly span Y-extent
-    slice_thickness_eff = brain_dim[1] / N
+    slice_thickness_eff = brain_dim[sd["axis_index"]] / N
     print(f"[STL All Hallmarks] Effective slice thickness (mm): {slice_thickness_eff}")
 
     # --- Outputs
     os.makedirs(out_dir, exist_ok=True)
     out_dir_slices = os.path.join(out_dir, "stl_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
-    
+
     out_dir_origin = os.path.join(out_dir, "stl_orgin")
     os.makedirs(out_dir_origin, exist_ok=True)
-    
+
     print(f"[STL All Hallmarks] Temp output dir: {out_dir}")
 
-    # --- Screenshot resolution via target mm/px spacing ---
-    # pixel_spacing controls render resolution: 0.1 mm/px gives ~10 px per mm.
-    pixel_spacing = 0.1  # mm per pixel
-    image_width = int(np.clip(np.ceil(brain_dim[0] / pixel_spacing), 64, 4096))
-    image_height = int(np.clip(np.ceil(brain_dim[2] / pixel_spacing), 64, 4096))
-    window_size = (image_width, image_height)
-
-    # --- Camera: positioned along +Y, looking at the XZ plane ---
-    center = [(x_min + x_max) / 2.0, (y_min + y_max) / 2.0, (z_min + z_max) / 2.0]
-    cam_position = [
-        (center[0], y_max + 100.0, center[2]),  # camera sits 100 mm beyond Y-max
-        (center[0], center[1], center[2]),       # focal point = mesh centre
-        (0.0, 0.0, 1.0),                         # Z-up
-    ]
+    window_size = (sd["image_width"], sd["image_height"])
 
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
     rows = []
+    slice_class_data: list = []
     sections_list: list[pv.PolyData] = []
     total_depth = []
     sum_inner_mm = 0.0
@@ -116,31 +169,24 @@ def compute_stl_allmarks(
 
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
-    p.camera_position = cam_position
-    # Red reference cube side length = 10% of Y extent, used for scale calibration.
-    cube_len = max(1e-6, brain_dim[1] / 10.0)
-    max_dim =  max(brain_dim[0],brain_dim[2])
-    for idx, y in enumerate(slice_positions):
-        # Cross-section slice
-        origin =  mesh.center
-        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[2]])
+    cube_len = sd["cube_len"]
+    max_dim = sd["max_dim"]
+    for idx, k in enumerate(slice_positions):
+        normal, origin = slice_at(mesh, Slice_direction, k)
+        section = mesh.slice(normal=normal, origin=origin)
         if section.n_points == 0:
             continue
 
-        # Red cube reference (10% of X extent)
-        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max_dim)
-#        scale_cube = pv.Cube(x_length=cube_len, y_length=0.01, z_length=cube_len)
-#        scale_cube.translate((50, 0, 50), inplace=True)
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, max_dim)
 
-        plane = pv.Plane(center=(0, float(y), 0),
-                         direction=(0, 1, 0),  # plane normal
-                         i_size=brain_dim[0]*1.5, j_size=brain_dim[2]*1.5,  # side lengths
+        plane = pv.Plane(center=origin,
+                         direction=normal,
+                         i_size=brain_dim[sd["pre_axis"]]*1.5, j_size=brain_dim[sd["next_axis"]]*1.5,
                          i_resolution=1, j_resolution=1)
-        # Render: section + scale cube
         p.clear()
         p.add_mesh(scale_cube, color="red")
         p.add_mesh(section, color="black")
-        p.view_xz()  # no .show()!
+        getattr(p, sd["view_fn_name"])()
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
@@ -183,7 +229,14 @@ def compute_stl_allmarks(
         outer_perim_mm = outer_perim_px * mm_per_px
         area_mm  = area_px * (mm_per_px ** 2)
 
-        depth = []
+        # Classify the rendered slice and gate the percent filter on it.
+        # Slices that don't look like a full MRI fall back to the original
+        # fixed-millimeter rule and stay "unclassified".
+        slice_kind, slice_kind_conf = classify_slice_kind(bgr)
+        use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.6
+        # Sulci classification: bin each kept defect by its depth as a
+        # fraction of `max_dim` (longest brain extent in mm).
+        depth_sets = empty_depth_sets()
         if inner_filtered:
             for cnt in inner_filtered:
                 hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)  # Compute convex hull
@@ -198,18 +251,37 @@ def compute_stl_allmarks(
                             bgr = cv2.line(bgr, start, end, [255, 0, 0], thickness)
                             if d > DEFECT_FIXED_POINT:
                                 depth_mm = d * mm_per_px / DEFECT_FIXED_POINT
-                                if depth_mm < (0.25 * max_dim) and depth_mm > (0.005* max_dim):
-                                    bgr = cv2.circle(bgr, far, radius_px, [255, 255, 0], -1)
-                                    depth.append(depth_mm)
-                
+                                if use_percent_filter:
+                                    keep = (SULCUS_TERTIARY_MIN_FRACTION * max_dim) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * max_dim)
+                                else:
+                                    keep = depth_mm > 0.5
+                                if keep:
+                                    if use_percent_filter:
+                                        sulcus_class = classify_sulcus_depth(depth_mm, max_dim)
+                                    else:
+                                        sulcus_class = "unclassified"
+                                    marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                                    depth_sets[sulcus_class].append(depth_mm)
+                                    bgr = cv2.circle(bgr, far, radius_px, marker_color, -1)
+
+        depth = flatten_depth_sets(depth_sets)
+        print(f"[STL allmarks] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
-        rows.append([idx, len(inner_filtered), area_mm, inner_perim_mm, outer_perim_mm,
+        if use_percent_filter:
+            per_class_cells = sulcus_export_cells(depth_sets)
+            slice_class_data.append(depth_sets)
+        else:
+            per_class_cells = [None] * len(sulcus_export_columns("mm"))
+            slice_class_data.append(None)
+        rows.append([
+            idx, slice_kind, len(inner_filtered), area_mm, inner_perim_mm, outer_perim_mm,
             len(depth),                         # n_defects
             (min(depth) if depth else None),    # min_depth_mm
             (max(depth) if depth else None),    # max_depth_mm
-            mean_depth                          # mean_depth_mm
-            ])
+            mean_depth,                         # mean_depth_mm
+            *per_class_cells,
+        ])
         # Accumulate
         sum_inner_mm += inner_perim_mm
         sum_outer_mm += outer_perim_mm
@@ -234,6 +306,9 @@ def compute_stl_allmarks(
     GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
     comp_3D  = compactness_3D(brain_volume, Area) 
     
+    # Snapshot mm-unit depths for the per-mm Excel summary row before
+    # the in-place cm conversion below.
+    total_depth_mm = list(total_depth)
     total_depth = [x/10 for x in total_depth]
 
     mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
@@ -247,17 +322,44 @@ def compute_stl_allmarks(
 
     # Save per-slice + total to Excel
     try:
-    
-        rows.append(["Volume cm^3",round(brain_volume,2), "Surface Area cm^2",round(Area,2)])
-        rows.append(["GI",round(GI_total,2)])
-        rows.append(["Compactness", round(comp_3D, 2)])
-        rows.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices_cm",(round(mean_total, 2) if mean_total is not None else None)])
-        rows.append(["Max_sulci_across_slices_cm",(round(max(total_depth),2) if total_depth else None),
-        "Min_sulci_across_slices_cm",(round(min(total_depth),2) if total_depth else None)])
-        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.","Inner_area_mm^2", "Inner_Perimeter_mm", "Outer_Perimeter_mm" ,"Sulci_count",
-            "min_depth_mm", "max_depth_mm", "mean_depth_mm"])
-    
-        
+        per_class_cols = sulcus_export_columns("mm")
+        base_cols = [
+            "Slice", "SliceKind", "Count_of_cont.", "Inner_area_mm^2",
+            "Inner_Perimeter_mm", "Outer_Perimeter_mm", "Sulci_count",
+            "min_depth_mm", "max_depth_mm", "mean_depth_mm",
+        ]
+        total_width = len(base_cols) + len(per_class_cols)
+
+        overall_depth_sets = empty_depth_sets()
+        for dsets in slice_class_data:
+            if dsets is None:
+                continue
+            for k in SULCUS_CLASSES:
+                overall_depth_sets[k].extend(dsets.get(k, []))
+
+        overall_n = len(total_depth_mm)
+        overall_min = min(total_depth_mm) if total_depth_mm else None
+        overall_max = max(total_depth_mm) if total_depth_mm else None
+        overall_mean = (sum(total_depth_mm) / overall_n) if overall_n else None
+
+        summary_base = [None] * len(base_cols)
+        summary_base[0] = "Sulci_overall_summary"
+        summary_base[base_cols.index("Sulci_count")]   = overall_n
+        summary_base[base_cols.index("min_depth_mm")]  = overall_min
+        summary_base[base_cols.index("max_depth_mm")]  = overall_max
+        summary_base[base_cols.index("mean_depth_mm")] = overall_mean
+        rows.append(pad_row(
+            [*summary_base, *sulcus_export_cells(overall_depth_sets)],
+            total_width,
+        ))
+
+        rows.append(pad_row(["Volume cm^3", round(brain_volume, 2), "Surface Area cm^2", round(Area, 2)], total_width))
+        rows.append(pad_row(["GI", round(GI_total, 2)], total_width))
+        rows.append(pad_row(["Compactness", round(comp_3D, 2)], total_width))
+
+        df = pd.DataFrame(rows, columns=base_cols + per_class_cols)
+        df = drop_empty_columns(df)
+
         xlsx_path = os.path.join(out_dir, "Mesh_Allmarks.xlsx")
         df.to_excel(xlsx_path, index=False)
         print(f"[STL All Hallmarks] Saved Excel → {xlsx_path}")
@@ -277,6 +379,7 @@ def compute_stl_lGI(
     kernel_size: int = 5,
     slice_thickness: float = 0.5,
     build_solid: bool = False,
+    Slice_direction: str = "Y",
 ):
     """Compute the gyrification index (GI) from an STL mesh via slice rendering.
 
@@ -317,43 +420,31 @@ def compute_stl_lGI(
     brain_dim_cm = [dim/10 for dim in brain_dim]
     brain_dim_cm = sorted(brain_dim_cm, reverse=True)
 
+    # --- Direction-dependent slicing setup
+    sd = _stl_slice_setup(mesh, brain_dim, Slice_direction)
 
-    # --- Slice positions along Y
     if slice_thickness <= 0:
         slice_thickness = 0.5
-    slice_positions = np.arange(y_min, y_max, slice_thickness)
+    slice_positions = np.arange(sd["low"], sd["high"], slice_thickness)
     N = len(slice_positions)
     if N == 0:
-        print("[STL lGI] No slices to process (thickness too large vs. Y range).")
+        print(f"[STL lGI] No slices to process (thickness too large vs. {Slice_direction} range).")
         return dic["label"],[],0,[],[]
 
-    # Effective thickness to exactly span Y-extent
-    slice_thickness_eff = brain_dim[1] / N
+    slice_thickness_eff = brain_dim[sd["axis_index"]] / N
     print(f"[STL lGI] Effective slice thickness (mm): {slice_thickness_eff}")
 
     # --- Outputs
     os.makedirs(out_dir, exist_ok=True)
     out_dir_slices = os.path.join(out_dir, "stl_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
-    
+
     out_dir_origin = os.path.join(out_dir, "stl_orgin")
     os.makedirs(out_dir_origin, exist_ok=True)
 
     print(f"[STL lGI] Temp output dir: {out_dir}")
 
-    # --- Screenshot resolution via target mm/px spacing
-    pixel_spacing = 0.1  # mm per pixel
-    image_width = int(np.clip(np.ceil(brain_dim[0] / pixel_spacing), 64, 4096))
-    image_height = int(np.clip(np.ceil(brain_dim[2] / pixel_spacing), 64, 4096))
-    window_size = (image_width, image_height)
-
-    # --- Camera (look along +Y onto XZ)
-    center = [(x_min + x_max) / 2.0, (y_min + y_max) / 2.0, (z_min + z_max) / 2.0]
-    cam_position = [
-        (center[0], y_max + 100.0, center[2]),  # camera position
-        (center[0], center[1], center[2]),      # focal point
-        (0.0, 0.0, 1.0),                        # view up
-    ]
+    window_size = (sd["image_width"], sd["image_height"])
 
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
@@ -363,31 +454,26 @@ def compute_stl_lGI(
     sum_inner_mm = 0.0
     sum_outer_mm = 0.0
 
-    # --- Use a context manager so the plotter is *guaranteed* to be closed safely
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
-    p.camera_position = cam_position
+    cube_len = sd["cube_len"]
 
-    for idx, y in enumerate(slice_positions):
-        # Cross-section slice
-        origin =  mesh.center
-        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[2]])
+    for idx, k in enumerate(slice_positions):
+        normal, origin = slice_at(mesh, Slice_direction, k)
+        section = mesh.slice(normal=normal, origin=origin)
         if section.n_points == 0:
             continue
 
-        # Red cube reference (10% of X extent)
-        cube_len = max(1e-6, brain_dim[1] / 10.0)
-        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, sd["max_dim"])
 
-        plane = pv.Plane(center=(0, float(y), 0),
-                         direction=(0, 1, 0),  # plane normal
-                         i_size=brain_dim[0]*1.5, j_size=brain_dim[2]*1.5,  # side lengths
+        plane = pv.Plane(center=origin,
+                         direction=normal,
+                         i_size=brain_dim[sd["pre_axis"]]*1.5, j_size=brain_dim[sd["next_axis"]]*1.5,
                          i_resolution=1, j_resolution=1)
-        # Render: section + scale cube
         p.clear()
         p.add_mesh(scale_cube, color="red")
         p.add_mesh(section, color="black")
-        p.view_xz()  # no .show()!
+        getattr(p, sd["view_fn_name"])()
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
@@ -514,7 +600,8 @@ def compute_stl_volume(
     file_path: str,
     out_dir: str,
     min_contour_area: float = 20.0,
-    slice_thickness: float = 0.5):
+    slice_thickness: float = 0.5,
+    Slice_direction: str = "Y"):
     """Compute brain volume (cm³) from an STL mesh by integrating slice cross-section areas.
 
     Args:
@@ -548,42 +635,32 @@ def compute_stl_volume(
 
     brain_dim_cm = [dim/10 for dim in brain_dim]
     brain_dim_cm = sorted(brain_dim_cm, reverse=True)
-    # --- Slice positions along Y
+
+    # --- Direction-dependent slicing setup
+    sd = _stl_slice_setup(mesh, brain_dim, Slice_direction)
+
     if slice_thickness <= 0:
         slice_thickness = 0.5
-    slice_positions = np.arange(y_min, y_max, slice_thickness)
+    slice_positions = np.arange(sd["low"], sd["high"], slice_thickness)
     N = len(slice_positions)
     if N == 0:
-        print("[STL Volume] No slices to process (thickness too large vs. Y range).")
+        print(f"[STL Volume] No slices to process (thickness too large vs. {Slice_direction} range).")
         return dic["label"],[],0,[],[]
 
-    # Effective thickness to exactly span Y-extent
-    slice_thickness_eff = brain_dim[1] / N
+    slice_thickness_eff = brain_dim[sd["axis_index"]] / N
     print(f"[STL Volume] Effective slice thickness (mm): {slice_thickness_eff}")
 
     # --- Outputs
     os.makedirs(out_dir, exist_ok=True)
     out_dir_slices = os.path.join(out_dir, "stl_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
-    
+
     out_dir_origin = os.path.join(out_dir, "stl_orgin")
     os.makedirs(out_dir_origin, exist_ok=True)
-    
+
     print(f"[STL Volume] Temp output dir: {out_dir}")
 
-    # --- Screenshot resolution via target mm/px spacing
-    pixel_spacing = 0.1  # mm per pixel
-    image_width = int(np.clip(np.ceil(brain_dim[0] / pixel_spacing), 64, 4096))
-    image_height = int(np.clip(np.ceil(brain_dim[2] / pixel_spacing), 64, 4096))
-    window_size = (image_width, image_height)
-
-    # --- Camera (look along +Y onto XZ)
-    center = [(x_min + x_max) / 2.0, (y_min + y_max) / 2.0, (z_min + z_max) / 2.0]
-    cam_position = [
-        (center[0], y_max + 100.0, center[2]),  # camera position
-        (center[0], center[1], center[2]),      # focal point
-        (0.0, 0.0, 1.0),                        # view up
-    ]
+    window_size = (sd["image_width"], sd["image_height"])
 
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
@@ -591,30 +668,25 @@ def compute_stl_volume(
     sections_list: list[pv.PolyData] = []
     sum_area = 0.0
 
-    # --- Use a context manager so the plotter is *guaranteed* to be closed safely
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
-    p.camera_position = cam_position
+    cube_len = sd["cube_len"]
 
-    for idx, y in enumerate(slice_positions):
-        # Cross-section slice
-        origin =  mesh.center
-        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[2]])
+    for idx, k in enumerate(slice_positions):
+        normal, origin = slice_at(mesh, Slice_direction, k)
+        section = mesh.slice(normal=normal, origin=origin)
         if section.n_points == 0:
             continue
 
-        # Red cube reference (10% of X extent)
-        cube_len = max(1e-6, brain_dim[1] / 10.0)
-        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
-        plane = pv.Plane(center=(0, float(y), 0),
-                         direction=(0, 1, 0),  # plane normal
-                         i_size=brain_dim[0]*1.5, j_size=brain_dim[2]*1.5,  # side lengths
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, sd["max_dim"])
+        plane = pv.Plane(center=origin,
+                         direction=normal,
+                         i_size=brain_dim[sd["pre_axis"]]*1.5, j_size=brain_dim[sd["next_axis"]]*1.5,
                          i_resolution=1, j_resolution=1)
-        # Render: section + scale cube
         p.clear()
         p.add_mesh(scale_cube, color="red")
         p.add_mesh(section, color="black")
-        p.view_xz()  # no .show()!
+        getattr(p, sd["view_fn_name"])()
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
@@ -696,7 +768,8 @@ def compute_stl_area(
     file_path: str,
     out_dir: str,
     min_contour_area: float = 20.0,
-    slice_thickness: float = 0.5):
+    slice_thickness: float = 0.5,
+    Slice_direction: str = "Y"):
     """Compute brain surface area (cm²) from an STL mesh.
 
     Sums inner-contour perimeters across Y slices and multiplies by
@@ -733,42 +806,32 @@ def compute_stl_area(
 
     brain_dim_cm = [dim/10 for dim in brain_dim]
     brain_dim_cm = sorted(brain_dim_cm, reverse=True)
-    # --- Slice positions along Y
+
+    # --- Direction-dependent slicing setup
+    sd = _stl_slice_setup(mesh, brain_dim, Slice_direction)
+
     if slice_thickness <= 0:
         slice_thickness = 0.5
-    slice_positions = np.arange(y_min, y_max, slice_thickness)
+    slice_positions = np.arange(sd["low"], sd["high"], slice_thickness)
     N = len(slice_positions)
     if N == 0:
-        print("[STL Area] No slices to process (thickness too large vs. Y range).")
+        print(f"[STL Area] No slices to process (thickness too large vs. {Slice_direction} range).")
         return dic["label"],[],0,[],[]
 
-    # Effective thickness to exactly span Y-extent
-    slice_thickness_eff = brain_dim[1] / N
+    slice_thickness_eff = brain_dim[sd["axis_index"]] / N
     print(f"[STL Area] Effective slice thickness (mm): {slice_thickness_eff}")
 
     # --- Outputs
     os.makedirs(out_dir, exist_ok=True)
     out_dir_slices = os.path.join(out_dir, "stl_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
-    
+
     out_dir_origin = os.path.join(out_dir, "stl_orgin")
     os.makedirs(out_dir_origin, exist_ok=True)
-    
+
     print(f"[STL Area] Temp output dir: {out_dir}")
 
-    # --- Screenshot resolution via target mm/px spacing
-    pixel_spacing = 0.1  # mm per pixel
-    image_width = int(np.clip(np.ceil(brain_dim[0] / pixel_spacing), 64, 4096))
-    image_height = int(np.clip(np.ceil(brain_dim[2] / pixel_spacing), 64, 4096))
-    window_size = (image_width, image_height)
-
-    # --- Camera (look along +Y onto XZ)
-    center = [(x_min + x_max) / 2.0, (y_min + y_max) / 2.0, (z_min + z_max) / 2.0]
-    cam_position = [
-        (center[0], y_max + 100.0, center[2]),  # camera position
-        (center[0], center[1], center[2]),      # focal point
-        (0.0, 0.0, 1.0),                        # view up
-    ]
+    window_size = (sd["image_width"], sd["image_height"])
 
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
@@ -776,32 +839,25 @@ def compute_stl_area(
     sum_inner_mm = 0.0
     sections_list: list[pv.PolyData] = []
 
-
-    # --- Use a context manager so the plotter is *guaranteed* to be closed safely
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
-    p.camera_position = cam_position
-    cube_len = max(1e-6, brain_dim[1] / 10.0)
+    cube_len = sd["cube_len"]
 
-    for idx, y in enumerate(slice_positions):
-        # Cross-section slice
-        origin =  mesh.center
-
-        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[2]])
+    for idx, k in enumerate(slice_positions):
+        normal, origin = slice_at(mesh, Slice_direction, k)
+        section = mesh.slice(normal=normal, origin=origin)
         if section.n_points == 0:
             continue
 
-        # Red cube reference (10% of X extent)
-        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0],brain_dim[2]))
-        plane = pv.Plane(center=(0, float(y), 0),
-                         direction=(0, 1, 0),  # plane normal
-                         i_size=brain_dim[0]*1.5, j_size=brain_dim[2]*1.5,  # side lengths
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, sd["max_dim"])
+        plane = pv.Plane(center=origin,
+                         direction=normal,
+                         i_size=brain_dim[sd["pre_axis"]]*1.5, j_size=brain_dim[sd["next_axis"]]*1.5,
                          i_resolution=1, j_resolution=1)
-        # Render: section + scale cube
         p.clear()
         p.add_mesh(scale_cube, color="red")
         p.add_mesh(section, color="black")
-        p.view_xz()  # no .show()!
+        getattr(p, sd["view_fn_name"])()
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
@@ -884,7 +940,8 @@ def compute_stl_sulci_depth(
     file_path: str,
     out_dir: str,
     min_contour_area: float = 20.0,
-    slice_thickness: float = 0.5):
+    slice_thickness: float = 0.5,
+    Slice_direction: str = "Y"):
     """Compute sulci depths from convexity defects across STL mesh slices.
 
     Args:
@@ -918,74 +975,59 @@ def compute_stl_sulci_depth(
 
     brain_dim_cm = [dim/10 for dim in brain_dim]
     brain_dim_cm = sorted(brain_dim_cm, reverse=True)
-    # --- Slice positions along Y
+
+    # --- Direction-dependent slicing setup
+    sd = _stl_slice_setup(mesh, brain_dim, Slice_direction)
+
     if slice_thickness <= 0:
         slice_thickness = 0.5
-    slice_positions = np.arange(y_min, y_max, slice_thickness)
+    slice_positions = np.arange(sd["low"], sd["high"], slice_thickness)
     N = len(slice_positions)
     if N == 0:
-        print("[STL Sulci depth] No slices to process (thickness too large vs. Y range).")
+        print(f"[STL Sulci depth] No slices to process (thickness too large vs. {Slice_direction} range).")
         return dic["label"],[],[],[],[]
 
-    # Effective thickness to exactly span Y-extent
-    slice_thickness_eff = brain_dim[1] / N
+    slice_thickness_eff = brain_dim[sd["axis_index"]] / N
     print(f"[STL Sulci depth] Effective slice thickness (mm): {slice_thickness_eff}")
 
     # --- Outputs
     os.makedirs(out_dir, exist_ok=True)
     out_dir_slices = os.path.join(out_dir, "stl_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
-    
+
     out_dir_origin = os.path.join(out_dir, "stl_orgin")
     os.makedirs(out_dir_origin, exist_ok=True)
-    
+
     print(f"[STL Sulci depth] Temp output dir: {out_dir}")
 
-    # --- Screenshot resolution via target mm/px spacing
-    pixel_spacing = 0.1  # mm per pixel
-    image_width = int(np.clip(np.ceil(brain_dim[0] / pixel_spacing), 64, 4096))
-    image_height = int(np.clip(np.ceil(brain_dim[2] / pixel_spacing), 64, 4096))
-    window_size = (image_width, image_height)
-
-    # --- Camera (look along +Y onto XZ)
-    center = [(x_min + x_max) / 2.0, (y_min + y_max) / 2.0, (z_min + z_max) / 2.0]
-    cam_position = [
-        (center[0], y_max + 100.0, center[2]),  # camera position
-        (center[0], center[1], center[2]),      # focal point
-        (0.0, 0.0, 1.0),                        # view up
-    ]
+    window_size = (sd["image_width"], sd["image_height"])
 
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
     rows = []
+    slice_class_data: list = []
     total_depth = []
     sections_list: list[pv.PolyData] = []
 
-
-    # --- Use a context manager so the plotter is *guaranteed* to be closed safely
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
-    p.camera_position = cam_position
-    cube_len = max(1e-6, brain_dim[1] / 10.0)
-    max_dim =  max(brain_dim[0],brain_dim[2])
-    for idx, y in enumerate(slice_positions):
-        # Cross-section slice
-        origin =  mesh.center
-        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[2]])
+    cube_len = sd["cube_len"]
+    max_dim = sd["max_dim"]
+    for idx, k in enumerate(slice_positions):
+        normal, origin = slice_at(mesh, Slice_direction, k)
+        section = mesh.slice(normal=normal, origin=origin)
         if section.n_points == 0:
             continue
-            
-        # Red cube reference (10% of X extent)
-        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max_dim)
-        plane = pv.Plane(center=(0, float(y), 0),
-                         direction=(0, 1, 0),  # plane normal
-                         i_size=brain_dim[0]*1.5, j_size=brain_dim[2]*1.5,  # side lengths
+
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, max_dim)
+        plane = pv.Plane(center=origin,
+                         direction=normal,
+                         i_size=brain_dim[sd["pre_axis"]]*1.5, j_size=brain_dim[sd["next_axis"]]*1.5,
                          i_resolution=1, j_resolution=1)
-        # Render: section + scale cube
         p.clear()
         p.add_mesh(scale_cube, color="red")
         p.add_mesh(section, color="black")
-        p.view_xz()  # no .show()!
+        getattr(p, sd["view_fn_name"])()
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
@@ -1012,7 +1054,12 @@ def compute_stl_sulci_depth(
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
         cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
-        depth = []
+        # Classify the rendered slice and gate the percent filter on it.
+        slice_kind, slice_kind_conf = classify_slice_kind(bgr)
+        use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.6
+        # Sulci classification: bin each kept defect by its depth as a
+        # fraction of `max_dim` (longest brain extent in mm).
+        depth_sets = empty_depth_sets()
         if inner_filtered:
             for cnt in inner_filtered:
                 hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)  # Compute convex hull
@@ -1028,18 +1075,37 @@ def compute_stl_sulci_depth(
                             if d > DEFECT_FIXED_POINT:
                                 mm_per_fixed = mm_per_px / DEFECT_FIXED_POINT
                                 depth_mm = d *mm_per_fixed
-                                if depth_mm < (0.25* max_dim) and depth_mm > (0.005* max_dim):
-                                    bgr = cv2.circle(bgr, far, radius_px, [255, 255, 0], -1)
-                                    depth.append(depth_mm)
-                
+                                if use_percent_filter:
+                                    keep = (SULCUS_TERTIARY_MIN_FRACTION * max_dim) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * max_dim)
+                                else:
+                                    keep = depth_mm > 0.5
+                                if keep:
+                                    if use_percent_filter:
+                                        sulcus_class = classify_sulcus_depth(depth_mm, max_dim)
+                                    else:
+                                        sulcus_class = "unclassified"
+                                    marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                                    depth_sets[sulcus_class].append(depth_mm)
+                                    bgr = cv2.circle(bgr, far, radius_px, marker_color, -1)
+
+        depth = flatten_depth_sets(depth_sets)
+        print(f"[STL sulci] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
-        rows.append([idx,len(inner_filtered),
+        if use_percent_filter:
+            per_class_cells = sulcus_export_cells(depth_sets)
+            slice_class_data.append(depth_sets)
+        else:
+            per_class_cells = [None] * len(sulcus_export_columns("mm"))
+            slice_class_data.append(None)
+        rows.append([
+            idx, slice_kind, len(inner_filtered),
             len(depth),                         # n_defects
             (min(depth) if depth else None),    # min_depth_mm
             (max(depth) if depth else None),    # max_depth_mm
-            mean_depth                          # mean_depth_mm
-            ])
+            mean_depth,                         # mean_depth_mm
+            *per_class_cells,
+        ])
 
 
         # Save annotated slice
@@ -1066,12 +1132,39 @@ def compute_stl_sulci_depth(
         
     # Save per-slice + total to Excel
     try:
-        rows.append(["Total_Number_of_Sluci",len(total_depth), "Mean_value_across_slices_mm",(round(mean_total, 2) if mean_total is not None else None)])
-        rows.append(["Max_sulci_across_slices_mm",(round(max(total_depth),2) if total_depth else None),
-        "Min_sulci_across_slices_mm",(round(min(total_depth),2) if total_depth else None)])
-        df = pd.DataFrame(rows, columns=["Slice","Sulci_count", "min_depth_mm", "max_depth_mm", "mean_depth_mm"])
-    
-        
+        per_class_cols = sulcus_export_columns("mm")
+        base_cols = [
+            "Slice", "SliceKind", "Count_of_cont.", "Sulci_count",
+            "min_depth_mm", "max_depth_mm", "mean_depth_mm",
+        ]
+        total_width = len(base_cols) + len(per_class_cols)
+
+        overall_depth_sets = empty_depth_sets()
+        for dsets in slice_class_data:
+            if dsets is None:
+                continue
+            for k in SULCUS_CLASSES:
+                overall_depth_sets[k].extend(dsets.get(k, []))
+
+        overall_n = len(total_depth)
+        overall_min = min(total_depth) if total_depth else None
+        overall_max = max(total_depth) if total_depth else None
+        overall_mean = (sum(total_depth) / overall_n) if overall_n else None
+
+        summary_base = [None] * len(base_cols)
+        summary_base[0] = "Sulci_overall_summary"
+        summary_base[base_cols.index("Sulci_count")]   = overall_n
+        summary_base[base_cols.index("min_depth_mm")]  = overall_min
+        summary_base[base_cols.index("max_depth_mm")]  = overall_max
+        summary_base[base_cols.index("mean_depth_mm")] = overall_mean
+        rows.append(pad_row(
+            [*summary_base, *sulcus_export_cells(overall_depth_sets)],
+            total_width,
+        ))
+
+        df = pd.DataFrame(rows, columns=[*base_cols, *per_class_cols])
+        df = drop_empty_columns(df)
+
         xlsx_path = os.path.join(out_dir, "Mesh_Sulci_depth.xlsx")
         df.to_excel(xlsx_path, index=False)
         print(f"[STL Sulci depth] Saved Excel → {xlsx_path}")
@@ -1088,7 +1181,8 @@ def compute_compactness_stl(
     file_path: str,
     out_dir: str,
     min_contour_area: float = 20.0,
-    slice_thickness: float = 0.5):
+    slice_thickness: float = 0.5,
+    Slice_direction: str = "Y"):
     """Compute 3D compactness (sphericity) from an STL mesh.
 
     Combines per-slice area and perimeter accumulation to derive volume (cm³)
@@ -1125,17 +1219,18 @@ def compute_compactness_stl(
     brain_dim_cm = [dim / 10 for dim in brain_dim]
     brain_dim_cm = sorted(brain_dim_cm, reverse=True)
 
-    # --- Slice positions along Y
+    # --- Direction-dependent slicing setup
+    sd = _stl_slice_setup(mesh, brain_dim, Slice_direction)
+
     if slice_thickness <= 0:
         slice_thickness = 0.5
-    slice_positions = np.arange(y_min, y_max, slice_thickness)
+    slice_positions = np.arange(sd["low"], sd["high"], slice_thickness)
     N = len(slice_positions)
     if N == 0:
-        print("[STL Compactness] No slices to process (thickness too large vs. Y range).")
+        print(f"[STL Compactness] No slices to process (thickness too large vs. {Slice_direction} range).")
         return dic["label"], [], 0, [], []
 
-    # Effective thickness to exactly span Y-extent
-    slice_thickness_eff = brain_dim[1] / N
+    slice_thickness_eff = brain_dim[sd["axis_index"]] / N
     print(f"[STL Compactness] Effective slice thickness (mm): {slice_thickness_eff}")
 
     # --- Outputs
@@ -1148,19 +1243,7 @@ def compute_compactness_stl(
 
     print(f"[STL Compactness] Temp output dir: {out_dir}")
 
-    # --- Screenshot resolution via target mm/px spacing
-    pixel_spacing = 0.1  # mm per pixel
-    image_width = int(np.clip(np.ceil(brain_dim[0] / pixel_spacing), 64, 4096))
-    image_height = int(np.clip(np.ceil(brain_dim[2] / pixel_spacing), 64, 4096))
-    window_size = (image_width, image_height)
-
-    # --- Camera (look along +Y onto XZ)
-    center = [(x_min + x_max) / 2.0, (y_min + y_max) / 2.0, (z_min + z_max) / 2.0]
-    cam_position = [
-        (center[0], y_max + 100.0, center[2]),  # camera position
-        (center[0], center[1], center[2]),       # focal point
-        (0.0, 0.0, 1.0),                         # view up
-    ]
+    window_size = (sd["image_width"], sd["image_height"])
 
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
@@ -1169,30 +1252,25 @@ def compute_compactness_stl(
     sum_area_mm2 = 0.0
     sum_inner_mm = 0.0
 
-    # --- Plotter
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
-    p.camera_position = cam_position
-    cube_len = max(1e-6, brain_dim[1] / 10.0)
+    cube_len = sd["cube_len"]
 
-    for idx, y in enumerate(slice_positions):
-        # Cross-section slice
-        origin = mesh.center
-        section = mesh.slice(normal=[0, 1, 0], origin=[origin[0], float(y), origin[2]])
+    for idx, k in enumerate(slice_positions):
+        normal, origin = slice_at(mesh, Slice_direction, k)
+        section = mesh.slice(normal=normal, origin=origin)
         if section.n_points == 0:
             continue
 
-        # Red cube reference (10% of Y extent)
-        scale_cube = make_scale_cube("Y", cube_len, mesh.center, y, max(brain_dim[0], brain_dim[2]))
-        plane = pv.Plane(center=(0, float(y), 0),
-                         direction=(0, 1, 0),
-                         i_size=brain_dim[0] * 1.5, j_size=brain_dim[2] * 1.5,
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, sd["max_dim"])
+        plane = pv.Plane(center=origin,
+                         direction=normal,
+                         i_size=brain_dim[sd["pre_axis"]] * 1.5, j_size=brain_dim[sd["next_axis"]] * 1.5,
                          i_resolution=1, j_resolution=1)
-        # Render: section + scale cube
         p.clear()
         p.add_mesh(scale_cube, color="red")
         p.add_mesh(section, color="black")
-        p.view_xz()
+        getattr(p, sd["view_fn_name"])()
 
         # Screenshot
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))

@@ -15,9 +15,37 @@ Key differences from the STL pipeline:
 from __future__ import annotations
 
 from deps import *
-from helpers.helpers import compute_kernel_convex, contours_exclude, calc_scale, get_red_rect_offset, slice_at, make_scale_cube, compactness_3D, compactness_2D, image_annotation_style
+from helpers.helpers import (
+    compute_kernel_convex,
+    contours_exclude,
+    calc_scale,
+    get_red_rect_offset,
+    slice_at,
+    make_scale_cube,
+    compactness_3D,
+    compactness_2D,
+    image_annotation_style,
+    SULCUS_CLASS_COLORS,
+    SULCUS_CLASSES,
+    classify_sulcus_depth,
+    empty_depth_sets,
+    flatten_depth_sets,
+    format_sulcus_class_summary,
+    sulcus_export_columns,
+    sulcus_export_cells,
+    pad_row,
+    drop_empty_columns,
+)
 from helpers.check_mesh import check_brain
-from constants import BINARY_THRESHOLD_VTK, RED_CHANNEL_MIN, GREEN_CHANNEL_MAX, DEFECT_FIXED_POINT
+from helpers.slice_kind_classifier import classify_slice_kind
+from constants import (
+    BINARY_THRESHOLD_VTK,
+    RED_CHANNEL_MIN,
+    GREEN_CHANNEL_MAX,
+    DEFECT_FIXED_POINT,
+    SULCUS_TERTIARY_MIN_FRACTION,
+    SULCUS_PRIMARY_MAX_FRACTION,
+)
 
 logger = logging.getLogger("fetomorph.vtk")
 
@@ -99,6 +127,7 @@ def compute_vtk_allmarks(
     rows = []
     sections_list: list[pv.PolyData] = []
     total_depth = []
+    slice_class_data: list = []
     sum_inner_mm = 0.0
     sum_outer_mm = 0.0
     sum_area = 0.0
@@ -170,7 +199,13 @@ def compute_vtk_allmarks(
         area_perim_mm  = area_perim_px * (mm_per_px ** 2)
 
 
-        depth = []
+        # Classify the rendered slice and gate the percent filter on it.
+        slice_kind, slice_kind_conf = classify_slice_kind(bgr)
+        use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.7
+        # Sulci classification: bin each kept defect by its depth as a
+        # fraction of the brain's longest physical extent (mm).
+        max_dim_mm = float(max(Physical_dim)) if Physical_dim else float(max(mesh_dim))
+        depth_sets = empty_depth_sets()
         if inner_filtered:
             for cnt in inner_filtered:
                 hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
@@ -186,16 +221,35 @@ def compute_vtk_allmarks(
                             bgr = cv2.line(bgr, start, end, [255, 0, 0], thickness)
                             if d > DEFECT_FIXED_POINT:
                                 depth_mm = d * mm_per_px / DEFECT_FIXED_POINT
-                                bgr = cv2.circle(bgr, far, radius_px, [255, 255, 0], -1)
-                                depth.append(depth_mm)
-                
+                                if use_percent_filter:
+                                    keep = (SULCUS_TERTIARY_MIN_FRACTION * max_dim_mm) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * max_dim_mm)
+                                else:
+                                    keep = depth_mm > 0.5
+                                if keep:
+                                    if use_percent_filter:
+                                        sulcus_class = classify_sulcus_depth(depth_mm, max_dim_mm)
+                                    else:
+                                        sulcus_class = "unclassified"
+                                    marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                                    depth_sets[sulcus_class].append(depth_mm)
+                                    bgr = cv2.circle(bgr, far, radius_px, marker_color, -1)
+
+        depth = flatten_depth_sets(depth_sets)
+        print(f"[VTK allmarks] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
+        if use_percent_filter:
+            per_class_cells = sulcus_export_cells(depth_sets)
+            slice_class_data.append(depth_sets)
+        else:
+            per_class_cells = [None] * len(sulcus_export_columns(unit))
+            slice_class_data.append(None)
         rows.append([idx, len(inner_filtered), area_perim_mm, inner_perim_mm, outer_perim_mm,
             len(depth),                         # n_defects
-            (min(depth) if depth else None),    # min_depth_mm
-            (max(depth) if depth else None),    # max_depth_mm
-            mean_depth                          # mean_depth_mm
+            (min(depth) if depth else None),    # min_depth_{unit}
+            (max(depth) if depth else None),    # max_depth_{unit}
+            mean_depth,                         # mean_depth_{unit}
+            *per_class_cells,
             ])
         # Accumulate
         sum_inner_mm += inner_perim_mm
@@ -231,16 +285,45 @@ def compute_vtk_allmarks(
 
     # Save per-slice + total to Excel
     try:
-        rows.append([f"Volume {unit}^3", Volume, f"Surface Area {unit}^2", Area])
-        rows.append(["GI",round(GI_total,2)])
-        rows.append(["Compactness", round(comp, 2)])
-        rows.append(["Total_Number_of_Sluci",len(total_depth), f"Mean_value_across_slices_{unit}",(round(mean_total, 2) if mean_total is not None else None)])
-        rows.append([f"Max_sulci_across_slices_{unit}",(round(max(total_depth),2) if total_depth else None),
-        f"Min_sulci_across_slices_{unit}",(round(min(total_depth),2) if total_depth else None)])
-        
-        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.",f"Inner_area_{unit}^2", f"Inner_Perimeter_{unit}", f"Outer_Perimeter_{unit}" ,"Sulci_count",
-            f"min_depth_{unit}", f"max_depth_{unit}", f"mean_depth_{unit}"])
-        
+        base_cols = [
+            "Slice", "Count_of_cont.", f"Inner_area_{unit}^2",
+            f"Inner_Perimeter_{unit}", f"Outer_Perimeter_{unit}",
+            "Sulci_count", f"min_depth_{unit}", f"max_depth_{unit}", f"mean_depth_{unit}",
+        ]
+        per_class_cols = sulcus_export_columns(unit)
+        cols = base_cols + per_class_cols
+        total_width = len(cols)
+
+        overall_depth_sets = empty_depth_sets()
+        for dsets in slice_class_data:
+            if dsets is None:
+                continue
+            for k in SULCUS_CLASSES:
+                overall_depth_sets[k].extend(dsets.get(k, []))
+
+        overall_n = len(total_depth)
+        overall_min = min(total_depth) if total_depth else None
+        overall_max = max(total_depth) if total_depth else None
+        overall_mean = (sum(total_depth) / overall_n) if overall_n else None
+
+        summary_base = [None] * len(base_cols)
+        summary_base[0] = "Sulci_overall_summary"
+        summary_base[base_cols.index("Sulci_count")]        = overall_n
+        summary_base[base_cols.index(f"min_depth_{unit}")]  = overall_min
+        summary_base[base_cols.index(f"max_depth_{unit}")]  = overall_max
+        summary_base[base_cols.index(f"mean_depth_{unit}")] = overall_mean
+        rows.append(pad_row(
+            [*summary_base, *sulcus_export_cells(overall_depth_sets)],
+            total_width,
+        ))
+
+        rows.append(pad_row([f"Volume {unit}^3", Volume, f"Surface Area {unit}^2", Area], total_width))
+        rows.append(pad_row(["GI", round(GI_total, 2)], total_width))
+        rows.append(pad_row(["Compactness", round(comp, 2)], total_width))
+
+        df = pd.DataFrame(rows, columns=cols)
+        df = drop_empty_columns(df)
+
         xlsx_path = os.path.join(out_dir, f"Mesh_Allmarks_{Slice_direction}.xlsx")
         df.to_excel(xlsx_path, index=False)
         print(f"[VTK All Hallmarks] Saved Excel → {xlsx_path}")
@@ -858,6 +941,7 @@ def compute_vtk_sulci_depth(
     sections_list: list[pv.PolyData] = []
     rows = []
     total_depth = []
+    slice_class_data: list = []
 
     # --- Use a context manager so the plotter is *guaranteed* to be closed safely
     p = pv.Plotter(off_screen=True)
@@ -911,7 +995,13 @@ def compute_vtk_sulci_depth(
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
         cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
-        depth = []
+        # Classify the rendered slice and gate the percent filter on it.
+        slice_kind, slice_kind_conf = classify_slice_kind(bgr)
+        use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.7
+        # Sulci classification: bin each kept defect by its depth as a
+        # fraction of the brain's longest physical extent (mm).
+        max_dim_mm = float(max(Physical_dim)) if Physical_dim else float(max(mesh_dim))
+        depth_sets = empty_depth_sets()
         if inner_filtered:
             for cnt in inner_filtered:
                 hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)  # Compute convex hull
@@ -926,16 +1016,35 @@ def compute_vtk_sulci_depth(
                             bgr = cv2.line(bgr, start, end, [255, 0, 0], thickness)
                             if d > DEFECT_FIXED_POINT:
                                 depth_mm = d * mm_per_px / DEFECT_FIXED_POINT
-                                bgr = cv2.circle(bgr, far, radius_px, [255, 255, 0], -1)
-                                depth.append(depth_mm)
-                
+                                if use_percent_filter:
+                                    keep = (SULCUS_TERTIARY_MIN_FRACTION * max_dim_mm) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * max_dim_mm)
+                                else:
+                                    keep = depth_mm > 0.5
+                                if keep:
+                                    if use_percent_filter:
+                                        sulcus_class = classify_sulcus_depth(depth_mm, max_dim_mm)
+                                    else:
+                                        sulcus_class = "unclassified"
+                                    marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                                    depth_sets[sulcus_class].append(depth_mm)
+                                    bgr = cv2.circle(bgr, far, radius_px, marker_color, -1)
+
+        depth = flatten_depth_sets(depth_sets)
+        print(f"[VTK sulci] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
+        if use_percent_filter:
+            per_class_cells = sulcus_export_cells(depth_sets)
+            slice_class_data.append(depth_sets)
+        else:
+            per_class_cells = [None] * len(sulcus_export_columns(unit))
+            slice_class_data.append(None)
         rows.append([idx, len(inner_filtered),
             len(depth),                         # n_defects
-            (min(depth) if depth else None),    # min_depth_mm
-            (max(depth) if depth else None),    # max_depth_mm
-            mean_depth                          # mean_depth_mm
+            (min(depth) if depth else None),    # min_depth_{unit}
+            (max(depth) if depth else None),    # max_depth_{unit}
+            mean_depth,                         # mean_depth_{unit}
+            *per_class_cells,
             ])
 
 
@@ -961,13 +1070,40 @@ def compute_vtk_sulci_depth(
 
     # Save per-slice + total to Excel
     try:
-        rows.append(["Total_Number_of_Sluci",len(total_depth), f"Mean_value_across_slices_{unit}",(round(mean_total, 2) if mean_total is not None else None)])
-        rows.append([f"Max_sulci_across_slices_{unit}",(round(max(total_depth),2) if total_depth else None),
-        f"Min_sulci_across_slices_{unit}",(round(min(total_depth),2) if total_depth else None)])
-        
-        df = pd.DataFrame(rows, columns=["Slice", "Sulci_count", f"min_depth_{unit}", f"max_depth_{unit}", f"mean_depth_{unit}"])
-        
-        
+        base_cols = [
+            "Slice", "Count_of_cont.", "Sulci_count",
+            f"min_depth_{unit}", f"max_depth_{unit}", f"mean_depth_{unit}",
+        ]
+        per_class_cols = sulcus_export_columns(unit)
+        cols = base_cols + per_class_cols
+        total_width = len(cols)
+
+        overall_depth_sets = empty_depth_sets()
+        for dsets in slice_class_data:
+            if dsets is None:
+                continue
+            for k in SULCUS_CLASSES:
+                overall_depth_sets[k].extend(dsets.get(k, []))
+
+        overall_n = len(total_depth)
+        overall_min = min(total_depth) if total_depth else None
+        overall_max = max(total_depth) if total_depth else None
+        overall_mean = (sum(total_depth) / overall_n) if overall_n else None
+
+        summary_base = [None] * len(base_cols)
+        summary_base[0] = "Sulci_overall_summary"
+        summary_base[base_cols.index("Sulci_count")]        = overall_n
+        summary_base[base_cols.index(f"min_depth_{unit}")]  = overall_min
+        summary_base[base_cols.index(f"max_depth_{unit}")]  = overall_max
+        summary_base[base_cols.index(f"mean_depth_{unit}")] = overall_mean
+        rows.append(pad_row(
+            [*summary_base, *sulcus_export_cells(overall_depth_sets)],
+            total_width,
+        ))
+
+        df = pd.DataFrame(rows, columns=cols)
+        df = drop_empty_columns(df)
+
         xlsx_path = os.path.join(out_dir, f"Mesh_Sulci_depth_{Slice_direction}.xlsx")
         df.to_excel(xlsx_path, index=False)
         print(f"[VTK Sulci depth] Saved Excel → {xlsx_path}")

@@ -268,6 +268,9 @@ class FileManager:
     def close_current(self) -> None:
         """Close the currently loaded file and reset the display to a blank state."""
         mw = self.mw
+        for meth in ("clear_annotations", "clear_line_annotations"):
+            if hasattr(mw.image_label, meth):
+                getattr(mw.image_label, meth)()
         mw.image_label.clearImage()
         mw.view.show_widget(mw.image_label)
         mw.view.set_slice_controls(False)
