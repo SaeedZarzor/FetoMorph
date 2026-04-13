@@ -213,11 +213,14 @@ def compute_stl_allmarks(
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
         cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
-        # Outer contours via morph close, exclude red + area filter
+        # Outer contours: rebuild a mask from ONLY the kept inner contours so
+        # noise blobs rejected by the inner filter can't produce spurious outer
+        # components after morph-close.
+        inner_mask = np.zeros_like(bw)
+        cv2.drawContours(inner_mask, inner_filtered, -1, 255, thickness=cv2.FILLED)
         kernel = compute_kernel_convex(max(1, int(kernel_size)))
-        closed = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel)
+        closed = cv2.morphologyEx(inner_mask, cv2.MORPH_CLOSE, kernel)
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        outer_candidates = contours_exclude(outer_candidates, red_rect, bw.shape)
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
         cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), thickness)
 
@@ -500,11 +503,14 @@ def compute_stl_lGI(
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
         cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
 
-        # Outer contours via morph close, exclude red + area filter
+        # Outer contours: rebuild a mask from ONLY the kept inner contours so
+        # noise blobs rejected by the inner filter can't produce spurious outer
+        # components after morph-close.
+        inner_mask = np.zeros_like(bw)
+        cv2.drawContours(inner_mask, inner_filtered, -1, 255, thickness=cv2.FILLED)
         kernel = compute_kernel_convex(max(1, int(kernel_size)))
-        closed = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel)
+        closed = cv2.morphologyEx(inner_mask, cv2.MORPH_CLOSE, kernel)
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        outer_candidates = contours_exclude(outer_candidates, red_rect, bw.shape)
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
         cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), thickness)
 

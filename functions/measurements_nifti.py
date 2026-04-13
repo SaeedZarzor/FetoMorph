@@ -168,9 +168,13 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
             filtered_contours = [cnt for cnt in inner_contours if cv2.contourArea(cnt) > min_contour_area]
             cnt_mm = [cnt.astype(np.float32) * [pixel_size_x, pixel_size_z] for cnt in filtered_contours]
             inner_perimeter = sum(cv2.arcLength(cnt, True) for cnt in cnt_mm)
-                
-            # Outer contour using morphological closing
-            closed_mask = cv2.morphologyEx(slice_mask, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
+
+            # Outer contour: rebuild a mask from ONLY the kept inner contours
+            # so noise rejected by the inner filter cannot produce spurious
+            # outer components after morph-close.
+            inner_mask_only = np.zeros_like(slice_mask)
+            cv2.drawContours(inner_mask_only, filtered_contours, -1, 1, thickness=cv2.FILLED)
+            closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
             outer_contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             filtered_outer_contours = [cnt for cnt in outer_contours if cv2.contourArea(cnt) > min_contour_area]
             outer_cnt_mm = [cnt.astype(np.float32) * [pixel_size_x, pixel_size_z] for cnt in filtered_outer_contours]
@@ -210,6 +214,8 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                                 if d > DEFECT_FIXED_POINT:
                                     if pixel_size_x!=pixel_size_z:
                                         mm_per_px, mm_per_fixed = defect_mm_per_px_and_fixed(start, end, far, pixel_size_x, pixel_size_z)
+                                        if mm_per_fixed is None:
+                                            continue  # degenerate edge (start == end)
                                     else:
                                         mm_per_fixed = pixel_size_x / DEFECT_FIXED_POINT
 
@@ -662,9 +668,13 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
             filtered_contours = [cnt for cnt in inner_contours if cv2.contourArea(cnt) > min_contour_area]
             cnt_mm = [cnt.astype(np.float32) * [pixel_size_x, pixel_size_z] for cnt in filtered_contours]
             inner_perimeter = sum(cv2.arcLength(cnt, True) for cnt in cnt_mm)
-                
-            # Outer contour using morphological closing
-            closed_mask = cv2.morphologyEx(slice_mask, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
+
+            # Outer contour: rebuild a mask from ONLY the kept inner contours
+            # so noise rejected by the inner filter cannot produce spurious
+            # outer components after morph-close.
+            inner_mask_only = np.zeros_like(slice_mask)
+            cv2.drawContours(inner_mask_only, filtered_contours, -1, 1, thickness=cv2.FILLED)
+            closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
             outer_contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             filtered_outer_contours = [cnt for cnt in outer_contours if cv2.contourArea(cnt) > min_contour_area]
             outer_cnt_mm = [cnt.astype(np.float32) * [pixel_size_x, pixel_size_z] for cnt in filtered_outer_contours]
@@ -855,6 +865,8 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
                                 if d > DEFECT_FIXED_POINT:
                                     if pixel_size_x!=pixel_size_z:
                                         mm_per_px, mm_per_fixed = defect_mm_per_px_and_fixed(start, end, far, pixel_size_x, pixel_size_z)
+                                        if mm_per_fixed is None:
+                                            continue  # degenerate edge (start == end)
                                     else:
                                         mm_per_fixed = pixel_size_x / DEFECT_FIXED_POINT
 

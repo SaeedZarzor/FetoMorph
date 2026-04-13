@@ -964,7 +964,7 @@ class MainWindow(QMainWindow):
                 try:
                     self.statusBar().showMessage(f"Saved ROI: {out_path}", 5000)
                 except Exception:
-                    pass
+                    logger.debug("statusBar showMessage failed", exc_info=True)
             else:
                 QMessageBox.warning(self, "Annotate", "Failed to save cropped image.")
 
@@ -972,7 +972,7 @@ class MainWindow(QMainWindow):
         try:
             self.statusBar().showMessage("Drag to select a square region… (Esc to cancel)")
         except Exception:
-            pass
+            logger.debug("statusBar showMessage failed", exc_info=True)
         
         # start selection on the image widget
         
@@ -1198,8 +1198,8 @@ class MainWindow(QMainWindow):
         annotated, basename, array = convert_image(image_path, out_dir, pixel_spacing= self.pixel_size, min_contour_area=self.cnt_threshold)
 
         label_text = self.get_label_for_cropped_path(image_path)
-        if label_text:
-            annotated_bgr = put_label_on_bgr(annotated, label_text, pos="topleft")
+        if label_text and annotated is not None:
+            annotated = put_label_on_bgr(annotated, label_text, pos="topleft")
     
         self.metrics_store.record_metric_for(self.current_path, label=label_text ,
                 pixel_size_units = f"{self.units_length}/pixel",

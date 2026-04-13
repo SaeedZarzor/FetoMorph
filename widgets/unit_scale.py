@@ -16,6 +16,11 @@ class UnitScaleDialog(QDialog):
     lets the user switch to an interactive measurement mode instead.
     """
 
+    # Max fractional decimals. Capped so that 10**decimals stays under the
+    # int32 range that QSpinBox uses for its value — higher precision would
+    # overflow on setValue.
+    _MAX_FRAC_DECIMALS = 9
+
     def __init__(self, parent=None, unit_init: str = "mm", pixel_size_init: float = 0.03):
         """Initialise the unit/scale dialog.
 
@@ -52,7 +57,7 @@ class UnitScaleDialog(QDialog):
         self.scale_int_spin.setMinimumWidth(120)
 
         self.decimals_spin = QSpinBox(self)
-        self.decimals_spin.setRange(1, 12)
+        self.decimals_spin.setRange(1, self._MAX_FRAC_DECIMALS)
         self.decimals_spin.setValue(6)
 
         self.scale_frac_spin = QSpinBox(self)
@@ -106,7 +111,7 @@ class UnitScaleDialog(QDialog):
     def _init_scale_parts(self, pixel_size: float):
         """Initialise integer/fractional controls from a float."""
         val = max(float(pixel_size), 0.0)
-        decimals = min(12, max(1, self._detect_decimals(val)))
+        decimals = min(self._MAX_FRAC_DECIMALS, max(1, self._detect_decimals(val)))
         self.decimals_spin.blockSignals(True)
         self.decimals_spin.setValue(decimals)
         self.decimals_spin.blockSignals(False)
@@ -133,7 +138,7 @@ class UnitScaleDialog(QDialog):
 
     def _set_frac_range(self, decimals: int):
         """Update fractional-part range according to decimal places."""
-        decimals = min(decimals, 9)  # cap to avoid 32-bit int overflow
+        decimals = min(decimals, self._MAX_FRAC_DECIMALS)
         max_frac = (10 ** decimals) - 1
         self.scale_frac_spin.setRange(0, max_frac)
 

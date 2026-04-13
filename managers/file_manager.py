@@ -223,8 +223,8 @@ class FileManager:
                 from PySide6.QtGui import QDesktopServices
                 from PySide6.QtCore import QUrl
                 QDesktopServices.openUrl(QUrl.fromLocalFile(target))
-            except Exception:
-                pass
+            except Exception as ex:
+                logger.debug("QDesktopServices.openUrl failed: %s", ex, exc_info=True)
             QMessageBox.information(mw, "Export Complete", f"Exported folder to:\n{target}")
             return
 

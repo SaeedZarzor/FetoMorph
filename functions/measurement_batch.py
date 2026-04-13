@@ -96,7 +96,10 @@ def process_on_images_batch(directory_path,
         (thresh, im_bw) = cv2.threshold(im_bw, BINARY_THRESHOLD_DEFAULT, 255, 1)
         contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > cnt_threshold]
+        # Per-image threshold: the auto-retry below may bump this locally when
+        # the LGI ratio drops below 1, but must NOT leak into the next image —
+        # always start each file from the user-supplied cnt_threshold.
+        local_threshold = cnt_threshold
 
         annotated = image.copy()
         W, H = annotated.shape[:2]
@@ -108,41 +111,47 @@ def process_on_images_batch(directory_path,
         # original fixed-millimeter rule and remain "unclassified".
         slice_kind, slice_kind_conf = classify_slice_kind(image)
         use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.7
-        # Slice length = longest side of the brain's bounding box (physical units),
-        # not the raw image size. Falls back to image extent if no brain contour was found.
-        if filtered_contours:
-            _bx, _by, _bw_px, _bh_px = cv2.boundingRect(np.vstack(filtered_contours))
-            slice_length = max(_bw_px, _bh_px) * pixel_size
-        else:
-            slice_length = max(W, H) * pixel_size
         print(f"[Batch] {file_name}: slice_kind={slice_kind} (conf {slice_kind_conf:.2f}), "
               f"using {'percent' if use_percent_filter else 'fixed'} filter for sulci depth.")
 
-        if filtered_contours:
-            cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
-            area_sum = sum(cv2.contourArea(cnt) for cnt in filtered_contours)
-            perimeter_sum = sum(cv2.arcLength(cnt, True) for cnt in filtered_contours)
-        else:
-            area_sum = perimeter_sum = 0
-                
-        area = area_sum * pixel_size**2
-        perimeter = perimeter_sum * pixel_size
-            
+        kernel = compute_kernel_convex(kernel_size)
 
-        closed_mask = cv2.morphologyEx(im_bw, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
-        convex_Contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                        
+        # Joint inner/outer filtering loop: both contour sets are filtered with
+        # the SAME local_threshold every iteration, so when the retry bumps the
+        # threshold to restore LGI >= 1, inner and outer stay at parity.
+        # The outer source mask is rebuilt from ONLY the kept inner contours so
+        # noise blobs the inner filter rejected cannot produce spurious outer
+        # components after morph-close.
         max_steps = 1000
         steps = 0
+        filtered_contours = []
+        filtered_conv_contours = []
+        perimeter_convex_sum = 1.0
+        area = 0.0
+        perimeter = 0.0
+        perimeter_convex = 0.0
+        perimeter_rate = 0.0
+        compactness = 0.0
         while True:
             steps += 1
             if steps > max_steps:
                 break  # safety
 
+            filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > local_threshold]
+
+            inner_mask_only = np.zeros_like(im_bw)
+            cv2.drawContours(inner_mask_only, filtered_contours, -1, 255, thickness=cv2.FILLED)
+            closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, kernel)
+            convex_Contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             filtered_conv_contours = [
                 cnt for cnt in convex_Contours
-                if cv2.contourArea(cnt) > cnt_threshold
+                if cv2.contourArea(cnt) > local_threshold
             ]
+
+            area_sum = sum(cv2.contourArea(cnt) for cnt in filtered_contours) if filtered_contours else 0
+            perimeter_sum = sum(cv2.arcLength(cnt, True) for cnt in filtered_contours) if filtered_contours else 0
+            area = area_sum * pixel_size**2
+            perimeter = perimeter_sum * pixel_size
 
             if not filtered_conv_contours:
                 perimeter_convex_sum = 1.0  # avoid div-by-zero if needed later
@@ -153,10 +162,20 @@ def process_on_images_batch(directory_path,
             perimeter_rate = perimeter / perimeter_convex if perimeter_convex else float("inf")
             compactness = compactness_2D(area, perimeter)
             if perimeter_rate < 1:
-                cnt_threshold += 500
-                continue  # retry with higher threshold
+                local_threshold += 500
+                continue  # retry with higher threshold (both inner and outer)
             break  # condition satisfied
 
+        # Slice length = longest side of the brain's bounding box (physical units),
+        # not the raw image size. Falls back to image extent if no brain contour was found.
+        if filtered_contours:
+            _bx, _by, _bw_px, _bh_px = cv2.boundingRect(np.vstack(filtered_contours))
+            slice_length = max(_bw_px, _bh_px) * pixel_size
+        else:
+            slice_length = max(W, H) * pixel_size
+
+        if filtered_contours:
+            cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
         annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, (0, 255, 0), thickness)
             
         # Sulci classification: bin each kept defect by its depth as a

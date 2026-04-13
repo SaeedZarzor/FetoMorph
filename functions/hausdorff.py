@@ -57,7 +57,7 @@ def _align_points(c1: np.ndarray, c2: np.ndarray, mode: str = "right_bottom") ->
 def convert_image(
         image_path: str, out_dir: str,
         pixel_spacing: float = 0.01,
-        min_contour_area: float = 200) -> tuple[np.ndarray, str, np.ndarray] | tuple[None, None]:
+        min_contour_area: float = 200) -> tuple[np.ndarray | None, str | None, np.ndarray | None]:
     """Extract contour coordinates from a brain-slice image.
 
     Thresholds the image, filters contours by area, scales to physical
@@ -71,13 +71,14 @@ def convert_image(
 
     Returns:
         Tuple of ``(annotated_bgr, basename, contour_coords_mm)``
-        or ``(None, None)`` if no contours found.
+        or ``(None, None, None)`` if the image can't be loaded or
+        no contours are found.
     """
     image = cv2.imread(image_path)
-    
+
     if image is None:
         print(f"[Hausdorff] Error: Could not load image from {image_path}")
-        return
+        return None, None, None
     
     
     # Convert BGR to RGB
@@ -136,7 +137,7 @@ def convert_image(
     else:
         print("[Hausdorff] No contours found!")
         print("Try adjusting the threshold value.")
-        return None, None
+        return None, None, None
         
         
 def calculate_hausdorff_distance(
@@ -163,11 +164,13 @@ def calculate_hausdorff_distance(
     Returns:
         Tuple of ``(plot_rgba, hausdorff_dist, d12, d21)`` or ``(None, …)``.
     """
-    os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, filename)
-    
     if contours_coords_first is None or contours_coords_second is None:
-        print("[Hausdorff] Error: inputs are None"); return None, None, None
+        print("[Hausdorff] Error: inputs are None")
+        return None, None, None, None
+
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, filename)
 
     c1 = _to_xy2(contours_coords_first)
     c2 = _to_xy2(contours_coords_second)

@@ -50,11 +50,11 @@ class ZoomControlsWidget(QWidget):
         if self._target is not None:
             try:
                 self._target.removeEventFilter(self)
-            except Exception:
+            except RuntimeError:
                 pass
             try:
                 self._target.zoomChanged.disconnect(self._on_target_zoom_changed)
-            except Exception:
+            except (TypeError, RuntimeError):
                 pass
         self._target = image_label
         if self._target is not None:
@@ -94,9 +94,9 @@ class ZoomControlsWidget(QWidget):
         if t.endswith("%"):
             try:
                 v = float(t[:-1]) / 100.0
-                self._target.set_zoom_factor(v)
-            except Exception:
-                pass
+            except ValueError:
+                return
+            self._target.set_zoom_factor(v)
 
     def _on_target_zoom_changed(self, factor: float):
         """Keep combo text in sync with target zoom."""
@@ -114,7 +114,7 @@ class ZoomControlsWidget(QWidget):
             try:
                 if hasattr(self._target, "hasImage") and not self._target.hasImage():
                     return False
-            except Exception:
+            except RuntimeError:
                 return False
             dy = event.angleDelta().y()
             if dy > 0:

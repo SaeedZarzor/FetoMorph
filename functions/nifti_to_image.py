@@ -233,11 +233,11 @@ def nifti_slice_to_image(
     cleaned = clean_background_keep_colored(img, unify_color=unify_color)
     
     length_px, _ = detect_scale_bar_length(img)
-#    if match_fraction_of_width is not None:
-#        length_px = int(img.shape[1] * float(match_fraction_of_width))
-#    if not length_px or length_px <= 0:
-#        # sensible fallback if detection fails
-#        length_px = int(img.shape[1] * 0.10)
+    if not length_px or length_px <= 0:
+        # Detection failed — fall back to 10% of image width so
+        # downstream drawing/return value stays well-defined.
+        length_px = int(img.shape[1] * 0.10)
+        print(f"[nifti_to_image] scale-bar detection failed; falling back to {length_px}px")
 
     # --- Apply optional smoothing ---
     if smooth:
@@ -260,8 +260,8 @@ def nifti_slice_to_image(
 #            color=(new_bar_color),
             text=label_text
         )
-       
-    
+    else:
+        result = cleaned
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(out_path, result)

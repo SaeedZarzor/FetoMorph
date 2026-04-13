@@ -307,10 +307,11 @@ class MetricsStore:
                 it = QStandardItem(txt)
                 try:
                     f = float(txt)
+                except ValueError:
+                    pass
+                else:
                     it.setText(f"{f:.3f}")
                     it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                except Exception:
-                    pass
                 items.append(it)
             m.appendRow(items)
 
@@ -338,10 +339,11 @@ class MetricsStore:
             it = QStandardItem(txt)
             try:
                 f = float(txt)
+            except ValueError:
+                pass
+            else:
                 it.setText(f"{f:.3f}")
                 it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            except Exception:
-                pass
             items.append(it)
         self._metrics_model.appendRow(items)
 

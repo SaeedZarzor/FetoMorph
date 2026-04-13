@@ -114,7 +114,12 @@ def compute_image_allmarks(
 
     # --- Outer contour: morphological close fills sulci, giving the "convex" boundary.
     # GI (gyrification index) = inner perimeter / outer perimeter.
-    closed_mask = cv2.morphologyEx(im_bw, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
+    # Rebuild the source mask from ONLY the kept inner contours so noise blobs
+    # the inner filter rejected cannot produce spurious outer components after
+    # morph-close.
+    inner_mask_only = np.zeros_like(im_bw)
+    cv2.drawContours(inner_mask_only, filtered_contours, -1, 255, thickness=cv2.FILLED)
+    closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
     convex_Contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filtered_conv_contours = [cnt_conv for cnt_conv in convex_Contours if cv2.contourArea(cnt_conv) > cnt_threshold]
 
@@ -365,9 +370,13 @@ def compute_image_lGI(
         perimeter = sum(cv2.arcLength(cnt, True) for cnt in filtered_contours)
     else:
         perimeter = 0
-        
-            
-    closed_mask = cv2.morphologyEx(im_bw, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
+
+    # Outer contour: rebuild a mask from ONLY the kept inner contours so noise
+    # rejected by the inner area filter cannot produce spurious outer components
+    # after morph-close.
+    inner_mask_only = np.zeros_like(im_bw)
+    cv2.drawContours(inner_mask_only, filtered_contours, -1, 255, thickness=cv2.FILLED)
+    closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
     convex_Contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filtered_conv_contours = [cnt_conv for cnt_conv in convex_Contours if cv2.contourArea(cnt_conv) > cnt_threshold]
     
