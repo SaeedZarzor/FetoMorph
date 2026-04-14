@@ -1,0 +1,11 @@
+{
+  "input_root": "C:\\Users\\Divya\\git\\FetoMorph\\Examples\\full_slices",
+  "output_root": "C:\\Users\\Divya\\git\\FetoMorph\\measurements",
+  "section_label": "Filled_2D_sections",
+  "weeks": [24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38],
+  "axes": ["axial", "coronal", "sagittal"],
+  "pixel_size": 0.024390243902439025,
+  "kernel_size": 25,
+  "cnt_threshold": 2000,
+  "unit": "mm"
+}
