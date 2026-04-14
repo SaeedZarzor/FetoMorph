@@ -41,6 +41,7 @@ Thumbs.db
 # Local env/log/temp
 .env
 .env.*
+requirements.local.windows.txt
 *.log
 tmp/
 temp/
