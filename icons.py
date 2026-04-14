@@ -1,7 +1,19 @@
-from pathlib import Path
-from PySide6.QtGui import QIcon
+"""Icon loader for the FetoMorph ribbon / toolbar actions.
 
-def set_icons(ui, assets: Path):
+Maps each ``QAction`` attribute name on the main window to the relative
+path of its icon file under the *assets* directory.
+"""
+
+from deps import *
+
+
+def set_icons(ui, assets: Path) -> None:
+    """Assign icon files to every toolbar QAction on *ui*.
+
+    Args:
+        ui: The main window instance whose QAction attributes will be updated.
+        assets: Root directory that contains the ``icons/`` subfolder.
+    """
     icons = {
         "act_nav_import":       "icons/import.png",
         "act_nav_export":       "icons/export.png",
@@ -41,6 +53,8 @@ def set_icons(ui, assets: Path):
         "act_pial_to_stl":      "icons/convert.png",
         "act_view_surfacses":   "icons/Freesurfer.png",
         "act_view_morph_map":   "icons/morph_map.png",
+        "act_meas_stright":     "icons/length.png",
+        "act_meas_compactness": "icons/compactness.png",
     }
 
     for attr, rel in icons.items():

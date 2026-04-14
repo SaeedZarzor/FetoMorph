@@ -1,11 +1,33 @@
+"""Extract selected label regions from a NIfTI segmentation volume.
+
+Loads a NIfTI file, builds a binary mask of the requested labels,
+filters to slices that contain those labels along axis 1, and saves the
+result as a compressed NIfTI file.
+"""
+
 from deps import *
-import os
-import nibabel as nib
-import numpy as np
-from pathlib import Path
-# from PyQt5.QtWidgets import QMessageBox  # if not supplied by deps
 
 def nifti_extractor(parent, file_path: str, out_dir: str, valid_labels: set[int]):
+    """Extract labelled regions from a NIfTI segmentation and save them.
+
+    The input volume is reoriented to closest-canonical (RAS+) form,
+    voxels matching *valid_labels* are retained as a binary mask, and
+    only slices along axis 1 that contain at least one selected voxel
+    are kept.  The filtered volume is saved as a compressed NIfTI file.
+
+    A Qt ``QMessageBox`` is shown to the user if no valid labels are
+    provided or if no slices contain the requested labels.
+
+    Args:
+        parent: Parent Qt widget used for message-box dialogs.
+        file_path: Path to the input NIfTI file (.nii or .nii.gz).
+        out_dir: Directory where the extracted NIfTI will be written.
+        valid_labels: Set of integer label values to include.
+
+    Returns:
+        The path to the saved NIfTI file, or ``None`` if extraction
+        was skipped (no valid labels or no matching slices).
+    """
     # Load canonical RAS+ orientation
     nii = nib.as_closest_canonical(nib.load(file_path))
 

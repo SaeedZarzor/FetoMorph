@@ -1,21 +1,45 @@
-import cv2
-import numpy as np
-import os
+"""Hausdorff distance computation between two brain-slice contours.
+
+Workflow:
+    1. ``convert_image`` extracts contour coordinates from a brain-slice
+       image and scales them to physical units.
+    2. ``calculate_hausdorff_distance`` aligns the two point sets and
+       computes the directed and symmetric Hausdorff distances.
+
+**Why alignment is needed:** contours from different imaging modalities
+(e.g. MRI vs simulation) may be offset in pixel space even though they
+represent the same anatomy.  Alignment modes (``right_bottom``,
+``left_top``, ``centroid``) translate the first contour so that a
+reference corner or centroid matches the second.
+"""
+
+from __future__ import annotations
+
+from deps import *
 from PIL import Image
-from pathlib import Path
 from scipy.spatial.distance import directed_hausdorff, cdist
-import matplotlib.pyplot as plt
-from helpers.Helpers import text_thickness
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from helpers.helpers import image_annotation_style
 
 
-def _to_xy2(a):
+def _to_xy2(a: np.ndarray) -> np.ndarray:
+    """Ensure *a* is an ``(N, 2)`` float array."""
     a = np.squeeze(np.asarray(a)).astype(float)
     if a.ndim != 2 or a.shape[1] != 2:
         raise ValueError("Expected (N,2) array")
     return a
 
-def _align_points(c1, c2, mode="right_bottom"):
+def _align_points(c1: np.ndarray, c2: np.ndarray, mode: str = "right_bottom") -> tuple[np.ndarray, tuple[float, float]]:
+    """Translate *c1* so that a reference anchor matches *c2*.
+
+    Alignment modes:
+        * ``"right_bottom"``: align maximum X and Y coordinates.
+        * ``"left_top"``:     align minimum X and Y coordinates.
+        * ``"centroid"``:     align centroids.
+
+    Returns:
+        Tuple of ``(aligned_c1, (dx, dy))``.
+    """
     if mode == "right_bottom":
         dx = c2[:,0].max() - c1[:,0].max()
         dy = c2[:,1].max() - c1[:,1].max()
@@ -31,16 +55,30 @@ def _align_points(c1, c2, mode="right_bottom"):
 
 
 def convert_image(
-        image_path, out_dir,
+        image_path: str, out_dir: str,
         pixel_spacing: float = 0.01,
-        min_contour_area: float =200):
+        min_contour_area: float = 200) -> tuple[np.ndarray | None, str | None, np.ndarray | None]:
+    """Extract contour coordinates from a brain-slice image.
 
-    # Load the image
+    Thresholds the image, filters contours by area, scales to physical
+    units, and saves an annotated copy.
+
+    Args:
+        image_path: Path to the image file.
+        out_dir: Directory for the annotated output image.
+        pixel_spacing: mm per pixel for coordinate scaling.
+        min_contour_area: Minimum contour area (pixels) to keep.
+
+    Returns:
+        Tuple of ``(annotated_bgr, basename, contour_coords_mm)``
+        or ``(None, None, None)`` if the image can't be loaded or
+        no contours are found.
+    """
     image = cv2.imread(image_path)
-    
+
     if image is None:
         print(f"[Hausdorff] Error: Could not load image from {image_path}")
-        return
+        return None, None, None
     
     
     # Convert BGR to RGB
@@ -62,7 +100,7 @@ def convert_image(
     
     annotated = image.copy()
     W, H = annotated.shape[:2]
-    thickness = text_thickness(H, style="thin")
+    thickness, _, _ = image_annotation_style(H, W, style="bold")
     
     if len(filtered_contours) > 0:
 
@@ -99,20 +137,40 @@ def convert_image(
     else:
         print("[Hausdorff] No contours found!")
         print("Try adjusting the threshold value.")
-        return None, None
+        return None, None, None
         
         
 def calculate_hausdorff_distance(
-    contours_coords_first, contours_coords_second,
-    First_label="First", Second_label="Second",
-    invert_y=True, align_mode="right_bottom",
-    out_dir=None, filename="Hausdorff_distance_plot.png"):
-    
-    os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, filename)
-    
+    contours_coords_first: np.ndarray | None, contours_coords_second: np.ndarray | None,
+    First_label: str = "First", Second_label: str = "Second",
+    invert_y: bool = True, align_mode: str = "right_bottom",
+    out_dir: str | None = None, filename: str = "Hausdorff_distance_plot.png") -> tuple[np.ndarray | None, float | None, float | None, float | None]:
+    """Compute symmetric Hausdorff distance between two 2-D contour sets.
+
+    Optionally aligns the first contour to the second before measuring
+    (see ``_align_points`` for alignment modes).
+
+    Args:
+        contours_coords_first: ``(N, 2)`` array of the first contour.
+        contours_coords_second: ``(M, 2)`` array of the second contour.
+        First_label: Legend label for the first contour.
+        Second_label: Legend label for the second contour.
+        invert_y: If True, invert Y axis on the plot (image convention).
+        align_mode: ``"right_bottom"``, ``"left_top"``, ``"centroid"``, or
+            ``"none"`` to skip alignment.
+        out_dir: Directory to save the plot.
+        filename: Output file name.
+
+    Returns:
+        Tuple of ``(plot_rgba, hausdorff_dist, d12, d21)`` or ``(None, …)``.
+    """
     if contours_coords_first is None or contours_coords_second is None:
-        print("[Hausdorff] Error: inputs are None"); return None, None, None
+        print("[Hausdorff] Error: inputs are None")
+        return None, None, None, None
+
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, filename)
 
     c1 = _to_xy2(contours_coords_first)
     c2 = _to_xy2(contours_coords_second)

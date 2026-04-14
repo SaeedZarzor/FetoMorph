@@ -1,35 +1,50 @@
 #!/usr/bin/python
+"""Curvature analysis on binary brain-slice masks.
 
-"""
-Script Name: curvature.py
-Author: Stefan Herdy
-Date: 14.11.2023
-Description: 
-This script performs a curvature analysis on binary masks
-Usage: 
-- Change the the path to the path to your binary mask and execute the script.
-- Additionally you can set the minimum contour length, the window size ratio and the min/max values of the colormap according to your specific requirements
+For each contour point, the local curvature is estimated by:
+    1. Extracting a neighbourhood window along the contour.
+    2. Rotating the neighbourhood into a local coordinate frame aligned
+       with the tangent direction — this makes the curvature computation
+       independent of the curve's orientation.
+    3. Fitting a degree-2 polynomial to the rotated points.
+    4. Taking the **2nd derivative** of the polynomial.  Its sign indicates
+       whether the surface is **convex** (positive) or **concave** (negative)
+       at that point.
+
+Author: Stefan Herdy (14.11.2023), adapted for FetoMorph.
 """
 
+from __future__ import annotations
+
+from deps import *
 from skimage import measure
-import os
-import numpy as np
-import cv2
-import matplotlib.pyplot as plt
 from shapely.geometry import Polygon
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 
-def rgb_to_bw_mask(img, threshold=128):
-    # Read image in RGB
+def rgb_to_bw_mask(img: np.ndarray, threshold: int = 128) -> np.ndarray:
+    """Convert a BGR image to a binary mask using Otsu thresholding."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     # Threshold to create mask
     _, mask = cv2.threshold(gray, 0, 255,  cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return mask
 
-def compute_curvature(point, i, contour, window_size):
-    # Compute the curvature using polynomial fitting in a local and rotated coordinate system
-    # Extract neighboring edge oints
+def compute_curvature(point: np.ndarray, i: int, contour: np.ndarray, window_size: int) -> float:
+    """Compute local curvature at a contour point via rotated polynomial fitting.
+
+    The neighbourhood is rotated so that the local tangent aligns with the
+    X axis.  A degree-2 polynomial is fitted; its 2nd derivative gives the
+    curvature sign (positive = convex, negative = concave).
+
+    Args:
+        point: The ``(row, col)`` contour point.
+        i: Index of *point* within *contour*.
+        contour: Full contour array ``(N, 2)``.
+        window_size: Number of neighbouring points to include.
+
+    Returns:
+        Mean curvature (2nd derivative) over the neighbourhood window.
+    """
     start = max(0, i - window_size // 2)
     end = min(len(contour), i + window_size // 2 + 1)
     neighborhood = contour[start:end]
@@ -67,7 +82,8 @@ def compute_curvature(point, i, contour, window_size):
     # Return the mean curvature for the central point
     return np.mean(curvature)
 
-def filter_contours_by_area(mask, min_area=500):
+def filter_contours_by_area(mask: np.ndarray, min_area: float = 500) -> list[np.ndarray]:
+    """Return contours whose enclosed polygon area exceeds *min_area*."""
     contours = measure.find_contours(mask, 0.5)
     filtered = []
     for c in contours:
@@ -77,8 +93,19 @@ def filter_contours_by_area(mask, min_area=500):
                 filtered.append(c)
     return filtered
 
-def compute_curvature_profile(path: str, window_size_ratio: int =5, second_derivative= True, min_area: float = 20):
-    # Compute the contours of the mask to be able to analyze each part individually
+def compute_curvature_profile(path: str, window_size_ratio: int = 5, second_derivative: bool = True, min_area: float = 20) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[int]]:
+    """Compute curvature at every contour point in a brain-slice image.
+
+    Args:
+        path: Path to the image file.
+        window_size_ratio: Contour length is divided by this to set the
+            neighbourhood window size.
+        second_derivative: Unused (kept for API compatibility).
+        min_area: Minimum polygon area for contour filtering.
+
+    Returns:
+        Tuple of ``(mask, edge_pixels, curvature_values, curvature_signs)``.
+    """
     
     img = cv2.imread(str(path))
     mask = rgb_to_bw_mask(img)
@@ -111,7 +138,19 @@ def compute_curvature_profile(path: str, window_size_ratio: int =5, second_deriv
 
     return mask, edge_pixels, curvature_values, curvature_values_s
 
-def save_curvature_plot(out_dir, mask, edge_pixels, curvature_values, filename="curvature_plot.png"):
+def save_curvature_plot(out_dir: str, mask: np.ndarray, edge_pixels: np.ndarray, curvature_values: np.ndarray, filename: str = "curvature_plot.png") -> np.ndarray:
+    """Render a jet-coloured curvature overlay on the mask and save to disk.
+
+    Args:
+        out_dir: Output directory.
+        mask: Binary mask image.
+        edge_pixels: ``(N, 2)`` array of contour point coordinates.
+        curvature_values: ``(N,)`` array of curvature values.
+        filename: Output file name.
+
+    Returns:
+        RGBA image as a NumPy array (for display in the viewer).
+    """
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, filename)
 

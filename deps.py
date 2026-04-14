@@ -1,74 +1,108 @@
-# deps.py  — central imports for the app
+"""Central dependency imports for FetoMorph.
 
-# ---------------- Qt ----------------
+Every module in the project does ``from deps import *`` so that Qt, VTK,
+NumPy, OpenCV and other heavy libraries are imported once and made
+available everywhere under short, consistent names.
+"""
+
+# ======================= Standard Library =======================
+import logging
+import math
+import os
+import pathlib
+import re
+import shutil
+import sys
+import tempfile
+import time
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Sequence, Tuple, Union
+
+# ======================= Qt - Core =======================
 from PySide6 import QtCore, QtGui, QtWidgets
-from PySide6.QtCore import Qt, QSize, QRect, QObject, Signal, QPoint, QUrl, QTimer, QRectF, QSettings, QEventLoop
-from PySide6.QtGui import (QPixmap, QAction, QPainter, QTextCursor, QImage, QKeySequence, QIcon, QDesktopServices, QColor, QPen,QFont,QStandardItemModel, QStandardItem, QShortcut)
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QFileDialog,QRubberBand,
-    QVBoxLayout, QHBoxLayout, QToolBar, QSlider, QComboBox,QDockWidget,
-    QMessageBox, QSizePolicy, QGroupBox, QPlainTextEdit, QSplitter, QInputDialog, QDialog, QFormLayout, QSizePolicy,
-    QDoubleSpinBox, QDialogButtonBox, QSpinBox, QStyle, QTabWidget, QGroupBox, QToolButton,QMenu,
-    QWidgetItem, QListWidget,QListWidgetItem, QLineEdit, QPushButton, QTableView, QHeaderView,
+from PySide6.QtCore import (
+    QEventLoop, QObject, QPoint, QRect, QRectF,
+    QSettings, QSize, QTimer, QUrl, Qt, Signal,
 )
 
-# -------------- VTK + Qt bridge --------------
+# ======================= Qt - GUI =======================
+from PySide6.QtGui import (
+    QAction, QColor, QDesktopServices, QFont, QIcon, QImage,
+    QKeySequence, QPainter, QPen, QPixmap, QShortcut,
+    QStandardItem, QStandardItemModel, QTextCursor,
+)
+
+# ======================= Qt - Widgets =======================
+from PySide6.QtWidgets import (
+    QApplication, QComboBox, QDialog, QDialogButtonBox,
+    QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
+    QGroupBox, QHBoxLayout, QHeaderView, QInputDialog,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
+    QPushButton, QRubberBand, QSizePolicy, QSlider,
+    QSpinBox, QSplitter, QStyle, QTabWidget, QTableView,
+    QToolBar, QToolButton, QVBoxLayout, QWidget, QSpacerItem,
+)
+
+# ======================= VTK - Qt Bridge =======================
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
-# -------------- VTK core rendering --------------
+# ======================= VTK - Rendering =======================
 from vtkmodules.vtkRenderingCore import (
-    vtkRenderer, vtkPolyDataMapper, vtkActor,
-    vtkImageSliceMapper, vtkImageSlice, vtkVolume, vtkVolumeProperty,
-    vtkWindowToImageFilter,
+    vtkActor, vtkImageSlice, vtkImageSliceMapper,
+    vtkPolyDataMapper, vtkRenderer, vtkVolume,
+    vtkVolumeProperty, vtkWindowToImageFilter,
 )
 from vtkmodules.vtkRenderingVolumeOpenGL2 import vtkSmartVolumeMapper
 from vtkmodules.vtkRenderingAnnotation import vtkAxesActor, vtkScalarBarActor
 from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
-# -------------- VTK IO --------------
-from vtkmodules.vtkIOImage import vtkNIFTIImageReader, vtkPNGWriter, vtkJPEGWriter
+import vtkmodules.vtkInteractionStyle          # noqa: F401
+import vtkmodules.vtkRenderingOpenGL2          # noqa: F401
+
+# ======================= VTK - IO =======================
+from vtkmodules.vtkIOImage import vtkJPEGWriter, vtkNIFTIImageReader, vtkPNGWriter
 from vtkmodules.vtkIOXML import vtkXMLImageDataReader, vtkXMLPolyDataReader
-from vtkmodules.vtkIOLegacy import vtkGenericDataObjectReader, vtkDataSetReader, vtkPolyDataReader
+from vtkmodules.vtkIOLegacy import (
+    vtkDataSetReader, vtkGenericDataObjectReader, vtkPolyDataReader,
+)
 from vtkmodules.vtkIOGeometry import vtkSTLReader
+
+# ======================= VTK - Data Models =======================
+from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkImageData, vtkPolyData
+
+# ======================= VTK - Filters & Core =======================
 from vtkmodules.vtkFiltersCore import vtkAppendPolyData
-
-# -------------- VTK data models --------------
-from vtkmodules.vtkCommonDataModel import vtkImageData, vtkPolyData, vtkCellArray
-
-# -------------- VTK filters & logging --------------
 try:
     from vtkmodules.vtkFiltersGeometry import vtkDataSetSurfaceFilter
 except ImportError:
     from vtkmodules.vtkFiltersGeometry import vtkGeometryFilter as vtkDataSetSurfaceFilter
-from vtkmodules.vtkCommonCore import vtkOutputWindow, vtkPoints, vtkFloatArray
+from vtkmodules.vtkCommonCore import vtkFloatArray, vtkOutputWindow, vtkPoints
 
-import vtkmodules.vtkInteractionStyle  # noqa: F401
-import vtkmodules.vtkRenderingOpenGL2  # noqa: F401
-
-# ---------- Sci/IO ----------
+# ======================= Scientific / IO =======================
 import numpy as np
 import cv2
+
 try:
     import pandas as pd
-except Exception:  # keep optional
+except ImportError:
     pd = None
 
 try:
     import nibabel as nib
-except Exception:
+except ImportError:
     nib = None
-    
-    
-import os, sys, math, tempfile, shutil, pathlib, uuid, time, shutil, re, trimesh
-from datetime import datetime
-from typing import Optional, Tuple, List
-from pathlib import Path
 
+import trimesh
+import pyvista as pv
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# ---------- Small helper(s) you want globally ----------
+
+# ======================= Helper(s) =======================
 def qt_icon(style: QStyle, rel_path: str | None = None) -> QIcon:
     """
     If 'rel_path' (under ./icons/) exists, load it; else return a standard icon from style.
@@ -80,34 +114,52 @@ def qt_icon(style: QStyle, rel_path: str | None = None) -> QIcon:
             p = os.path.join(base, "icons", rel_path)
             if os.path.isfile(p):
                 return QIcon(p)
-        except Exception:
+        except (OSError, TypeError):
             pass
-    # If rel_path is not a file, treat it as a StandardPixmap enum
     sp = rel_path if isinstance(rel_path, QStyle.StandardPixmap) else QStyle.SP_FileIcon
     return style.standardIcon(sp)
 
-# Control what `from deps import *` exports (optional but nice)
+
+# ======================= __all__ =======================
 __all__ = [
-    # Qt modules & classes
-    "QtCore","QtGui","QtWidgets","Qt","QSize","QRect","QPoint","QObject","Signal","QUrl","QRectF",
-    "QAction","QKeySequence","QIcon","QPainter","QPixmap","QTextCursor","QImage","QDockWidget","QTableView",
-    "QApplication","QMainWindow","QWidget","QLabel","QFileDialog","QVBoxLayout","QHBoxLayout","QPushButton",
-    "QToolBar","QSlider","QComboBox","QMessageBox","QSizePolicy","QGroupBox","QPlainTextEdit","QLineEdit", "QHeaderView",
-    "QSplitter","QInputDialog","QDialog","QFormLayout","QDoubleSpinBox","QSpinBox", "QListWidget", "QListWidgetItem",
-    "QDialogButtonBox","QStyle","QDesktopServices","QTabWidget","QToolButton","QRubberBand","QColor","QPen","QFont",
-    "QStandardItemModel","QStandardItem", "QSettings", "QMenu","QShortcut","QEventLoop",
+    # Qt modules
+    "QtCore", "QtGui", "QtWidgets",
+    # Qt Core
+    "QEventLoop", "QObject", "QPoint", "QRect", "QRectF",
+    "QSettings", "QSize", "QTimer", "QUrl", "Qt", "Signal",
+    # Qt GUI
+    "QAction", "QColor", "QDesktopServices", "QFont", "QIcon", "QImage",
+    "QKeySequence", "QPainter", "QPen", "QPixmap", "QShortcut",
+    "QStandardItem", "QStandardItemModel", "QTextCursor",
+    # Qt Widgets
+    "QApplication", "QComboBox", "QDialog", "QDialogButtonBox",
+    "QDockWidget", "QDoubleSpinBox", "QFileDialog", "QFormLayout",
+    "QGroupBox", "QHBoxLayout", "QHeaderView", "QInputDialog",
+    "QLabel", "QLineEdit", "QListWidget", "QListWidgetItem",
+    "QMainWindow", "QMenu", "QMessageBox", "QPlainTextEdit",
+    "QPushButton", "QRubberBand", "QSizePolicy", "QSlider",
+    "QSpinBox", "QSplitter", "QStyle", "QTabWidget", "QTableView",
+    "QSpacerItem", "QToolBar", "QToolButton", "QVBoxLayout", "QWidget",
     # VTK
-    "QVTKRenderWindowInteractor","vtkRenderer","vtkPolyDataMapper","vtkActor",
-    "vtkImageSliceMapper","vtkImageSlice","vtkVolume","vtkVolumeProperty","vtkWindowToImageFilter",
-    "vtkSmartVolumeMapper","vtkNIFTIImageReader","vtkPNGWriter","vtkJPEGWriter", "vtkPolyDataReader",
-    "vtkXMLImageDataReader","vtkXMLPolyDataReader","vtkGenericDataObjectReader","vtkDataSetReader",
-    "vtkSTLReader","vtkImageData","vtkPolyData","vtkDataSetSurfaceFilter","vtkOutputWindow","vtkAxesActor",
-    "vtkOrientationMarkerWidget", "vtkPoints", "vtkCellArray", "vtkFloatArray","vtkScalarBarActor",
-    "vtkAppendPolyData",
-    # Sci/IO
-    "np","cv2","pd","os","sys","math","tempfile","shutil","pathlib","datetime","Optional","Tuple","Path","re", "List",
-    "trimesh", "plt",
-    # helpers
+    "QVTKRenderWindowInteractor",
+    "vtkActor", "vtkAppendPolyData", "vtkAxesActor",
+    "vtkCellArray", "vtkDataSetReader", "vtkDataSetSurfaceFilter",
+    "vtkFloatArray", "vtkGenericDataObjectReader",
+    "vtkImageData", "vtkImageSlice", "vtkImageSliceMapper",
+    "vtkJPEGWriter", "vtkNIFTIImageReader", "vtkOrientationMarkerWidget",
+    "vtkOutputWindow", "vtkPNGWriter", "vtkPoints",
+    "vtkPolyData", "vtkPolyDataMapper", "vtkPolyDataReader",
+    "vtkRenderer", "vtkSTLReader", "vtkScalarBarActor",
+    "vtkSmartVolumeMapper", "vtkVolume", "vtkVolumeProperty",
+    "vtkWindowToImageFilter",
+    "vtkXMLImageDataReader", "vtkXMLPolyDataReader",
+    # Scientific / IO
+    "cv2", "matplotlib", "nib", "np", "pd", "plt", "pv", "trimesh",
+    # Standard library
+    "datetime", "logging", "math", "os", "pathlib", "re", "shutil", "sys",
+    "tempfile", "time", "uuid",
+    "Any", "List", "Literal", "Optional", "Path", "Sequence",
+    "TYPE_CHECKING", "Tuple", "Union",
+    # Helpers
     "qt_icon",
 ]
-

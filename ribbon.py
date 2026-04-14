@@ -1,5 +1,11 @@
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtWidgets import QWidget, QTabWidget, QToolButton, QHBoxLayout, QVBoxLayout, QSpacerItem, QSizePolicy
+"""Office-style ribbon bar widget for FetoMorph.
+
+Provides a tabbed toolbar where each tab is a horizontal row of large
+``QToolButton`` widgets driven by ``QAction`` objects.
+"""
+
+from deps import *
+
 
 class RibbonBar(QWidget):
     """

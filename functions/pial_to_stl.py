@@ -1,15 +1,26 @@
-import time
-import uuid
-try:
-    import nibabel as nib
-    import pyvista as pv
-    import numpy as np
-except Exception as ex:
-    print("[FreeSurfer] Missing dependency. Install with:\n  pip install nibabel pyvista")
-    raise
+"""Convert FreeSurfer pial surface files to STL meshes.
+
+Reads ``.pial`` geometry via nibabel, converts it to a PyVista
+PolyData mesh, and exports as STL.  Supports single-hemisphere and
+merged bi-hemispheric exports.
+"""
+
+from deps import *
 
 
 def _pial_to_pv_polydata(pial_path: str):
+    """Load a FreeSurfer pial surface and return a cleaned PyVista PolyData.
+
+    Reads vertex and face arrays with nibabel, reformats the face array
+    for PyVista (prepending a vertex-count column), and cleans the mesh
+    to remove degenerate elements.
+
+    Args:
+        pial_path: Path to a FreeSurfer ``.pial`` surface file.
+
+    Returns:
+        A ``pyvista.PolyData`` mesh with cleaned geometry.
+    """
     t0 = time.time()
     print(f"Reading geometry: {pial_path}")
     verts, faces = nib.freesurfer.read_geometry(pial_path)  # faces: (M, 3)
@@ -36,7 +47,15 @@ def _pial_to_pv_polydata(pial_path: str):
 
 
 def pial_to_stl(pial_path: str, temp_path: str):
-    """Convert a single .pial to STL and save (returns stl_path)."""
+    """Convert a single FreeSurfer pial surface to STL format.
+
+    Args:
+        pial_path: Path to the input ``.pial`` surface file.
+        temp_path: Destination file path for the exported STL.
+
+    Returns:
+        The path to the saved STL file (same as *temp_path*).
+    """
     print(f"Converting to STL ...")
     t0 = time.time()
     mesh = _pial_to_pv_polydata(pial_path)
@@ -47,7 +66,19 @@ def pial_to_stl(pial_path: str, temp_path: str):
 
 
 def pial_pair_to_combined_stl(rh_pial: str, lh_pial: str, out_stl: str):
-    """Convert rh & lh .pial to a single merged STL and save (returns out_stl)."""
+    """Merge right and left hemisphere pial surfaces into one STL.
+
+    Both hemispheres are loaded, merged into a single mesh, cleaned,
+    and exported to *out_stl*.
+
+    Args:
+        rh_pial: Path to the right-hemisphere ``.pial`` file.
+        lh_pial: Path to the left-hemisphere ``.pial`` file.
+        out_stl: Destination file path for the combined STL.
+
+    Returns:
+        The path to the saved combined STL file (same as *out_stl*).
+    """
     print(f"Converting pair:\n  RH: {rh_pial}\n  LH: {lh_pial}")
     t0 = time.time()
     m_rh = _pial_to_pv_polydata(rh_pial)
