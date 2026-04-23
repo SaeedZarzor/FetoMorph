@@ -26,6 +26,8 @@ DEFAULT_CONFIG = {
     "weeks": list(DEFAULT_WEEKS),
     "axes": list(DEFAULT_AXES),
     "pixel_size": 1.0 / 41.0,
+    "scalebar_measured_pixels": None,
+    "scalebar_real_world_length": None,
     "kernel_size": 25,
     "cnt_threshold": 2000,
     "unit": "mm",
@@ -54,6 +56,16 @@ def parse_args() -> argparse.Namespace:
         help="Axes to process, for example: --axes axial coronal sagittal",
     )
     parser.add_argument("--pixel-size", type=float, help="Physical pixel size in unit/pixel.")
+    parser.add_argument(
+        "--scalebar-measured-pixels",
+        type=float,
+        help="Measured scalebar length in pixels (for scale-from-scalebar calibration).",
+    )
+    parser.add_argument(
+        "--scalebar-real-world-length",
+        type=float,
+        help="Real-world scalebar length in current unit (for scale-from-scalebar calibration).",
+    )
     parser.add_argument("--kernel-size", type=int, help="Morphology kernel size.")
     parser.add_argument("--cnt-threshold", type=float, help="Minimum contour area threshold in pixels.")
     parser.add_argument("--unit", type=str, help='Length unit label, for example "mm".')
@@ -87,6 +99,8 @@ def resolve_settings(args: argparse.Namespace) -> dict[str, Any]:
         "weeks": args.weeks,
         "axes": args.axes,
         "pixel_size": args.pixel_size,
+        "scalebar_measured_pixels": args.scalebar_measured_pixels,
+        "scalebar_real_world_length": args.scalebar_real_world_length,
         "kernel_size": args.kernel_size,
         "cnt_threshold": args.cnt_threshold,
         "unit": args.unit,
@@ -100,7 +114,25 @@ def resolve_settings(args: argparse.Namespace) -> dict[str, Any]:
     cfg["section_label"] = str(cfg["section_label"]).strip()
     cfg["weeks"] = [int(w) for w in cfg["weeks"]]
     cfg["axes"] = [str(a).strip().lower() for a in cfg["axes"]]
-    cfg["pixel_size"] = float(cfg["pixel_size"])
+    scalebar_px = cfg.get("scalebar_measured_pixels")
+    scalebar_real = cfg.get("scalebar_real_world_length")
+    if scalebar_px is not None or scalebar_real is not None:
+        if scalebar_px is None or scalebar_real is None:
+            raise ValueError(
+                "Both scalebar_measured_pixels and scalebar_real_world_length must be provided together."
+            )
+        scalebar_px = float(scalebar_px)
+        scalebar_real = float(scalebar_real)
+        if scalebar_px <= 0 or scalebar_real <= 0:
+            raise ValueError("Scalebar calibration values must be positive numbers.")
+        cfg["scalebar_measured_pixels"] = scalebar_px
+        cfg["scalebar_real_world_length"] = scalebar_real
+        cfg["pixel_size"] = scalebar_real / scalebar_px
+    else:
+        cfg["scalebar_measured_pixels"] = None
+        cfg["scalebar_real_world_length"] = None
+        cfg["pixel_size"] = float(cfg["pixel_size"])
+
     cfg["kernel_size"] = int(cfg["kernel_size"])
     cfg["cnt_threshold"] = float(cfg["cnt_threshold"])
     cfg["unit"] = str(cfg["unit"]).strip()
@@ -173,6 +205,24 @@ def add_summary_table(xlsx_path: Path) -> None:
     wb.save(xlsx_path)
 
 
+def add_scalebar_metadata(
+    xlsx_path: Path,
+    *,
+    measured_pixels: float | None,
+    real_world_length: float | None,
+    unit: str,
+) -> None:
+    """Append optional scale-from-scalebar metadata rows to the report workbook."""
+    if measured_pixels is None or real_world_length is None:
+        return
+    wb = load_workbook(xlsx_path)
+    ws = wb.active
+    ws.append(["ScalebarMeasuredPixels:", measured_pixels])
+    ws.append(["ScalebarRealWorldLength:", real_world_length])
+    ws.append(["ScalebarRealWorldUnit:", unit])
+    wb.save(xlsx_path)
+
+
 def run_folder(
     input_dir: Path,
     output_dir: Path,
@@ -180,6 +230,8 @@ def run_folder(
     axis: str,
     *,
     pixel_size: float,
+    scalebar_measured_pixels: float | None,
+    scalebar_real_world_length: float | None,
     kernel_size: int,
     cnt_threshold: float,
     unit: str,
@@ -199,6 +251,12 @@ def run_folder(
     if final_xlsx.exists():
         final_xlsx.unlink()
     default_xlsx.replace(final_xlsx)
+    add_scalebar_metadata(
+        final_xlsx,
+        measured_pixels=scalebar_measured_pixels,
+        real_world_length=scalebar_real_world_length,
+        unit=unit,
+    )
     add_summary_table(final_xlsx)
     return final_xlsx
 
@@ -247,6 +305,8 @@ def main() -> int:
                     week,
                     axis,
                     pixel_size=settings["pixel_size"],
+                    scalebar_measured_pixels=settings["scalebar_measured_pixels"],
+                    scalebar_real_world_length=settings["scalebar_real_world_length"],
                     kernel_size=settings["kernel_size"],
                     cnt_threshold=settings["cnt_threshold"],
                     unit=settings["unit"],

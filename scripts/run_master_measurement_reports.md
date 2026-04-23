@@ -16,9 +16,19 @@ Default settings:
 - weeks: `24` to `38`
 - axes: `axial`, `coronal`, `sagittal`
 - `pixel_size = 1 / 41 mm/pixel`
+- optional scale-from-scalebar calibration:
+    - `scalebar_measured_pixels` (for example `42.0`)
+    - `scalebar_real_world_length` (for example `20.0`)
+    - when both are provided, `pixel_size` is computed as `real_world_length / measured_pixels`
 - `kernel_size = 25`
 - `cnt_threshold = 2000`
 - `unit = mm`
+
+The generated workbook also appends metadata rows:
+
+- `ScalebarMeasuredPixels:`
+- `ScalebarRealWorldLength:`
+- `ScalebarRealWorldUnit:`
 
 Run all weeks and all axes:
 
