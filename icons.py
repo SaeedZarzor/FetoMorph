@@ -55,6 +55,8 @@ def set_icons(ui, assets: Path) -> None:
         "act_view_morph_map":   "icons/morph_map.png",
         "act_meas_stright":     "icons/length.png",
         "act_meas_compactness": "icons/compactness.png",
+        "act_meas_curve": "icons/curve.png",
+
     }
 
     for attr, rel in icons.items():
