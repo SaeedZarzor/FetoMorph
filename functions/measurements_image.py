@@ -633,7 +633,7 @@ def compute_image_curved_length(
 
     annotated = image.copy()
     W, H = annotated.shape[:2]
-    thickness, font_scale, _ = image_annotation_style(H, W, style="regular")
+    thickness, _, _ = image_annotation_style(H, W, style="regular")
 
     # if filtered:
     #     cv2.drawContours(annotated, filtered, -1, (0, 0, 255), thickness)
@@ -760,76 +760,77 @@ def compute_image_curved_length(
 
     if best_curved_pts:
         curve_arr = np.array(best_curved_pts, dtype=np.int32)
-        cv2.polylines(annotated, [curve_arr], isClosed=False, color=(255, 0, 255), thickness=thickness + 1)
+        cv2.polylines(annotated, [curve_arr], isClosed=False, color=(255, 0, 255), thickness=thickness )
 
     if draw_hallmarks:
-        annotated = put_label_on_bgr(
+        annotated = draw_hallmarks_values_on_image(
             annotated,
-            f"Curve Length: {curved_length:.2f} {unit}",
-            pos="topleft",
-            font_scale=font_scale,
             thickness=thickness,
+            curve=curved_length,
+            unit=unit,
+            box_position="topleft",
+            anchor_ratio=(0.02, 0.05),
         )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
     return curved_length, annotated, slice_kind
 
 
-def put_label_on_bgr(
-    bgr: np.ndarray,
-    text: str,
-    pos: str | tuple[int, int] = "topleft",  # 'topleft'|'topright'|'bottomleft'|'bottomright' or (x, y)
-    *,
-    font_scale: float | None = None,     # auto if None
-    thickness: int | None = None,        # auto if None
-    margin: int = 6,
-    box_color: tuple[int, int, int] = (0, 0, 0),      # BGR
-    box_alpha: float = 0.55,                           # 0..1
-    text_color: tuple[int, int, int] = (255, 255, 255) # BGR
-) -> np.ndarray:
-    """
-    Draw `text` with a translucent background box on a BGR image and return the result (BGR).
-    """
-    if not (isinstance(bgr, np.ndarray) and bgr.ndim == 3 and bgr.shape[2] == 3 and bgr.dtype == np.uint8):
-        raise ValueError("Expected uint8 BGR image of shape (H, W, 3).")
+# def put_label_on_bgr(
+#     bgr: np.ndarray,
+#     text: str,
+#     pos: str | tuple[int, int] = "topleft",  # 'topleft'|'topright'|'bottomleft'|'bottomright' or (x, y)
+#     *,
+#     font_scale: float | None = None,     # auto if None
+#     thickness: int | None = None,        # auto if None
+#     margin: int = 6,
+#     box_color: tuple[int, int, int] = (0, 0, 0),      # BGR
+#     box_alpha: float = 0.55,                           # 0..1
+#     text_color: tuple[int, int, int] = (255, 255, 255) # BGR
+# ) -> np.ndarray:
+#     """
+#     Draw `text` with a translucent background box on a BGR image and return the result (BGR).
+#     """
+#     if not (isinstance(bgr, np.ndarray) and bgr.ndim == 3 and bgr.shape[2] == 3 and bgr.dtype == np.uint8):
+#         raise ValueError("Expected uint8 BGR image of shape (H, W, 3).")
 
-    out = bgr.copy()
-    H, W = out.shape[:2]
-    if not text:
-        return None
+#     out = bgr.copy()
+#     H, W = out.shape[:2]
+#     if not text:
+#         return None
 
-    # Auto size to image height (looks good across sizes)
-    if font_scale is None:
-        font_scale = max(0.45, H / 800.0 * 0.9)
-    if thickness is None:
-        thickness = max(1, int(round(H / 400.0)))
+#     # Auto size to image height (looks good across sizes)
+#     if font_scale is None:
+#         font_scale = max(0.45, H / 800.0 * 0.9)
+#     if thickness is None:
+#         thickness = max(1, int(round(H / 400.0)))
 
-    (tw, th), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
+#     (tw, th), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+#     bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
 
-    # Anchor selection
-    if isinstance(pos, tuple):
-        x, y = int(pos[0]), int(pos[1])
-    else:
-        pos = str(pos).lower()
-        if pos == "bottomleft":
-            x, y = margin, H - bh - margin
-        elif pos == "bottomright":
-            x, y = W - bw - margin, H - bh - margin
-        elif pos == "topright":
-            x, y = W - bw - margin, margin
-        else:  # "topleft"
-            x, y = margin, margin
+#     # Anchor selection
+#     if isinstance(pos, tuple):
+#         x, y = int(pos[0]), int(pos[1])
+#     else:
+#         pos = str(pos).lower()
+#         if pos == "bottomleft":
+#             x, y = margin, H - bh - margin
+#         elif pos == "bottomright":
+#             x, y = W - bw - margin, H - bh - margin
+#         elif pos == "topright":
+#             x, y = W - bw - margin, margin
+#         else:  # "topleft"
+#             x, y = margin, margin
 
-    # Clamp box fully inside image
-    x = max(0, min(x, W - bw))
-    y = max(0, min(y, H - bh))
+#     # Clamp box fully inside image
+#     x = max(0, min(x, W - bw))
+#     y = max(0, min(y, H - bh))
 
-    # Translucent background box
-    overlay = out.copy()
-    cv2.rectangle(overlay, (x, y), (x + bw, y + bh), box_color, -1)
-    cv2.addWeighted(overlay, float(box_alpha), out, 1.0 - float(box_alpha), 0, out)
+#     # Translucent background box
+#     overlay = out.copy()
+#     cv2.rectangle(overlay, (x, y), (x + bw, y + bh), box_color, -1)
+#     cv2.addWeighted(overlay, float(box_alpha), out, 1.0 - float(box_alpha), 0, out)
 
-    # Text baseline inside the box
-    tx, ty = x + margin, y + margin + th
-    cv2.putText(out, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
-    return out
+#     # Text baseline inside the box
+#     tx, ty = x + margin, y + margin + th
+#     cv2.putText(out, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
+#     return out
