@@ -588,62 +588,249 @@ def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> tuple
 
     return compactness_2D_value, annotated, slice_kind  # BGR ndarray
 
-def put_label_on_bgr(
-    bgr: np.ndarray,
-    text: str,
-    pos: str | tuple[int, int] = "topleft",  # 'topleft'|'topright'|'bottomleft'|'bottomright' or (x, y)
-    *,
-    font_scale: float | None = None,     # auto if None
-    thickness: int | None = None,        # auto if None
-    margin: int = 6,
-    box_color: tuple[int, int, int] = (0, 0, 0),      # BGR
-    box_alpha: float = 0.55,                           # 0..1
-    text_color: tuple[int, int, int] = (255, 255, 255) # BGR
-) -> np.ndarray:
+def compute_image_curved_length(
+    file_path: str,
+    pixel_size: float = 0.01,
+    cnt_threshold: float = 20,
+    unit: str = "mm",
+    add_scalebar: bool | None = True,
+    draw_hallmarks: bool = True,
+    curvature_window: int = 7,
+    straightness_threshold: float = 0.02,
+) -> tuple[float, np.ndarray, SliceKind]:
+    """Measure only the longest curved segment of the brain contour.
+
+    Uses the same thresholding and contour extraction as
+    ``compute_image_perimeter``, then classifies each contour point as
+    *curved* or *straight* using local curvature over a sliding window.
+    Consecutive curved points form segments; the longest one is reported.
+
+    Args:
+        file_path: Path to the image.
+        pixel_size: mm per pixel.
+        cnt_threshold: Minimum contour area to keep (pixels).
+        unit: Label for output units.
+        add_scalebar: If True, overlay a scale bar.
+        draw_hallmarks: If True, draw the curved-length value on the image.
+        curvature_window: Half-window size for local curvature estimation.
+        straightness_threshold: Curvature below this value (1/px) is
+            considered straight.
+
+    Returns:
+        Tuple of ``(curved_length, annotated_bgr, slice_kind)``.
     """
-    Draw `text` with a translucent background box on a BGR image and return the result (BGR).
-    """
-    if not (isinstance(bgr, np.ndarray) and bgr.ndim == 3 and bgr.shape[2] == 3 and bgr.dtype == np.uint8):
-        raise ValueError("Expected uint8 BGR image of shape (H, W, 3).")
+    image = cv2.imread(file_path)
+    if image is None:
+        raise ValueError(f"Could not read image: {file_path}")
 
-    out = bgr.copy()
-    H, W = out.shape[:2]
-    if not text:
-        return None
+    slice_kind, _ = classify_slice_kind(image)
 
-    # Auto size to image height (looks good across sizes)
-    if font_scale is None:
-        font_scale = max(0.45, H / 800.0 * 0.9)
-    if thickness is None:
-        thickness = max(1, int(round(H / 400.0)))
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
 
-    (tw, th), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
+    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    filtered = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
 
-    # Anchor selection
-    if isinstance(pos, tuple):
-        x, y = int(pos[0]), int(pos[1])
-    else:
-        pos = str(pos).lower()
-        if pos == "bottomleft":
-            x, y = margin, H - bh - margin
-        elif pos == "bottomright":
-            x, y = W - bw - margin, H - bh - margin
-        elif pos == "topright":
-            x, y = W - bw - margin, margin
-        else:  # "topleft"
-            x, y = margin, margin
+    annotated = image.copy()
+    W, H = annotated.shape[:2]
+    thickness, _, _ = image_annotation_style(H, W, style="regular")
 
-    # Clamp box fully inside image
-    x = max(0, min(x, W - bw))
-    y = max(0, min(y, H - bh))
+    # if filtered:
+    #     cv2.drawContours(annotated, filtered, -1, (0, 0, 255), thickness)
 
-    # Translucent background box
-    overlay = out.copy()
-    cv2.rectangle(overlay, (x, y), (x + bw, y + bh), box_color, -1)
-    cv2.addWeighted(overlay, float(box_alpha), out, 1.0 - float(box_alpha), 0, out)
+    best_curved_length_px = 0.0
+    best_curved_pts: list[np.ndarray] = []
 
-    # Text baseline inside the box
-    tx, ty = x + margin, y + margin + th
-    cv2.putText(out, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
-    return out
+    for cnt in filtered:
+        pts = cnt[:, 0, :]  # (N, 2)
+        n = len(pts)
+        if n < 2 * curvature_window + 1:
+            continue
+
+        is_curved = np.zeros(n, dtype=bool)
+        for i in range(n):
+            p_prev = pts[(i - curvature_window) % n].astype(float)
+            p_curr = pts[i].astype(float)
+            p_next = pts[(i + curvature_window) % n].astype(float)
+
+            v1 = p_prev - p_curr
+            v2 = p_next - p_curr
+            len1 = np.linalg.norm(v1)
+            len2 = np.linalg.norm(v2)
+            if len1 < 1e-6 or len2 < 1e-6:
+                continue
+            cos_angle = np.clip(np.dot(v1, v2) / (len1 * len2), -1.0, 1.0)
+            angle = np.arccos(cos_angle)
+            curvature = angle / max(len1, len2)
+            if curvature > straightness_threshold:
+                is_curved[i] = True
+
+        # Only exclude straight segments longer than a quarter of the
+        # longest straight segment in this contour.
+        straight_runs: list[tuple[int, int]] = []
+        s_start = None
+        for i in range(n):
+            if not is_curved[i] and s_start is None:
+                s_start = i
+            elif is_curved[i] and s_start is not None:
+                straight_runs.append((s_start, i))
+                s_start = None
+        if s_start is not None:
+            straight_runs.append((s_start, n))
+
+        straight_lengths = []
+        for sr_start, sr_end in straight_runs:
+            p0 = pts[sr_start % n].astype(float)
+            p1 = pts[(sr_end - 1) % n].astype(float)
+            straight_lengths.append(np.linalg.norm(p1 - p0))
+
+        max_straight = max(straight_lengths) if straight_lengths else 0.0
+        min_straight_len_px = max_straight / 4.0
+
+        for idx_r, (sr_start, sr_end) in enumerate(straight_runs):
+            if straight_lengths[idx_r] < min_straight_len_px:
+                for i in range(sr_start, sr_end):
+                    is_curved[i % n] = True
+
+        # Find connected runs of curved points on the original (non-doubled)
+        # array, then merge runs separated by small straight gaps.
+        runs: list[tuple[int, int]] = []
+        start = None
+        for i in range(n):
+            if is_curved[i] and start is None:
+                start = i
+            elif not is_curved[i] and start is not None:
+                runs.append((start, i))
+                start = None
+        if start is not None:
+            runs.append((start, n))
+
+        # Wrap-around: if both the first and last runs touch the boundary,
+        # merge them into one run that spans the wrap point.
+        if len(runs) >= 2 and runs[0][0] == 0 and runs[-1][1] == n:
+            wrap_run = (runs[-1][0], runs[0][1] + n)
+            runs = runs[1:-1]
+            runs.append(wrap_run)
+
+        # Merge runs separated by small straight gaps (≤ merge_gap points).
+        # Repeat until no more merges occur so that any number of nearby
+        # curves get joined into a single continuous segment.
+        merge_gap = 2
+        changed = True
+        while changed and len(runs) > 1:
+            changed = False
+            merged: list[tuple[int, int]] = [runs[0]]
+            for rs, re in runs[1:]:
+                prev_start, prev_end = merged[-1]
+                gap = (rs - prev_end) % n
+                if gap <= merge_gap:
+                    merged[-1] = (prev_start, prev_end + gap + (re - rs))
+                    changed = True
+                else:
+                    merged.append((rs, re))
+            if len(merged) >= 2:
+                gap = (merged[0][0] - merged[-1][1] % n) % n
+                if gap <= merge_gap:
+                    merged[-1] = (merged[-1][0], merged[-1][1] + gap + (merged[0][1] - merged[0][0]))
+                    merged = merged[1:]
+                    changed = True
+            runs = merged
+
+        for run_start, run_end in runs:
+            run_len = run_end - run_start
+            if run_len > n:
+                run_len = n
+            seg_length_px = 0.0
+            seg_pts = []
+            last_curved_idx = None
+            for j in range(run_len):
+                idx = (run_start + j) % n
+                if is_curved[idx]:
+                    seg_pts.append(pts[idx])
+                    if last_curved_idx is not None:
+                        seg_length_px += np.linalg.norm(
+                            pts[idx].astype(float) - pts[last_curved_idx].astype(float)
+                        )
+                    last_curved_idx = idx
+            if seg_length_px > best_curved_length_px:
+                best_curved_length_px = seg_length_px
+                best_curved_pts = seg_pts
+
+    curved_length = best_curved_length_px * pixel_size
+
+    if best_curved_pts:
+        curve_arr = np.array(best_curved_pts, dtype=np.int32)
+        cv2.polylines(annotated, [curve_arr], isClosed=False, color=(255, 0, 255), thickness=thickness )
+
+    if draw_hallmarks:
+        annotated = draw_hallmarks_values_on_image(
+            annotated,
+            thickness=thickness,
+            curve=curved_length,
+            unit=unit,
+            box_position="topleft",
+            anchor_ratio=(0.02, 0.05),
+        )
+    annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
+    return curved_length, annotated, slice_kind
+
+
+# def put_label_on_bgr(
+#     bgr: np.ndarray,
+#     text: str,
+#     pos: str | tuple[int, int] = "topleft",  # 'topleft'|'topright'|'bottomleft'|'bottomright' or (x, y)
+#     *,
+#     font_scale: float | None = None,     # auto if None
+#     thickness: int | None = None,        # auto if None
+#     margin: int = 6,
+#     box_color: tuple[int, int, int] = (0, 0, 0),      # BGR
+#     box_alpha: float = 0.55,                           # 0..1
+#     text_color: tuple[int, int, int] = (255, 255, 255) # BGR
+# ) -> np.ndarray:
+#     """
+#     Draw `text` with a translucent background box on a BGR image and return the result (BGR).
+#     """
+#     if not (isinstance(bgr, np.ndarray) and bgr.ndim == 3 and bgr.shape[2] == 3 and bgr.dtype == np.uint8):
+#         raise ValueError("Expected uint8 BGR image of shape (H, W, 3).")
+
+#     out = bgr.copy()
+#     H, W = out.shape[:2]
+#     if not text:
+#         return None
+
+#     # Auto size to image height (looks good across sizes)
+#     if font_scale is None:
+#         font_scale = max(0.45, H / 800.0 * 0.9)
+#     if thickness is None:
+#         thickness = max(1, int(round(H / 400.0)))
+
+#     (tw, th), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+#     bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
+
+#     # Anchor selection
+#     if isinstance(pos, tuple):
+#         x, y = int(pos[0]), int(pos[1])
+#     else:
+#         pos = str(pos).lower()
+#         if pos == "bottomleft":
+#             x, y = margin, H - bh - margin
+#         elif pos == "bottomright":
+#             x, y = W - bw - margin, H - bh - margin
+#         elif pos == "topright":
+#             x, y = W - bw - margin, margin
+#         else:  # "topleft"
+#             x, y = margin, margin
+
+#     # Clamp box fully inside image
+#     x = max(0, min(x, W - bw))
+#     y = max(0, min(y, H - bh))
+
+#     # Translucent background box
+#     overlay = out.copy()
+#     cv2.rectangle(overlay, (x, y), (x + bw, y + bh), box_color, -1)
+#     cv2.addWeighted(overlay, float(box_alpha), out, 1.0 - float(box_alpha), 0, out)
+
+#     # Text baseline inside the box
+#     tx, ty = x + margin, y + margin + th
+#     cv2.putText(out, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
+#     return out

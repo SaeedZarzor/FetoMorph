@@ -348,6 +348,7 @@ class MainWindow(QMainWindow):
         self.act_meas_volumes = QAction("Volumes", self); self.act_meas_volumes.triggered.connect(self.dispatcher.on_measure_volumes); measures_menu.addAction(self.act_meas_volumes)
         self.act_meas_area = QAction("Area", self); self.act_meas_area.triggered.connect(self.dispatcher.on_measure_area); measures_menu.addAction(self.act_meas_area)
         self.act_meas_perimeter = QAction("Perimeter", self); self.act_meas_perimeter.triggered.connect(self.dispatcher.on_measure_perimeter); measures_menu.addAction(self.act_meas_perimeter)
+        self.act_meas_curve = QAction("Curve Length", self); self.act_meas_curve.triggered.connect(self.dispatcher.on_measure_curve_length); measures_menu.addAction(self.act_meas_curve)
         self.act_meas_stright = QAction("Straight", self); self.act_meas_stright.triggered.connect(self.dispatcher.on_measure_straight); measures_menu.addAction(self.act_meas_stright)
         self.act_meas_sulci = QAction("Sulci Depth", self); self.act_meas_sulci.triggered.connect(self.dispatcher.on_measure_sulci_depth); measures_menu.addAction(self.act_meas_sulci)
         process_menu.addSeparator()
@@ -417,6 +418,7 @@ class MainWindow(QMainWindow):
             self.act_meas_volumes,
             self.act_meas_area,
             self.act_meas_perimeter,
+            self.act_meas_curve,
             self.act_meas_lgi,
             self.act_meas_stright,
             self.act_meas_compactness,
@@ -478,6 +480,7 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Measure", self.act_meas_perimeter)
         self.ribbon.add_action("Measure", self.act_meas_area)
         self.ribbon.add_action("Measure", self.act_meas_volumes)
+        self.ribbon.add_action("Measure", self.act_meas_curve)
         self.ribbon.add_action("Measure", self.act_meas_stright)
         self.ribbon.add_action("Measure", self.act_meas_sulci)
         
@@ -710,6 +713,7 @@ class MainWindow(QMainWindow):
                 self.act_meas_volumes,
                 self.act_meas_area,
                 self.act_meas_perimeter,
+                self.act_meas_curve,
                 self.act_meas_compactness,
                 self.act_meas_lgi,
                 self.act_meas_sulci,
@@ -741,6 +745,7 @@ class MainWindow(QMainWindow):
             self.act_meas_allmarks.setEnabled(True)
             self.act_nitfi2png.setEnabled(False)
             self.act_meas_curvature.setEnabled(False)
+            self.act_meas_curve.setEnabled(False)
             self.act_slice_thickness.setEnabled(True)
             self.act_set_image_scale.setEnabled(False)
             self.act_niftiextractor.setEnabled(False)
@@ -753,7 +758,7 @@ class MainWindow(QMainWindow):
             self.nav_tb.hide()
             self.view.set_zoom_controls_visible(False)
 
-            
+
         if kind == "nifti":
             self.act_meas_area.setEnabled(True)
             self.act_meas_perimeter.setEnabled(False)
@@ -766,6 +771,7 @@ class MainWindow(QMainWindow):
             self.label_overlay_enabled = True
             self.act_nitfi2png.setEnabled(True)
             self.act_meas_curvature.setEnabled(False)
+            self.act_meas_curve.setEnabled(False)
             self.act_set_image_scale.setEnabled(False)
             self.act_set_scale.setEnabled(False)
             self.act_slice_thickness.setEnabled(False)
@@ -794,6 +800,7 @@ class MainWindow(QMainWindow):
             self.act_hausdorf.setEnabled(True)
             self.act_meas_curvature.setEnabled(True)
             self.act_meas_stright.setEnabled(True)
+            self.act_meas_curve.setEnabled(True)
             self.act_slice_thickness.setEnabled(False)
             self.act_niftiextractor.setEnabled(False)
             self.slice_slider.setEnabled(False)

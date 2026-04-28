@@ -188,6 +188,7 @@ def draw_hallmarks_values_on_image(
     *,
     area: float | None = None,
     perimeter: float | None = None,
+    curve: float | None = None,
     lgi: float | None = None,
     compactness: float | None = None,
     unit: str = "mm",
@@ -226,6 +227,8 @@ def draw_hallmarks_values_on_image(
         lines.append(f"Area: {area:.2f} {unit}^2")
     if perimeter is not None:
         lines.append(f"Perimeter: {perimeter:.2f} {unit}")
+    if curve is not None:
+        lines.append(f"Curve: {curve:.2f} {unit}")
     if lgi is not None:
         lines.append(f"lGI: {lgi:.2f}")
     if compactness is not None:

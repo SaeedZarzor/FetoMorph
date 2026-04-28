@@ -743,6 +743,62 @@ class MeasurementDispatcher:
             print("[Compactness] Unsupported current kind. Open an image or 3D mesh file.")
             return
 
+    def on_measure_curve_length(self):
+        """Process → Measures → Curve Length: measure only the longest curved segment."""
+        if not self.mw.current_path or not os.path.isfile(self.mw.current_path):
+            print("[Curve Length] No file is loaded."); return
+
+        if self.mw.current_kind == "image":
+            try:
+                result = self.mw.settings.ensure_calibrated()
+                if result is None:
+                    return
+                u, px_size = result
+
+                print(f"[Curve Length] Measuring: {self.mw.current_path}")
+                print(f"[Curve Length] Measuring with pixel size = {px_size} {u}/pixel")
+
+                image_path = self.mw.current_path
+                if self.mw.last_annotated_path is not None:
+                    image_path = self.mw.last_annotated_path
+
+                curved_length, annotated_bgr, slice_kind = compute_image_curved_length(
+                    image_path,
+                    pixel_size=px_size,
+                    cnt_threshold=self.mw.cnt_threshold,
+                    unit=u,
+                    add_scalebar=not bool(self.mw.image_scale_from_scalebar.get(self.mw.current_path, False)),
+                    draw_hallmarks=self.mw.draw_hallmarks_on_image,
+                )
+                print(f"Curved length = {curved_length:.2f} {u}.")
+
+                label_text = self.mw.get_label_for_cropped_path(image_path)
+                if label_text:
+                    annotated_bgr = put_label_on_bgr(annotated_bgr, label_text, pos="topleft")
+                pm = ViewManager.np_bgr_to_qpixmap(annotated_bgr)
+                self.mw.image_label.setImage(pm)
+                self.mw.image_label.remove_last_annotation()
+                self.mw.view.show_widget(self.mw.image_label)
+                self.mw._active_view = "image"
+                self.mw._set_current("image", self.mw.current_path)
+                self.mw.metrics_store.record_metric_for(
+                    self.mw.current_path,
+                    label=label_text,
+                    pixel_size_units=f"{self.mw.units_length}/pixel",
+                    unit=self.mw.units_length,
+                    pixel_size=self.mw.pixel_size,
+                    curved_length=curved_length,
+                    slice_kind=slice_kind,
+                )
+
+            except Exception as ex:
+                logger.error("Curve Length failed: %s", ex)
+                QMessageBox.critical(self.mw, "Curve Length Failed", f"{type(ex).__name__}: {ex}")
+
+        else:
+            print("[Curve Length] Only supported for images.")
+            return
+
     def on_measure_straight(self):
         """Process → Measures → Straight Line: interactive two-click distance measurement."""
         if not self.mw.current_path or not os.path.isfile(self.mw.current_path):
