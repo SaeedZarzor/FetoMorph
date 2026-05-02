@@ -25,9 +25,9 @@ DEFAULT_CONFIG = {
     "section_label": "Filled_2D_sections",
     "weeks": list(DEFAULT_WEEKS),
     "axes": list(DEFAULT_AXES),
-    "pixel_size": 1.0 / 41.0,
-    "scalebar_measured_pixels": None,
-    "scalebar_real_world_length": None,
+    "pixel_size": 20.0 / 42.0,
+    "scalebar_measured_pixels": 42.0,
+    "scalebar_real_world_length": 20.0,
     "kernel_size": 25,
     "cnt_threshold": 2000,
     "unit": "mm",
@@ -277,6 +277,22 @@ def main() -> int:
         return 1
 
     output_root.mkdir(parents=True, exist_ok=True)
+
+    if settings["scalebar_measured_pixels"] is not None:
+        logging.info(
+            "Using scalebar calibration: %.6f %s/pixel from %.6f px = %.6f %s",
+            settings["pixel_size"],
+            settings["unit"],
+            settings["scalebar_measured_pixels"],
+            settings["scalebar_real_world_length"],
+            settings["unit"],
+        )
+    else:
+        logging.info(
+            "Using direct pixel size: %.6f %s/pixel",
+            settings["pixel_size"],
+            settings["unit"],
+        )
 
     processed = 0
     skipped = 0

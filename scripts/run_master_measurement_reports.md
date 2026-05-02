@@ -15,11 +15,9 @@ Default settings:
 - output section: `Filled_2D_sections`
 - weeks: `24` to `38`
 - axes: `axial`, `coronal`, `sagittal`
-- `pixel_size = 1 / 41 mm/pixel`
-- optional scale-from-scalebar calibration:
-    - `scalebar_measured_pixels` (for example `42.0`)
-    - `scalebar_real_world_length` (for example `20.0`)
-    - when both are provided, `pixel_size` is computed as `real_world_length / measured_pixels`
+- default calibration uses the measured scalebar `42 px = 20 mm`
+- `pixel_size = 20 / 42 mm/pixel`
+- when both `scalebar_measured_pixels` and `scalebar_real_world_length` are provided, `pixel_size` is computed as `real_world_length / measured_pixels`
 - `kernel_size = 25`
 - `cnt_threshold = 2000`
 - `unit = mm`
@@ -46,6 +44,12 @@ Run one week and one axis:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_master_measurement_reports.py --weeks 24 --axes axial
+```
+
+Override the scalebar calibration explicitly:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_master_measurement_reports.py --weeks 24 --axes axial --scalebar-measured-pixels 42 --scalebar-real-world-length 20
 ```
 
 Clean rerun:

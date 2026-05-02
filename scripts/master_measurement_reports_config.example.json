@@ -4,7 +4,7 @@
   "section_label": "Filled_2D_sections",
   "weeks": [24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38],
   "axes": ["axial", "coronal", "sagittal"],
-  "pixel_size": 0.024390243902439025,
+  "pixel_size": 0.47619047619047616,
   "scalebar_measured_pixels": 42.0,
   "scalebar_real_world_length": 20.0,
   "kernel_size": 25,
