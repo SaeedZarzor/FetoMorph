@@ -16,17 +16,37 @@ Default settings:
 - weeks: `24` to `38`
 - axes: `axial`, `coronal`, `sagittal`
 - default calibration uses the measured scalebar `42 px = 20 mm`
-- `pixel_size = 20 / 42 mm/pixel`
+- effective `pixel_size = 20 / 42 mm/pixel`
 - when both `scalebar_measured_pixels` and `scalebar_real_world_length` are provided, `pixel_size` is computed as `real_world_length / measured_pixels`
+- if either scalebar value is provided, both must be provided
+- `--pixel-size` is only used directly when scalebar calibration is not active
 - `kernel_size = 25`
 - `cnt_threshold = 2000`
 - `unit = mm`
 
 The generated workbook also appends metadata rows:
 
+- `PixelSizeUnits`
+- `KernelSize`
 - `ScalebarMeasuredPixels:`
 - `ScalebarRealWorldLength:`
 - `ScalebarRealWorldUnit:`
+
+Supported CLI options:
+
+- `--config`
+- `--input-root`
+- `--output-root`
+- `--section-label`
+- `--weeks`
+- `--axes`
+- `--pixel-size`
+- `--scalebar-measured-pixels`
+- `--scalebar-real-world-length`
+- `--kernel-size`
+- `--cnt-threshold`
+- `--unit`
+- `--log-level {DEBUG,INFO,WARNING,ERROR}`
 
 Run all weeks and all axes:
 
@@ -51,6 +71,14 @@ Override the scalebar calibration explicitly:
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_master_measurement_reports.py --weeks 24 --axes axial --scalebar-measured-pixels 42 --scalebar-real-world-length 20
 ```
+
+Run with direct pixel size instead of scalebar calibration:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_master_measurement_reports.py --config scripts\master_measurement_reports_config.example.json --pixel-size 0.47619047619047616
+```
+
+Note: if the config still contains `scalebar_measured_pixels` and `scalebar_real_world_length`, those values take precedence and `pixel_size` will be recomputed from the scalebar. To use direct `pixel_size`, remove or null out both scalebar fields in the config.
 
 Clean rerun:
 
