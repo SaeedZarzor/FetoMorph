@@ -91,3 +91,26 @@ Get-ChildItem .\measurements -Directory | ForEach-Object {
 }
 .\.venv\Scripts\python.exe scripts\run_master_measurement_reports.py
 ```
+
+Post-process the generated Excel reports:
+
+`analyze_master_measurement_reports.py` reads each `week*_Batch_Allmarks.xlsx` workbook under `measurements`, analyzes one workbook per `week/axis`, and writes the results back into the same Excel file on a new `Analysis` sheet.
+
+The `Analysis` sheet includes:
+
+- mean and standard deviation for `area`, `perimeter`, `LGI`, and `Compactness`
+- rounded `Sulci_count` values and rounded per-class sulcus counts
+- mean and standard deviation for sulcus categories such as `primary`, `secondary`, and `tertiary`
+- embedded boxplots for the core metrics and sulcus categories
+
+Run for all weeks and all axes:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\analyze_master_measurement_reports.py
+```
+
+Run one week and one axis:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\analyze_master_measurement_reports.py --weeks 24 --axes axial
+```
