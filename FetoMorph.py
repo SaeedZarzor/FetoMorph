@@ -35,6 +35,8 @@ from managers.settings_manager import SettingsManager
 from managers.file_manager import FileManager
 from managers.view_manager import ViewManager
 from managers.measurement_dispatcher import MeasurementDispatcher
+from managers.visualization_settings import VisualizationSettings, set_active as set_active_viz
+from widgets.preferences_dialog import PreferencesDialog
 
 import logging
 
@@ -282,6 +284,12 @@ class MainWindow(QMainWindow):
         # Params for measurements (owned by SettingsManager)
         self.settings = SettingsManager(self)
 
+        # Visualization preferences (text/colors/sizes/view toggles, persisted to QSettings)
+        self.viz = VisualizationSettings(self)
+        self.viz.load()
+        set_active_viz(self.viz)
+        self.viz.settingsChanged.connect(self._on_viz_settings_changed)
+
         # Params for optimization
         self.optimization_objectives: list[str] = []
         self.optimization_constraints: dict[str, float] = {}
@@ -366,19 +374,18 @@ class MainWindow(QMainWindow):
         self.act_nitfi2png = QAction("Nifti masking…", self); self.act_nitfi2png.triggered.connect(self.Nifti_to_png); process_menu.addAction(self.act_nitfi2png)
         self.act_niftiextractor = QAction("Nifti extract regions…", self); self.act_niftiextractor.triggered.connect(self.Nifti_extractor); process_menu.addAction(self.act_niftiextractor)
 
-        # Setting menu
-        Setting_menu = self.menuBar().addMenu("Adjustments"); self.Setting_menu = Setting_menu
-        self.act_set_custom_label = QAction("Custom label…", self); self.act_set_custom_label.triggered.connect(self.settings.set_custom_label); Setting_menu.addAction(self.act_set_custom_label)
-        self.act_set_image_scale = QAction("Set Image Scale…", self); self.act_set_image_scale.triggered.connect(self.settings.set_image_scale); Setting_menu.addAction(self.act_set_image_scale)
+        # Adjustments menu
+        Adjustments_menu = self.menuBar().addMenu("Adjustments"); self.Adjustments_menu = Adjustments_menu
+        self.act_set_custom_label = QAction("Custom label…", self); self.act_set_custom_label.triggered.connect(self.settings.set_custom_label); Adjustments_menu.addAction(self.act_set_custom_label)
+        self.act_set_image_scale = QAction("Set Image Scale…", self); self.act_set_image_scale.triggered.connect(self.settings.set_image_scale); Adjustments_menu.addAction(self.act_set_image_scale)
         self.act_set_scale = QAction("Set Scale From Scalebar…", self);self.act_set_scale.triggered.connect(self.settings.set_scale_from_scalebar);
-        Setting_menu.addAction(self.act_set_scale)
-        self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.settings.set_kernel_dialog); Setting_menu.addAction(self.act_kernel_size)
-        self.act_slice_thickness = QAction("Set Slice Thickness…", self); self.act_slice_thickness.triggered.connect(self.settings.set_slice_thickness_dialog); Setting_menu.addAction(self.act_slice_thickness); self.act_slice_thickness.setToolTip("Set the distance between slices")
-        self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.settings.set_cnt_threshold_dialog); Setting_menu.addAction(self.act_cnt_threshold)
-        self.act_draw_hallmarks = QAction("Draw hallmarks values on image", self); self.act_draw_hallmarks.setCheckable(True); self.act_draw_hallmarks.setChecked(True); self.act_draw_hallmarks.toggled.connect(lambda checked: setattr(self, "draw_hallmarks_on_image", bool(checked))); Setting_menu.addAction(self.act_draw_hallmarks)
-        self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Setting_menu.addAction(self.act_annotate_square)
-        self.act_choose_regions = QAction("ROI selection…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Setting_menu.addAction(self.act_choose_regions)
-        self.act_set_physical_dim = QAction("Mesh dimensions…", self);self.act_set_physical_dim.setToolTip("Define the physical dimensions of the VTK mesh."); self.act_set_physical_dim.triggered.connect(self.settings.load_mesh_and_ask_geometry);Setting_menu.addAction(self.act_set_physical_dim)
+        Adjustments_menu.addAction(self.act_set_scale)
+        self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.settings.set_kernel_dialog); Adjustments_menu.addAction(self.act_kernel_size)
+        self.act_slice_thickness = QAction("Set Slice Thickness…", self); self.act_slice_thickness.triggered.connect(self.settings.set_slice_thickness_dialog); Adjustments_menu.addAction(self.act_slice_thickness); self.act_slice_thickness.setToolTip("Set the distance between slices")
+        self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.settings.set_cnt_threshold_dialog); Adjustments_menu.addAction(self.act_cnt_threshold)
+        self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Adjustments_menu.addAction(self.act_annotate_square)
+        self.act_choose_regions = QAction("ROI selection…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Adjustments_menu.addAction(self.act_choose_regions)
+        self.act_set_physical_dim = QAction("Mesh dimensions…", self);self.act_set_physical_dim.setToolTip("Define the physical dimensions of the VTK mesh."); self.act_set_physical_dim.triggered.connect(self.settings.load_mesh_and_ask_geometry);Adjustments_menu.addAction(self.act_set_physical_dim)
     
         # Freesurfer menu
         Freesurfer_menu = self.menuBar().addMenu("Freesurfer Viewer")
@@ -393,6 +400,14 @@ class MainWindow(QMainWindow):
         Fetal_brain_3D_nifti = Examples_menu.addMenu("Fetal brain 3D NIfTI")
         fill_2D_sections = Fetal_brain_2D_sections.addAction("Filled 2D sections"); fill_2D_sections.setShortcut(QKeySequence("Ctrl+Alt+F")); fill_2D_sections.setToolTip("Open example filled 2D fetal brain sections by gestational week"); fill_2D_sections.triggered.connect(self.choose_gestational_week_2D_fill)
         cropped_2D_sections = Fetal_brain_2D_sections.addAction("Cropped 2D sections"); cropped_2D_sections.setShortcut(QKeySequence("Ctrl+Alt+C")); cropped_2D_sections.setToolTip("Open example cropped 2D fetal brain sections by gestational week"); cropped_2D_sections.triggered.connect(self.choose_gestational_week_2D_cropped)
+
+        # Settings menu (visualization options)
+        settings_menu = self.menuBar().addMenu("Settings"); self.settings_menu = settings_menu
+        self.act_preferences = QAction("Preferences…", self)
+        self.act_preferences.setMenuRole(QAction.MenuRole.PreferencesRole)
+        self.act_preferences.setShortcut(QKeySequence.Preferences)
+        self.act_preferences.triggered.connect(self._open_preferences)
+        settings_menu.addAction(self.act_preferences)
 
         # Disable initially
         for action in [
@@ -561,6 +576,23 @@ class MainWindow(QMainWindow):
     def is_vtk(self) -> bool:
         return self.current_kind is not None and self.current_kind.startswith("vtk")
 
+
+    def _open_preferences(self):
+        """Show the visualization preferences dialog."""
+        dlg = PreferencesDialog(self.viz, self)
+        dlg.exec()
+
+    def _on_viz_settings_changed(self):
+        """Apply live visualization changes (VTK colors, view toggles)."""
+        vs = self.viz
+        if hasattr(self, "vtk_view"):
+            self.vtk_view.renderer.SetBackground(*vs.vtk_background_rgbf)
+            self.vtk_view.vtkWidget.GetRenderWindow().Render()
+        if hasattr(self, "view"):
+            self.view.set_zoom_controls_visible(vs.show_zoom_controls)
+            self.view.label_overlay_enabled = bool(vs.show_label_overlay)
+            if self.view.slice_nav_mode == "nifti" and hasattr(self, "slice_slider"):
+                self.view.show_nifti_slice(self.slice_slider.value())
 
     def quit_app(self):
         """Gracefully shut down the application, stopping workers and timers first."""

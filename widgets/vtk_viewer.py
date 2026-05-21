@@ -7,6 +7,8 @@ colour overlays.
 """
 
 from deps import *
+from managers.visualization_settings import get_active as _get_viz
+
 
 class VTKViewer(QWidget):
     """QWidget hosting a VTK render window for 3-D and slice-based visualisation.
@@ -28,7 +30,7 @@ class VTKViewer(QWidget):
         self.vtkWidget = QVTKRenderWindowInteractor(self)
         layout = QVBoxLayout(self); layout.setContentsMargins(0,0,0,0); layout.addWidget(self.vtkWidget)
         self.renderer = vtkRenderer(); self.vtkWidget.GetRenderWindow().AddRenderer(self.renderer)
-        self.renderer.SetBackground(0.07, 0.07, 0.07)
+        self.renderer.SetBackground(*_get_viz().vtk_background_rgbf)
         self._mode = None; self._img = None; self._axis = 2; self._slice = 0; self._slice_min = 0; self._slice_max = 0
         self._slice_mapper = None; self._slice_node = None; self._axes_widget = None   # store widget reference
         self.vtkWidget.Initialize()
@@ -44,7 +46,7 @@ class VTKViewer(QWidget):
         from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
         self.vtkWidget.GetRenderWindow().GetInteractor().SetInteractorStyle(vtkInteractorStyleTrackballCamera())
         mapper = vtkPolyDataMapper(); mapper.SetInputData(poly)
-        actor = vtkActor(); actor.SetMapper(mapper); actor.GetProperty().SetColor(0.69, 0.77, 0.87)
+        actor = vtkActor(); actor.SetMapper(mapper); actor.GetProperty().SetColor(*_get_viz().vtk_surface_rgbf)
         self.renderer.AddActor(actor); self.renderer.ResetCamera()
         self._mode = "polydata"; self.vtkWidget.GetRenderWindow().Render()
         self.show_axes(True)
@@ -59,7 +61,7 @@ class VTKViewer(QWidget):
         self._clear_scene()
         mapper = vtkPolyDataMapper(); mapper.SetInputData(poly)
         actor = vtkActor(); actor.SetMapper(mapper)
-        actor.GetProperty().SetColor(0.69, 0.77, 0.87)
+        actor.GetProperty().SetColor(*_get_viz().vtk_surface_rgbf)
         self.renderer.AddActor(actor)
 
         # Orthographic camera looking along the flat axis
@@ -224,7 +226,7 @@ class VTKViewer(QWidget):
             from vtkmodules.vtkRenderingCore import vtkRenderer
             self.renderer = vtkRenderer()
             rw.AddRenderer(self.renderer)
-            self.renderer.SetBackground(0.07, 0.07, 0.07)
+            self.renderer.SetBackground(*_get_viz().vtk_background_rgbf)
         else:
             # just clear existing actors, keep renderer and axes widget
             self.renderer.RemoveAllViewProps()

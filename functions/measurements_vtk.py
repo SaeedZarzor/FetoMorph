@@ -38,6 +38,7 @@ from helpers.helpers import (
 )
 from helpers.check_mesh import check_brain
 from helpers.slice_kind_classifier import classify_slice_kind
+from managers.visualization_settings import get_active as _get_viz
 from constants import (
     BINARY_THRESHOLD_VTK,
     RED_CHANNEL_MIN,
@@ -182,7 +183,7 @@ def compute_vtk_allmarks(
         # Exclude red reference-cube contours from brain measurements.
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
+        cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
         # Outer contours: rebuild a mask from ONLY the kept inner contours so
         # noise blobs rejected by the inner filter can't produce spurious outer
@@ -193,7 +194,7 @@ def compute_vtk_allmarks(
         closed = cv2.morphologyEx(inner_mask, cv2.MORPH_CLOSE, kernel)
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), thickness)
+        cv2.drawContours(bgr, outer_filtered, -1, tuple(_get_viz().contour_outer_color_bgr), thickness)
 
         area_perim_px  = sum(cv2.contourArea(c)     for c in inner_filtered)
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
@@ -222,7 +223,7 @@ def compute_vtk_allmarks(
                             start = tuple(cnt[s][0])
                             end = tuple(cnt[e][0])
                             far = tuple(cnt[f][0])
-                            bgr = cv2.line(bgr, start, end, [255, 0, 0], thickness)
+                            bgr = cv2.line(bgr, start, end, list(_get_viz().measurement_line_color_bgr), thickness)
                             if d > DEFECT_FIXED_POINT:
                                 depth_mm = d * mm_per_px / DEFECT_FIXED_POINT
                                 if use_percent_filter:
@@ -466,7 +467,7 @@ def compute_vtk_lGI(
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
+        cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
         # Outer contours: rebuild a mask from ONLY the kept inner contours so
         # noise blobs rejected by the inner filter can't produce spurious outer
@@ -477,7 +478,7 @@ def compute_vtk_lGI(
         closed = cv2.morphologyEx(inner_mask, cv2.MORPH_CLOSE, kernel)
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, outer_filtered, -1, (0, 255, 0), thickness)
+        cv2.drawContours(bgr, outer_filtered, -1, tuple(_get_viz().contour_outer_color_bgr), thickness)
 
         # Perimeters (mm)
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
@@ -828,7 +829,7 @@ def compute_vtk_area(
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
+        cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
         # Perimeters (mm)
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
@@ -1000,7 +1001,7 @@ def compute_vtk_sulci_depth(
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
+        cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
         # Classify the rendered slice and gate the percent filter on it.
         slice_kind, slice_kind_conf = classify_slice_kind(bgr)
@@ -1020,7 +1021,7 @@ def compute_vtk_sulci_depth(
                             start = tuple(cnt[s][0])
                             end = tuple(cnt[e][0])
                             far = tuple(cnt[f][0])
-                            bgr = cv2.line(bgr, start, end, [255, 0, 0], thickness)
+                            bgr = cv2.line(bgr, start, end, list(_get_viz().measurement_line_color_bgr), thickness)
                             if d > DEFECT_FIXED_POINT:
                                 depth_mm = d * mm_per_px / DEFECT_FIXED_POINT
                                 if use_percent_filter:
@@ -1231,7 +1232,7 @@ def compute_compactness_vtk(parent,
         # Inner contours: exclude red ref + area filter
         inner_candidates = contours_exclude(contours, red_rect, bw.shape)
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 0, 255), thickness)
+        cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
         # Convert pixel measurements to physical units
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)

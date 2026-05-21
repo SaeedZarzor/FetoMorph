@@ -23,6 +23,7 @@ from helpers.helpers import (
     format_sulcus_class_summary,
 )
 from helpers.slice_kind_classifier import classify_slice_kind, SliceKind
+from managers.visualization_settings import get_active as _get_viz
 from constants import (
     BINARY_THRESHOLD_DEFAULT,
     DEFECT_FIXED_POINT,
@@ -98,7 +99,7 @@ def compute_image_allmarks(
         print(f"The sulcus depth filter thresholds are {(SULCUS_TERTIARY_MIN_FRACTION * slice_length):.2f} {unit} (min) and {(SULCUS_PRIMARY_MAX_FRACTION * slice_length):.2f} {unit} (max).")
 
     if filtered_contours:
-        cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
+        cv2.drawContours(annotated, filtered_contours, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
         area_sum = sum(cv2.contourArea(cnt) for cnt in filtered_contours)
         perimeter_sum = sum(cv2.arcLength(cnt, True) for cnt in filtered_contours)
     else:
@@ -124,7 +125,7 @@ def compute_image_allmarks(
     filtered_conv_contours = [cnt_conv for cnt_conv in convex_Contours if cv2.contourArea(cnt_conv) > cnt_threshold]
 
     if filtered_conv_contours:
-        annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, (0, 255, 0), thickness)
+        annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, tuple(_get_viz().contour_outer_color_bgr), thickness)
         perimeter_convex_sum= sum( cv2.arcLength(convex_cnt, True) for convex_cnt in filtered_conv_contours)
 
     else:
@@ -152,7 +153,7 @@ def compute_image_allmarks(
                     start = tuple(cnt[s][0])
                     end = tuple(cnt[e][0])
                     far = tuple(cnt[f][0])
-                    annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
+                    annotated = cv2.line(annotated, start, end, list(_get_viz().measurement_line_color_bgr), thickness)
                     # Convert fixed-point depth to physical units. Full MRI
                     # slices use a percent-of-slice-length window; cropped
                     # bands keep the original fixed-millimeter threshold.
@@ -184,7 +185,7 @@ def compute_image_allmarks(
                                 label,
                                 (tx, ty),
                                 cv2.FONT_HERSHEY_SIMPLEX,
-                                font_scale * 0.75,
+                                font_scale * float(_get_viz().sulcus_label_scale_multiplier),
                                 marker_color,
                                 max(1, thickness - 1),
                                 cv2.LINE_AA,
@@ -244,7 +245,7 @@ def compute_image_perimeter(
     thickness, font_scale, _ = image_annotation_style(H, W, style="regular")
 
     if filtered:
-        cv2.drawContours(annotated, filtered, -1, (0, 0, 255), thickness)
+        cv2.drawContours(annotated, filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
     perimeter_sum = sum(cv2.arcLength(cnt, True) for cnt in filtered)
     perimeter = perimeter_sum * pixel_size
@@ -297,7 +298,7 @@ def compute_image_area(
     thickness, _, _ = image_annotation_style(H, W, style="regular")
 
     if filtered:
-        cv2.drawContours(annotated, filtered, -1, (0, 0, 255), thickness)
+        cv2.drawContours(annotated, filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
     px_area_sum = float(sum(cv2.contourArea(c) for c in filtered))
     area_units2 = px_area_sum * (pixel_size ** 2)
@@ -366,7 +367,7 @@ def compute_image_lGI(
     thickness, _, _ = image_annotation_style(H, W, style="regular")
     
     if filtered_contours:
-        cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
+        cv2.drawContours(annotated, filtered_contours, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
         perimeter = sum(cv2.arcLength(cnt, True) for cnt in filtered_contours)
     else:
         perimeter = 0
@@ -381,7 +382,7 @@ def compute_image_lGI(
     filtered_conv_contours = [cnt_conv for cnt_conv in convex_Contours if cv2.contourArea(cnt_conv) > cnt_threshold]
     
     if filtered_conv_contours:
-        annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, (0, 255, 0), thickness)
+        annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, tuple(_get_viz().contour_outer_color_bgr), thickness)
         perimeter_convex= sum( cv2.arcLength(convex_cnt, True) for convex_cnt in filtered_conv_contours)
     
     else:
@@ -484,7 +485,7 @@ def compute_image_sulci_depth(
         print(f"The sulcus depth filter thresholds are {(SULCUS_TERTIARY_MIN_FRACTION * slice_length):.2f} {unit} (min) and {(SULCUS_PRIMARY_MAX_FRACTION * slice_length):.2f} {unit} (max).")
 
     if filtered_contours:
-        cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)
+        cv2.drawContours(annotated, filtered_contours, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
 
     # When use_percent_filter is True (full MRI slices), depths are split into
@@ -504,7 +505,7 @@ def compute_image_sulci_depth(
                     start = tuple(cnt[s][0])
                     end = tuple(cnt[e][0])
                     far = tuple(cnt[f][0])
-                    annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
+                    annotated = cv2.line(annotated, start, end, list(_get_viz().measurement_line_color_bgr), thickness)
                     # Convert fixed-point depth to physical units. Full MRI
                     # slices use a percent-of-slice-length window; cropped
                     # bands keep the original fixed-millimeter threshold.
@@ -534,7 +535,7 @@ def compute_image_sulci_depth(
                                 label,
                                 (tx, ty),
                                 cv2.FONT_HERSHEY_SIMPLEX,
-                                font_scale * 0.75,
+                                font_scale * float(_get_viz().sulcus_label_scale_multiplier),
                                 marker_color,
                                 max(1, thickness - 1),
                                 cv2.LINE_AA,
@@ -567,7 +568,7 @@ def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> tuple
     thickness, _, _ = image_annotation_style(H, W, style="regular")
     
     if filtered:
-        cv2.drawContours(annotated, filtered, -1, (0, 0, 255), thickness)
+        cv2.drawContours(annotated, filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
     perimeter = sum(cv2.arcLength(cnt, True) for cnt in filtered)
     area = float(sum(cv2.contourArea(c) for c in filtered))

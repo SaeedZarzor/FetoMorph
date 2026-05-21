@@ -123,7 +123,7 @@ def draw_new_scale_bar(
     length_px: int,
     *,
     where: str | Tuple[int, int] = "bottom_right",
-    color: tuple[int, int, int] = (0, 0, 0),  # black in BGR
+    color: tuple[int, int, int] | None = None,
     thickness_ratio: float = 0.007,
     margin_ratio: float = 0.08,
     text: str | None = None,
@@ -154,10 +154,14 @@ def draw_new_scale_bar(
         A copy of the image with the scale bar (and optional label)
         drawn on it.
     """
+    from managers.visualization_settings import get_active
+    vs = get_active()
+    if color is None:
+        color = tuple(vs.scalebar_text_color_bgr)
     out = img_bgr.copy()
     h, w = out.shape[:2]
     base = min(h, w)
-    thickness = max(1, int(thickness_ratio * base))
+    thickness = max(1, int(thickness_ratio * base * float(vs.scalebar_thickness_multiplier)))
     margin = int(margin_ratio * base)
 
     if isinstance(where, str) and where == "bottom_right":
