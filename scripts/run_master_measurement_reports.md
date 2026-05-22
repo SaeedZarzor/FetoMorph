@@ -101,7 +101,7 @@ The `Analysis` sheet includes:
 - mean and standard deviation for `area`, `perimeter`, `LGI`, and `Compactness`
 - rounded `Sulci_count` values and rounded per-class sulcus counts
 - mean and standard deviation for sulcus categories such as `primary`, `secondary`, and `tertiary`
-- embedded boxplots for the core metrics and sulcus categories
+- embedded boxplots for the core metrics, grouped sulcus-count comparison across primary/secondary/tertiary classes, and sulcus categories
 
 Run for all weeks and all axes:
 

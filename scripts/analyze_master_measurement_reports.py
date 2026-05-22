@@ -7,10 +7,24 @@ import re
 from pathlib import Path
 from typing import Iterable
 
-import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from openpyxl import load_workbook
-from openpyxl.drawing.image import Image as XLImage
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+
+try:
+    import matplotlib.pyplot as plt
+except Exception as exc:  # pragma: no cover - environment-dependent import failure
+    plt = None
+    MATPLOTLIB_IMPORT_ERROR = exc
+else:
+    MATPLOTLIB_IMPORT_ERROR = None
+
+if plt is not None:
+    from openpyxl.drawing.image import Image as XLImage
+else:
+    XLImage = None
 
 
 SULCUS_CLASSES = ("Primary", "Secondary", "Tertiary", "Unclassified")
@@ -276,26 +290,53 @@ def per_class_sulcus_summary(sulcus_values_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+BOX_COLOR = "#9ecae1"
+SCATTER_COLOR = "#2E6DA4"
+
+
+def _save_figure(fig) -> io.BytesIO:
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=180)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def _annotate_median(ax, position: float, median: float, fmt: str = "{:.3g}") -> None:
+    ax.text(
+        position,
+        median,
+        fmt.format(median),
+        ha="center",
+        va="bottom",
+        fontsize=8,
+        fontweight="bold",
+        color="#1A3A5C",
+    )
+
+
 def plot_boxplot(values: pd.Series, title: str, ylabel: str) -> io.BytesIO | None:
+    if plt is None:
+        return None
     clean = pd.to_numeric(values, errors="coerce").dropna()
     if clean.empty:
         return None
 
-    fig, ax = plt.subplots(figsize=(6.5, 4.5))
-    ax.boxplot(clean, patch_artist=True, boxprops={"facecolor": "#9ecae1"})
+    fig, ax = plt.subplots(figsize=(7, 4))
+    bp = ax.boxplot(clean, patch_artist=True, boxprops={"facecolor": BOX_COLOR})
+    ax.set_xticklabels([])
+    ax.tick_params(axis="x", length=0)
+    _annotate_median(ax, 1, float(bp["medians"][0].get_ydata()[0]))
     ax.set_title(title)
     ax.set_ylabel(ylabel)
     ax.grid(axis="y", linestyle=":", alpha=0.5)
     fig.tight_layout()
-
-    image_bytes = io.BytesIO()
-    fig.savefig(image_bytes, format="png", dpi=180)
-    plt.close(fig)
-    image_bytes.seek(0)
-    return image_bytes
+    return _save_figure(fig)
 
 
 def plot_grouped_sulcus_boxplot(sulcus_values_df: pd.DataFrame, ylabel: str) -> io.BytesIO | None:
+    if plt is None:
+        return None
     grouped = []
     labels = []
     for class_name in [name.lower() for name in SULCUS_CLASSES]:
@@ -312,34 +353,133 @@ def plot_grouped_sulcus_boxplot(sulcus_values_df: pd.DataFrame, ylabel: str) -> 
         return None
 
     fig, ax = plt.subplots(figsize=(8.5, 4.5))
-    ax.boxplot(grouped, labels=labels, patch_artist=True)
+    bp = ax.boxplot(grouped, labels=labels, patch_artist=True,
+                    boxprops={"facecolor": BOX_COLOR})
+    for i, median_line in enumerate(bp["medians"]):
+        _annotate_median(ax, i + 1, float(median_line.get_ydata()[0]))
     ax.set_title("Sulcus value distributions by class")
     ax.set_ylabel(ylabel)
     ax.grid(axis="y", linestyle=":", alpha=0.5)
     fig.tight_layout()
-
-    image_bytes = io.BytesIO()
-    fig.savefig(image_bytes, format="png", dpi=180)
-    plt.close(fig)
-    image_bytes.seek(0)
-    return image_bytes
+    return _save_figure(fig)
 
 
-def write_dataframe(ws, start_row: int, start_col: int, title: str, df: pd.DataFrame) -> int:
-    ws.cell(row=start_row, column=start_col, value=title)
+def plot_grouped_count_boxplot(rounded_df: pd.DataFrame) -> io.BytesIO | None:
+    if plt is None:
+        return None
+    grouped = []
+    labels = []
+    count_columns = (
+        ("Primary_count_rounded", "primary"),
+        ("Secondary_count_rounded", "secondary"),
+        ("Tertiary_count_rounded", "tertiary"),
+    )
+    for column_name, label in count_columns:
+        if column_name not in rounded_df.columns:
+            continue
+        values = pd.to_numeric(rounded_df[column_name], errors="coerce").dropna()
+        if values.empty:
+            continue
+        grouped.append(values)
+        labels.append(label)
+
+    if not grouped:
+        return None
+
+    fig, ax = plt.subplots(figsize=(9.5, 5.0))
+    positions = list(range(1, len(grouped) + 1))
+    bp = ax.boxplot(grouped, labels=labels, positions=positions, patch_artist=True,
+                    boxprops={"facecolor": BOX_COLOR})
+    for i, (pos, values) in enumerate(zip(positions, grouped)):
+        offsets = np.linspace(-0.08, 0.08, len(values)) if len(values) > 1 else np.array([0.0])
+        ax.scatter(
+            pos + offsets,
+            values,
+            s=20,
+            color=SCATTER_COLOR,
+            alpha=0.7,
+            edgecolors="none",
+            zorder=3,
+        )
+        _annotate_median(ax, pos, float(bp["medians"][i].get_ydata()[0]), fmt="{:.0f}")
+    ax.set_title("Sulcus count distributions by fold class")
+    ax.set_ylabel("count per slice")
+    max_count = max(int(values.max()) for values in grouped)
+    ax.set_ylim(bottom=-0.1, top=max_count + 0.35)
+    ax.set_yticks(list(range(0, max_count + 1)))
+    ax.grid(axis="y", linestyle=":", alpha=0.5)
+    fig.tight_layout()
+    return _save_figure(fig)
+
+
+HEADER_FILL = PatternFill("solid", fgColor="2E6DA4")
+HEADER_FONT = Font(bold=True, color="FFFFFF", size=10)
+SECTION_FILL = PatternFill("solid", fgColor="D9E8F5")
+SECTION_FONT = Font(bold=True, color="1A3A5C", size=11)
+ROW_FILL_ODD = PatternFill("solid", fgColor="FFFFFF")
+ROW_FILL_EVEN = PatternFill("solid", fgColor="EEF4FB")
+BORDER_SIDE = Side(style="thin", color="B0C4D8")
+CELL_BORDER = Border(
+    left=BORDER_SIDE, right=BORDER_SIDE, top=BORDER_SIDE, bottom=BORDER_SIDE
+)
+
+
+def _style_cell(cell, fill=None, font=None, border=True, align_center=False) -> None:
+    if fill:
+        cell.fill = fill
+    if font:
+        cell.font = font
+    if border:
+        cell.border = CELL_BORDER
+    if align_center:
+        cell.alignment = Alignment(horizontal="center")
+
+
+def _autofit_columns(ws) -> None:
+    col_widths: dict[int, int] = {}
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.value is None:
+                continue
+            text_len = len(str(cell.value))
+            col_widths[cell.column] = max(col_widths.get(cell.column, 0), text_len)
+    for col_idx, width in col_widths.items():
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(width + 3, 50)
+
+
+def write_dataframe(ws, start_row: int, start_col: int, title: str, df: pd.DataFrame) -> tuple[int, int]:
+    """Returns (next_free_row, rightmost_column_used)."""
+    num_cols = max(len(df.columns), 1)
+    end_col = start_col + num_cols - 1
+
+    title_cell = ws.cell(row=start_row, column=start_col, value=title)
+    _style_cell(title_cell, fill=SECTION_FILL, font=SECTION_FONT, border=False)
+    if num_cols > 1:
+        ws.merge_cells(
+            start_row=start_row, start_column=start_col,
+            end_row=start_row, end_column=end_col,
+        )
+
     if df.empty:
         ws.cell(row=start_row + 1, column=start_col, value="No data")
-        return start_row + 3
+        return start_row + 3, end_col
 
     header_row = start_row + 1
     for offset, col_name in enumerate(df.columns):
-        ws.cell(row=header_row, column=start_col + offset, value=str(col_name))
+        cell = ws.cell(row=header_row, column=start_col + offset, value=str(col_name))
+        _style_cell(cell, fill=HEADER_FILL, font=HEADER_FONT)
 
     for row_offset, row in enumerate(df.itertuples(index=False), start=1):
+        fill = ROW_FILL_EVEN if row_offset % 2 == 0 else ROW_FILL_ODD
         for col_offset, value in enumerate(row):
-            ws.cell(row=header_row + row_offset, column=start_col + col_offset, value=normalize_excel_value(value))
+            cell = ws.cell(
+                row=header_row + row_offset,
+                column=start_col + col_offset,
+                value=normalize_excel_value(value),
+            )
+            _style_cell(cell, fill=fill)
 
-    return header_row + len(df) + 2
+    return header_row + len(df) + 2, end_col
 
 
 def normalize_excel_value(value: object) -> object:
@@ -357,7 +497,7 @@ def replace_analysis_sheet(workbook_path: Path, sheet_name: str):
 
 
 def add_image(ws, image_bytes: io.BytesIO | None, anchor: str, width: int = 520, height: int = 360) -> None:
-    if image_bytes is None:
+    if image_bytes is None or XLImage is None:
         return
     img = XLImage(image_bytes)
     img.width = width
@@ -385,49 +525,93 @@ def analyze_workbook(path: Path, sheet_name: str) -> None:
     week = int(match.group("week"))
     axis = match.group("axis").lower()
 
-    ws["A1"] = "Workbook Analysis"
-    ws["A2"] = "Workbook"
-    ws["B2"] = path.name
-    ws["A3"] = "Week"
-    ws["B3"] = week
-    ws["A4"] = "Axis"
-    ws["B4"] = axis
-    ws["A5"] = "Slice rows analyzed"
-    ws["B5"] = len(df)
-    ws["A6"] = "Note"
-    ws["B6"] = (
+    # ── Metadata info card ───────────────────────────────────────────────────
+    CARD_TITLE_FILL = PatternFill("solid", fgColor="1A3A5C")
+    CARD_TITLE_FONT = Font(bold=True, color="FFFFFF", size=12)
+    CARD_LABEL_FILL = PatternFill("solid", fgColor="D9E8F5")
+    CARD_LABEL_FONT = Font(bold=True, color="1A3A5C", size=10)
+    CARD_VALUE_FILL = PatternFill("solid", fgColor="EEF4FB")
+    CARD_VALUE_FONT = Font(color="1A1A1A", size=10)
+
+    title_cell = ws["A1"]
+    title_cell.value = "Workbook Analysis"
+    title_cell.fill = CARD_TITLE_FILL
+    title_cell.font = CARD_TITLE_FONT
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.merge_cells("A1:B1")
+    ws.row_dimensions[1].height = 22
+
+    card_rows = [
+        ("Workbook", path.name),
+        ("Week", week),
+        ("Axis", axis),
+        ("Slice rows analyzed", len(df)),
+    ]
+    note_text = (
         "When a sulcus class count exceeds 3, approximate raw sulcus values are "
         "reconstructed from count + min/max/mean for summary stats and boxplots."
     )
+    if MATPLOTLIB_IMPORT_ERROR is not None:
+        note_text += (
+            " Embedded plot images were skipped because matplotlib could not be imported "
+            f"in this environment: {MATPLOTLIB_IMPORT_ERROR}"
+        )
 
+    for idx, (label, value) in enumerate(card_rows, start=2):
+        lbl = ws.cell(row=idx, column=1, value=label)
+        lbl.fill = CARD_LABEL_FILL
+        lbl.font = CARD_LABEL_FONT
+        lbl.border = CELL_BORDER
+        val = ws.cell(row=idx, column=2, value=value)
+        val.fill = CARD_VALUE_FILL
+        val.font = CARD_VALUE_FONT
+        val.border = CELL_BORDER
+
+    note_label = ws.cell(row=6, column=1, value="Note")
+    note_label.fill = CARD_LABEL_FILL
+    note_label.font = CARD_LABEL_FONT
+    note_label.border = CELL_BORDER
+    note_value = ws.cell(row=6, column=2, value=note_text)
+    note_value.fill = CARD_VALUE_FILL
+    note_value.font = CARD_VALUE_FONT
+    note_value.border = CELL_BORDER
+    note_value.alignment = Alignment(wrap_text=True)
+    ws.row_dimensions[6].height = 42
+
+    # ── Data tables ──────────────────────────────────────────────────────────
     next_row = 8
-    next_row = write_dataframe(ws, next_row, 1, "Core Metric Summary", core_summary_df)
-    next_row = write_dataframe(ws, next_row, 1, "Rounded Sulcus Counts Per Slice", rounded_counts_df)
-    next_row = write_dataframe(ws, next_row, 1, "Rounded Sulcus Count Summary", count_summary_df)
-    next_row = write_dataframe(ws, next_row, 1, "Sulcus Value Summary", sulcus_summary_df)
+    max_data_col = 1
+    next_row, used_col = write_dataframe(ws, next_row, 1, "Core Metric Summary", core_summary_df)
+    max_data_col = max(max_data_col, used_col)
+    next_row, used_col = write_dataframe(ws, next_row, 1, "Rounded Sulcus Counts Per Slice", rounded_counts_df)
+    max_data_col = max(max_data_col, used_col)
+    next_row, used_col = write_dataframe(ws, next_row, 1, "Rounded Sulcus Count Summary", count_summary_df)
+    max_data_col = max(max_data_col, used_col)
+    next_row, used_col = write_dataframe(ws, next_row, 1, "Sulcus Value Summary", sulcus_summary_df)
+    max_data_col = max(max_data_col, used_col)
 
-    core_metric_plots = [
-        ("area", "P2"),
-        ("perimeter", "P24"),
-        ("LGI", "P46"),
-        ("Compactness", "P68"),
-    ]
-    for metric, anchor in core_metric_plots:
+    # ── Plot anchors: placed 2 columns right of the widest table ─────────────
+    # Each plot group is ~9 columns wide at default column width (~64 px each).
+    plot_col_1 = max_data_col + 2          # core metric plots
+    plot_col_2 = plot_col_1 + 9           # per-class sulcus value plots
+    plot_col_3 = plot_col_2 + 9           # grouped summary plots
+
+    def _col_anchor(col: int, row: int) -> str:
+        return f"{get_column_letter(col)}{row}"
+
+    PLOT_ROW_STEP = 22
+    core_metric_plots = ["area", "perimeter", "LGI", "Compactness"]
+    for i, metric in enumerate(core_metric_plots):
         if metric not in df.columns:
             continue
         add_image(
             ws,
             plot_boxplot(df[metric], f"{metric} distribution", metric),
-            anchor,
+            _col_anchor(plot_col_1, 2 + i * PLOT_ROW_STEP),
         )
 
-    sulcus_plot_anchors = {
-        "primary": "Y2",
-        "secondary": "Y24",
-        "tertiary": "Y46",
-        "unclassified": "Y68",
-    }
-    for class_name, anchor in sulcus_plot_anchors.items():
+    sulcus_classes_ordered = ["primary", "secondary", "tertiary", "unclassified"]
+    for i, class_name in enumerate(sulcus_classes_ordered):
         class_values = sulcus_values_df.loc[sulcus_values_df["sulcus_class"] == class_name, "value"]
         add_image(
             ws,
@@ -436,17 +620,25 @@ def analyze_workbook(path: Path, sheet_name: str) -> None:
                 f"{class_name.capitalize()} sulcus values distribution",
                 f"depth ({depth_unit})",
             ),
-            anchor,
+            _col_anchor(plot_col_2, 2 + i * PLOT_ROW_STEP),
         )
 
     add_image(
         ws,
         plot_grouped_sulcus_boxplot(sulcus_values_df, f"depth ({depth_unit})"),
-        "AJ2",
+        _col_anchor(plot_col_3, 2),
         width=620,
         height=360,
     )
+    add_image(
+        ws,
+        plot_grouped_count_boxplot(rounded_counts_df),
+        _col_anchor(plot_col_3, 2 + PLOT_ROW_STEP),
+        width=680,
+        height=400,
+    )
 
+    _autofit_columns(ws)
     wb.save(path)
 
 
@@ -463,6 +655,13 @@ def main() -> int:
     for path in report_paths:
         analyze_workbook(path, args.sheet_name)
         print(f"Updated workbook: {path}")
+
+    if MATPLOTLIB_IMPORT_ERROR is not None:
+        print(
+            "Warning: matplotlib could not be imported, so analysis sheets were written "
+            "without embedded plot images."
+        )
+        print(f"Import error: {MATPLOTLIB_IMPORT_ERROR}")
 
     print(f"Analyzed {len(report_paths)} workbooks.")
     return 0
