@@ -18,6 +18,7 @@ from deps import *
 from helpers.helpers import (
     compute_kernel_convex,
     contours_exclude,
+    split_inner_and_internal_contours,
     calc_scale,
     get_red_rect_offset,
     slice_at,
@@ -61,7 +62,8 @@ def compute_vtk_allmarks(
     Slice_direction: Literal["X", "Y", "Z"] = "Y",
     Physical_dim: Sequence[int] | None = None,
     unit: str = "mm",
-    slice_thickness: float = 0.5):
+    slice_thickness: float = 0.5,
+    contour_mode: str = "outer"):
     """Compute all hallmarks (area, volume, GI, sulci depths) from a VTK mesh.
 
     Args:
@@ -176,14 +178,18 @@ def compute_vtk_allmarks(
 
         # Use BINARY_THRESHOLD_VTK (150) for black-background VTK renders.
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
-        contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
 
-        # Exclude red reference-cube contours from brain measurements.
-        inner_candidates = contours_exclude(contours, red_rect, bw.shape)
-        inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
+        inner_filtered, internal_filtered = split_inner_and_internal_contours(
+            contours, hierarchy, red_rect, bw.shape, float(min_contour_area),
+        )
+        # Only highlight contours that actually contribute to the measured area.
+        if contour_mode != "internal_only":
+            cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
+        if contour_mode != "outer" and internal_filtered:
+            cv2.drawContours(bgr, internal_filtered, -1, (0, 255, 255), thickness)
 
         # Outer contours: rebuild a mask from ONLY the kept inner contours so
         # noise blobs rejected by the inner filter can't produce spurious outer
@@ -194,9 +200,17 @@ def compute_vtk_allmarks(
         closed = cv2.morphologyEx(inner_mask, cv2.MORPH_CLOSE, kernel)
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, outer_filtered, -1, tuple(_get_viz().contour_outer_color_bgr), thickness)
+        if contour_mode != "internal_only":
+            cv2.drawContours(bgr, outer_filtered, -1, tuple(_get_viz().contour_outer_color_bgr), thickness)
 
-        area_perim_px  = sum(cv2.contourArea(c)     for c in inner_filtered)
+        inner_area_px = sum(cv2.contourArea(c) for c in inner_filtered)
+        internal_area_px = sum(cv2.contourArea(c) for c in internal_filtered)
+        if contour_mode == "subtract":
+            area_perim_px = inner_area_px - internal_area_px
+        elif contour_mode == "internal_only":
+            area_perim_px = internal_area_px
+        else:  # "outer"
+            area_perim_px = inner_area_px
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
         outer_perim_px = sum(cv2.arcLength(c, True) for c in outer_filtered)
         inner_perim_mm = inner_perim_px * mm_per_px
@@ -538,7 +552,8 @@ def compute_vtk_volume(
     Slice_direction: Literal["X", "Y", "Z"] = "Y",
     Physical_dim: Sequence[int] | None = None,
     unit: str = "mm",
-    slice_thickness: float = 0.5):
+    slice_thickness: float = 0.5,
+    contour_mode: str = "outer"):
     """Compute volume from a VTK mesh by integrating slice cross-section areas.
 
     Args:
@@ -650,19 +665,30 @@ def compute_vtk_volume(
 
         # Binary for contours
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
-        contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
 
-        # Inner contours: exclude red ref + area filter
-        inner_candidates = contours_exclude(contours, red_rect, bw.shape)
-        inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, (0, 255, 255), thickness)
+        inner_filtered, internal_filtered = split_inner_and_internal_contours(
+            contours, hierarchy, red_rect, bw.shape, float(min_contour_area),
+        )
+        # Only highlight contours that actually contribute to the measured area.
+        if contour_mode != "internal_only":
+            cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
+        if contour_mode != "outer" and internal_filtered:
+            cv2.drawContours(bgr, internal_filtered, -1, (0, 255, 255), thickness)
 
         
 
         # Perimeters (mm)
-        area_perim_px  = sum(cv2.contourArea(c)   for c in inner_filtered)
+        inner_area_px = sum(cv2.contourArea(c) for c in inner_filtered)
+        internal_area_px = sum(cv2.contourArea(c) for c in internal_filtered)
+        if contour_mode == "subtract":
+            area_perim_px = inner_area_px - internal_area_px
+        elif contour_mode == "internal_only":
+            area_perim_px = internal_area_px
+        else:  # "outer"
+            area_perim_px = inner_area_px
         area_perim_mm  = area_perim_px * (mm_per_px ** 2)
         sum_area      += area_perim_mm
 
@@ -1129,7 +1155,8 @@ def compute_compactness_vtk(parent,
     Slice_direction: Literal["X", "Y", "Z"] = "Y",
     Physical_dim: Sequence[int] | None = None,
     unit: str = "mm",
-    slice_thickness: float = 0.5):
+    slice_thickness: float = 0.5,
+    contour_mode: str = "outer"):
 
     # --- Load mesh
 
@@ -1225,18 +1252,29 @@ def compute_compactness_vtk(parent,
 
         # Binary for contours
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
-        contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
 
-        # Inner contours: exclude red ref + area filter
-        inner_candidates = contours_exclude(contours, red_rect, bw.shape)
-        inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
-        cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
+        inner_filtered, internal_filtered = split_inner_and_internal_contours(
+            contours, hierarchy, red_rect, bw.shape, float(min_contour_area),
+        )
+        # Only highlight contours that actually contribute to the measured area.
+        if contour_mode != "internal_only":
+            cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
+        if contour_mode != "outer" and internal_filtered:
+            cv2.drawContours(bgr, internal_filtered, -1, (0, 255, 255), thickness)
 
         # Convert pixel measurements to physical units
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
-        area_px  = sum(cv2.contourArea(c)     for c in inner_filtered)
+        inner_area_px = sum(cv2.contourArea(c) for c in inner_filtered)
+        internal_area_px = sum(cv2.contourArea(c) for c in internal_filtered)
+        if contour_mode == "subtract":
+            area_px = inner_area_px - internal_area_px
+        elif contour_mode == "internal_only":
+            area_px = internal_area_px
+        else:  # "outer"
+            area_px = inner_area_px
         inner_perim_mm = inner_perim_px * mm_per_px
         area_mm2 = area_px * (mm_per_px ** 2)
         comp_2D = compactness_2D(area_mm2, inner_perim_mm)

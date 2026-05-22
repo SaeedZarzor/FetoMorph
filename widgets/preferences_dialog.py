@@ -90,12 +90,15 @@ class PreferencesDialog(QDialog):
         self.viz = viz
         self._snapshot = viz.snapshot()
 
-        # The parent (MainWindow) owns ``draw_hallmarks_on_image`` via a property
-        # delegate to SettingsManager. Snapshot its current value so Cancel can
-        # roll it back if the user toggles the checkbox and then aborts.
+        # The parent (MainWindow) owns ``draw_hallmarks_on_image`` and
+        # ``contour_mode`` via property delegates to SettingsManager. Snapshot
+        # both so Cancel can roll them back if the user changes them and aborts.
         self._draw_hallmarks_snapshot = bool(
             getattr(parent, "draw_hallmarks_on_image", True)
         ) if parent is not None else True
+        self._contour_mode_snapshot = str(
+            getattr(parent, "contour_mode", "outer")
+        ) if parent is not None else "outer"
 
         self._build_ui()
         self._populate_from(viz)
@@ -267,6 +270,18 @@ class PreferencesDialog(QDialog):
         self._add_row(lay, "Draw hallmarks on image:", self.chk_draw_hallmarks,
             "When on, the Area / Perimeter / lGI text block is drawn in the corner of annotated images.")
 
+        self.cmb_contour_mode = QComboBox()
+        # itemData carries the canonical mode string; itemText is the label
+        self.cmb_contour_mode.addItem("Outer contours only", "outer")
+        self.cmb_contour_mode.addItem("Subtract internal contours", "subtract")
+        self.cmb_contour_mode.addItem("Internal contours only", "internal_only")
+        self._add_row(lay, "Contour accounting:", self.cmb_contour_mode,
+            "How VTK Area / Volume / Compactness use nested contours (e.g. ventricles). "
+            "`Outer only` measures the brain outline (default). `Subtract internal` subtracts "
+            "the area of qualifying internal contours from the brain area. `Internal only` "
+            "measures only the internal contours. Internal contours must still pass the "
+            "filtered-area threshold.")
+
         self.chk_label_overlay = QCheckBox()
         self._add_row(lay, "Show label overlay:", self.chk_label_overlay,
             "When on, NIfTI region labels are blended as colored overlays onto 2-D slices.")
@@ -302,14 +317,21 @@ class PreferencesDialog(QDialog):
         self.btn_vtk_surface.setColor(_rgbf_to_qcolor(vs.vtk_surface_rgbf))
 
         # Mirror the live ``draw_hallmarks_on_image`` from the main window.
-        # On Restore Defaults (vs is a VizDefaults instance) fall back to True.
+        # On Restore Defaults (vs is a VizDefaults instance) fall back to the
+        # factory defaults: draw_hallmarks=on, contour_mode="outer".
         if not isinstance(vs, type(defaults())):
             parent = self.parent()
             self.chk_draw_hallmarks.setChecked(
                 bool(getattr(parent, "draw_hallmarks_on_image", True))
             )
+            mode = str(getattr(parent, "contour_mode", "outer"))
         else:
             self.chk_draw_hallmarks.setChecked(True)
+            mode = "outer"
+        idx = self.cmb_contour_mode.findData(mode)
+        if idx < 0:
+            idx = 0  # fall back to first item ("outer")
+        self.cmb_contour_mode.setCurrentIndex(idx)
 
     def _collect(self) -> dict:
         return {
@@ -335,12 +357,35 @@ class PreferencesDialog(QDialog):
 
     # ----- button slots -----
 
+    @staticmethod
+    def _sync_contour_mode_menu(parent, mode: str) -> None:
+        """Tick the matching radio in the Adjustments contour-mode submenu."""
+        attr = {
+            "outer":         "act_contour_outer",
+            "subtract":      "act_contour_subtract",
+            "internal_only": "act_contour_internal_only",
+        }.get(mode)
+        if attr is None:
+            return
+        group = getattr(parent, "contour_mode_group", None)
+        act = getattr(parent, attr, None)
+        if group is not None:
+            group.blockSignals(True)
+        if act is not None:
+            act.setChecked(True)
+        if group is not None:
+            group.blockSignals(False)
+
     def _on_apply(self) -> None:
         self.viz.apply(self._collect())
         self.viz.save()
         parent = self.parent()
         if parent is not None and hasattr(parent, "draw_hallmarks_on_image"):
             parent.draw_hallmarks_on_image = bool(self.chk_draw_hallmarks.isChecked())
+        if parent is not None and hasattr(parent, "contour_mode"):
+            new_mode = str(self.cmb_contour_mode.currentData() or "outer")
+            parent.contour_mode = new_mode
+            self._sync_contour_mode_menu(parent, new_mode)
 
     def _on_ok(self) -> None:
         self._on_apply()
@@ -351,6 +396,9 @@ class PreferencesDialog(QDialog):
         parent = self.parent()
         if parent is not None and hasattr(parent, "draw_hallmarks_on_image"):
             parent.draw_hallmarks_on_image = self._draw_hallmarks_snapshot
+        if parent is not None and hasattr(parent, "contour_mode"):
+            parent.contour_mode = self._contour_mode_snapshot
+            self._sync_contour_mode_menu(parent, self._contour_mode_snapshot)
         self.reject()
 
     def _on_restore_defaults(self) -> None:

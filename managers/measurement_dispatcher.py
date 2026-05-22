@@ -386,8 +386,9 @@ class MeasurementDispatcher:
 
                 u = self.mw.units_length
                 area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_vtk_allmarks(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
-                    kernel_size = self.mw.kernel_size, Slice_direction = self.mw.slice_direction, Physical_dim= self.mw.physical_dim, unit = u, slice_thickness=self.mw.slice_thickness)
-            
+                    kernel_size = self.mw.kernel_size, Slice_direction = self.mw.slice_direction, Physical_dim= self.mw.physical_dim, unit = u, slice_thickness=self.mw.slice_thickness,
+                    contour_mode=self.mw.contour_mode)
+
                 if area is None:
                     return
        
@@ -399,6 +400,7 @@ class MeasurementDispatcher:
                     unit = u,
                     dimensions = self.mw.physical_dim,
                     slice_thickness= self.mw.slice_thickness,
+                    contour_mode = self.mw.contour_mode,
                     volume=volume,
                     area=area,
                     compactness=compactness,
@@ -537,8 +539,9 @@ class MeasurementDispatcher:
 
                 u = self.mw.units_length
                 volume, saved_pngs, valid_slices = compute_vtk_volume(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
-                    Slice_direction = self.mw.slice_direction, Physical_dim= self.mw.physical_dim, unit = u, slice_thickness=self.mw.slice_thickness)
-            
+                    Slice_direction = self.mw.slice_direction, Physical_dim= self.mw.physical_dim, unit = u, slice_thickness=self.mw.slice_thickness,
+                    contour_mode=self.mw.contour_mode)
+
                 if volume is None:
                     return
        
@@ -549,6 +552,7 @@ class MeasurementDispatcher:
                     unit = u,
                     dimensions = self.mw.physical_dim,
                     slice_thickness= self.mw.slice_thickness,
+                    contour_mode = self.mw.contour_mode,
                     volume=volume)
                     
                 self.mw.view.two_mode_view(out_dir, saved_pngs, valid_slices)
@@ -654,6 +658,7 @@ class MeasurementDispatcher:
                     os.makedirs(out_dir, exist_ok=True)
                     self.mw.current_output_dir = out_dir
 
+                    contour_mode_used = None  # STL path does not subtract internal contours
                     if self.mw.current_kind == "stl":
                         if not self._ensure_stl_slice_direction():
                             return
@@ -670,7 +675,9 @@ class MeasurementDispatcher:
                         comp, saved_pngs, valid_slices = compute_compactness_vtk(self, file_path=self.mw.current_path,
                         out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
                         Slice_direction=self.mw.slice_direction, Physical_dim=self.mw.physical_dim,
-                        unit=self.mw.units_length, slice_thickness=self.mw.slice_thickness)
+                        unit=self.mw.units_length, slice_thickness=self.mw.slice_thickness,
+                        contour_mode=self.mw.contour_mode)
+                        contour_mode_used = str(self.mw.contour_mode)
 
                     if comp is None:
                         return
@@ -679,7 +686,8 @@ class MeasurementDispatcher:
 
                 self.mw.metrics_store.record_metric_for(
                     self.mw.current_path,
-                    slice_thickness=self.mw.slice_thickness, 
+                    slice_thickness=self.mw.slice_thickness,
+                    contour_mode=contour_mode_used,
                     compactness=comp)
 
                 base_name = os.path.basename(self.mw.current_path)

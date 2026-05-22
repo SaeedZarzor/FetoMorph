@@ -42,6 +42,11 @@ class SettingsManager:
         self.draw_hallmarks_on_image: bool = True
         self.cnt_threshold: float = DEFAULT_CNT_THRESHOLD
         self.kernel_size: int = DEFAULT_KERNEL_SIZE
+        # Contour-accounting mode for VTK area / volume / compactness:
+        #   "outer"         — measure outer brain contour only (default)
+        #   "subtract"      — outer minus area of internal contours (holes)
+        #   "internal_only" — measure only the internal contour areas
+        self.contour_mode: str = "outer"
         self.slice_thickness: float = DEFAULT_SLICE_THICKNESS
         self.mm_per_px_bar: float = 0
         self.bar_mm: float = DEFAULT_SCALEBAR_MM

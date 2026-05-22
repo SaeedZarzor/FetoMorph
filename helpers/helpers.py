@@ -464,6 +464,53 @@ def contours_exclude(contours: list, excluded_space: np.ndarray, image_shape: tu
         if np.count_nonzero(cv2.bitwise_and(mask, excluded_space)) == 0:
             filtered.append(cnt)
     return filtered
+
+def split_inner_and_internal_contours(
+    contours, hierarchy, excluded_space, image_shape, min_area,
+):
+    """Split a RETR_CCOMP result into kept outer outlines and kept holes.
+
+    - Top-level contours (hierarchy[i][3] == -1) are first filtered by the
+      red-rect exclusion mask, then by ``min_area``.
+    - A child contour is kept iff its parent is one of the kept top-level
+      contours and its own area exceeds ``min_area``.
+    Returns ``(inner_filtered, internal_filtered)``.
+    """
+    if hierarchy is None or not contours:
+        return [], []
+
+    hierarchy = np.asarray(hierarchy)
+    if hierarchy.ndim == 3:
+        hierarchy = hierarchy[0]
+
+    inner_filtered = []
+    kept_top_level = set()
+    min_area = float(min_area)
+
+    for idx, cnt in enumerate(contours):
+        if hierarchy[idx][3] != -1:
+            continue
+
+        mask = np.zeros(image_shape, dtype=np.uint8)
+        cv2.drawContours(mask, [cnt], -1, 255, -1)
+        if np.count_nonzero(cv2.bitwise_and(mask, excluded_space)) != 0:
+            continue
+        if cv2.contourArea(cnt) <= min_area:
+            continue
+
+        inner_filtered.append(cnt)
+        kept_top_level.add(idx)
+
+    if not kept_top_level:
+        return inner_filtered, []
+
+    internal_filtered = []
+    for idx, cnt in enumerate(contours):
+        parent_idx = int(hierarchy[idx][3])
+        if parent_idx in kept_top_level and cv2.contourArea(cnt) > min_area:
+            internal_filtered.append(cnt)
+
+    return inner_filtered, internal_filtered
     
 def calc_scale(image_rgb: np.ndarray, cube_length: float) -> float | None:
     """

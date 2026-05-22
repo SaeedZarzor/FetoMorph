@@ -93,6 +93,7 @@ class MetricsStore:
         kernel_size: float | None = None,
         unit: str | None = None,
         slice_thickness: float | None = None,
+        contour_mode: str | None = None,
         new_on_param_change: bool = False,
     ):
         """Ensure a metrics row exists for a given (path, annotation) pair.
@@ -128,6 +129,7 @@ class MetricsStore:
                 differs("SliceThickness", slice_thickness),
                 differs("LengthUnit", unit),
                 differs("SliceDirection", direction),
+                differs("ContourMode", contour_mode),
             ]))
         )
 
@@ -145,6 +147,11 @@ class MetricsStore:
                 "KernelSize": kernel_size if kernel_size is not None else (last.get("KernelSize") if last else None),
                 "LengthUnit": unit if unit is not None else (last.get("LengthUnit") if last else None),
                 "SliceThickness": slice_thickness if slice_thickness is not None else (last.get("SliceThickness") if last else None),
+                "ContourMode": (
+                    str(contour_mode)
+                    if contour_mode is not None
+                    else (last.get("ContourMode") if last else None)
+                ),
                 "Length(PA)": None,
                 "Width(LR)": None,
                 "Height(IS)": None,
@@ -183,6 +190,8 @@ class MetricsStore:
             last["SliceThickness"] = slice_thickness
         if direction is not None:
             last["SliceDirection"] = direction
+        if contour_mode is not None:
+            last["ContourMode"] = str(contour_mode)
         return last
 
     def record_metric_for(self, path: str, annotation: str | None = None, source: str | None = None, **vals):
@@ -198,6 +207,7 @@ class MetricsStore:
         thicsl = vals.pop("slice_thickness", None)
         direction = vals.pop("direction", None)
         uni = vals.pop("unit", None)
+        cmode = vals.pop("contour_mode", None)
         row = self.ensure_metric_row(
             path, kind, label, annotation,
             source, direction,
@@ -206,6 +216,7 @@ class MetricsStore:
             kernel_size=ksize,
             unit=uni,
             slice_thickness=thicsl,
+            contour_mode=cmode,
             new_on_param_change=True,
         )
 
@@ -270,13 +281,12 @@ class MetricsStore:
         return [
             "File", "Kind", "Label", "Annotation", "Source", "SliceDirection",
             "PixelSize", "PixelSizeUnits", "KernelSize", "LengthUnit", "SliceThickness",
-            "Length(PA)", "Width(LR)", "Height(IS)",
+            "ContourMode", "Length(PA)", "Width(LR)", "Height(IS)", "SliceKind",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SliceKind",
             "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
             "TertiarySulciCount", "UnclassifiedSulciCount",
             "MinDepth", "MaxDepth", "MeanDepth",
-            "LGI", "Compactness",
+            "LGI", "Compactness", 
         ]
 
     def show_results_dock(self) -> None:
@@ -394,13 +404,12 @@ class MetricsStore:
         metric_cols = [
             "Label", "Annotation", "Source", "SliceDirection",
             "PixelSize", "PixelSizeUnits", "KernelSize", "LengthUnit", "SliceThickness",
-            "Length(PA)", "Width(LR)", "Height(IS)",
+            "ContourMode", "Length(PA)", "Width(LR)", "Height(IS)", "SliceKind",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SliceKind",
             "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
             "TertiarySulciCount", "UnclassifiedSulciCount",
             "MinDepth", "MaxDepth", "MeanDepth",
-            "LGI", "Compactness",
+            "LGI", "Compactness", 
         ]
         cols = base_cols + metric_cols
 
