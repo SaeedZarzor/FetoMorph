@@ -31,7 +31,8 @@ class ViewManager:
 
         self.nifti_axis: int = 1          # 0=sagittal, 1=coronal, 2=axial
         self.nifti_depth: int = 0
-        self.label_overlay_enabled: bool = True
+        from managers.visualization_settings import get_active
+        self.label_overlay_enabled: bool = bool(get_active().show_label_overlay)
         self.nifti_selected_regions_default: set[int] = set()
         self.nifti_selected_regions: set[int] = set()
         self.nifti_label_lut: dict[int, QColor] = {}

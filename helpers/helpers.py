@@ -21,15 +21,98 @@ from constants import (
 logger = logging.getLogger(__name__)
 
 
-# Marker colours (BGR) used to draw classified sulci on annotated images.
-# Unclassified depths (in the filter window but outside every category)
-# get a neutral light-gray marker so they remain visually distinct.
-SULCUS_CLASS_COLORS = {
-    "primary":      (255,   0,   0),  # blue
-    "secondary":    (  0, 215, 255),  # gold
-    "tertiary":     (255, 255,   0),  # cyan
-    "unclassified": (200, 200, 200),  # light gray
+def _get_viz():
+    """Lazy import to break the helpers ↔ managers circular dependency at load time."""
+    from managers.visualization_settings import get_active
+    return get_active()
+
+
+# Default marker colours (BGR) for classified sulci. The live values come from
+# VisualizationSettings — these defaults are used only when settings aren't yet
+# initialised. Use ``sulcus_color(class_name)`` to look up the active value.
+SULCUS_CLASS_COLORS_DEFAULTS = {
+    "primary":      (255,   0,   0),
+    "secondary":    (  0, 215, 255),
+    "tertiary":     (255, 255,   0),
+    "unclassified": (200, 200, 200),
 }
+
+
+def sulcus_color(class_name: str) -> tuple[int, int, int]:
+    """Return the BGR colour for one sulcus class from live VisualizationSettings."""
+    vs = _get_viz()
+    return {
+        "primary":      tuple(vs.sulcus_primary_color_bgr),
+        "secondary":    tuple(vs.sulcus_secondary_color_bgr),
+        "tertiary":     tuple(vs.sulcus_tertiary_color_bgr),
+        "unclassified": tuple(vs.sulcus_unclassified_color_bgr),
+    }[class_name]
+
+
+class _SulcusClassColorsLive(dict):
+    """Drop-in replacement for the legacy dict that reads from live settings."""
+
+    def __getitem__(self, key):
+        return sulcus_color(key)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __iter__(self):
+        return iter(SULCUS_CLASS_COLORS_DEFAULTS)
+
+    def keys(self):
+        return SULCUS_CLASS_COLORS_DEFAULTS.keys()
+
+    def values(self):
+        return [self[k] for k in self.keys()]
+
+    def items(self):
+        return [(k, self[k]) for k in self.keys()]
+
+
+# Back-compat: callers that still index ``SULCUS_CLASS_COLORS["primary"]`` now
+# transparently read from VisualizationSettings.
+SULCUS_CLASS_COLORS = _SulcusClassColorsLive()
+
+
+# Reference palette used to label arbitrary BGR colours with a human-readable
+# name (nearest-Euclidean match in RGB). Order is irrelevant; ties are unlikely
+# with these well-spaced anchors.
+_NAMED_COLORS_RGB = {
+    "red":        (255,   0,   0),
+    "green":      (  0, 128,   0),
+    "lime":       (  0, 255,   0),
+    "blue":       (  0,   0, 255),
+    "yellow":     (255, 255,   0),
+    "cyan":       (  0, 255, 255),
+    "magenta":    (255,   0, 255),
+    "white":      (255, 255, 255),
+    "black":      (  0,   0,   0),
+    "gray":       (128, 128, 128),
+    "light gray": (200, 200, 200),
+    "dark gray":  ( 64,  64,  64),
+    "gold":       (255, 215,   0),
+    "orange":     (255, 165,   0),
+    "purple":     (128,   0, 128),
+    "pink":       (255, 192, 203),
+    "brown":      (165,  42,  42),
+    "navy":       (  0,   0, 128),
+    "teal":       (  0, 128, 128),
+    "olive":      (128, 128,   0),
+}
+
+
+def bgr_to_color_name(bgr) -> str:
+    """Return the closest named colour for a BGR tuple from VisualizationSettings."""
+    b, g, r = (int(x) for x in bgr)
+    return min(
+        _NAMED_COLORS_RGB.items(),
+        key=lambda kv: (kv[1][0] - r) ** 2 + (kv[1][1] - g) ** 2 + (kv[1][2] - b) ** 2,
+    )[0]
 
 
 def classify_sulcus_depth(depth_value: float, slice_length: float) -> str:
@@ -72,13 +155,17 @@ def flatten_depth_sets(depth_sets: dict) -> list:
 
 
 def format_sulcus_class_summary(depth_sets: dict) -> str:
-    """One-line console summary of per-class sulcus counts."""
+    """One-line console summary of per-class sulcus counts.
+
+    Colour labels are derived from the current :class:`VisualizationSettings`
+    so the printed names stay in sync with whatever colours the user picked.
+    """
     return (
         "Sulci classification: "
-        f"primary(blue)={len(depth_sets['primary'])}, "
-        f"secondary(gold)={len(depth_sets['secondary'])}, "
-        f"tertiary(cyan)={len(depth_sets['tertiary'])}, "
-        f"unclassified(light gray)={len(depth_sets['unclassified'])}"
+        f"primary({bgr_to_color_name(sulcus_color('primary'))})={len(depth_sets['primary'])}, "
+        f"secondary({bgr_to_color_name(sulcus_color('secondary'))})={len(depth_sets['secondary'])}, "
+        f"tertiary({bgr_to_color_name(sulcus_color('tertiary'))})={len(depth_sets['tertiary'])}, "
+        f"unclassified({bgr_to_color_name(sulcus_color('unclassified'))})={len(depth_sets['unclassified'])}"
     )
 
 
@@ -178,7 +265,11 @@ def image_annotation_style(
     thickness = max(1, min(int(round(h / base_div)), cap))
     font_scale = float(np.clip(base / 700.0, 0.8, 5.0))
     radius_px = int(np.clip(round(base / 100), 2.0, 30))
-    # print(f"[Style] {style} → thickness={thickness}, font_scale={font_scale:.2f}, radius_px={radius_px}")
+
+    vs = _get_viz()
+    thickness = max(1, int(round(thickness * float(vs.contour_thickness_multiplier))))
+    font_scale = float(font_scale) * float(vs.text_scale_multiplier)
+    radius_px = max(1, int(round(radius_px * float(vs.marker_radius_multiplier))))
     return thickness, font_scale, radius_px
 
 def draw_hallmarks_values_on_image(
@@ -303,10 +394,11 @@ def draw_hallmarks_values_on_image(
     y1 = min(max(0, y1), max(0, h - box_h))
 
     cv2.rectangle(out, (x1, y1), (x1 + box_w, y1 + box_h), (0, 0, 0), -1)
+    text_color = tuple(_get_viz().hallmark_text_color_bgr)
     y_base = y1 + margin + line_h
     for i, txt in enumerate(lines):
         y = y_base + i * (line_h + line_gap)
-        cv2.putText(out, txt, (x1 + margin, y), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+        cv2.putText(out, txt, (x1 + margin, y), font, font_scale, text_color, thickness, cv2.LINE_AA)
     return out
     
     
@@ -372,6 +464,53 @@ def contours_exclude(contours: list, excluded_space: np.ndarray, image_shape: tu
         if np.count_nonzero(cv2.bitwise_and(mask, excluded_space)) == 0:
             filtered.append(cnt)
     return filtered
+
+def split_inner_and_internal_contours(
+    contours, hierarchy, excluded_space, image_shape, min_area,
+):
+    """Split a RETR_CCOMP result into kept outer outlines and kept holes.
+
+    - Top-level contours (hierarchy[i][3] == -1) are first filtered by the
+      red-rect exclusion mask, then by ``min_area``.
+    - A child contour is kept iff its parent is one of the kept top-level
+      contours and its own area exceeds ``min_area``.
+    Returns ``(inner_filtered, internal_filtered)``.
+    """
+    if hierarchy is None or not contours:
+        return [], []
+
+    hierarchy = np.asarray(hierarchy)
+    if hierarchy.ndim == 3:
+        hierarchy = hierarchy[0]
+
+    inner_filtered = []
+    kept_top_level = set()
+    min_area = float(min_area)
+
+    for idx, cnt in enumerate(contours):
+        if hierarchy[idx][3] != -1:
+            continue
+
+        mask = np.zeros(image_shape, dtype=np.uint8)
+        cv2.drawContours(mask, [cnt], -1, 255, -1)
+        if np.count_nonzero(cv2.bitwise_and(mask, excluded_space)) != 0:
+            continue
+        if cv2.contourArea(cnt) <= min_area:
+            continue
+
+        inner_filtered.append(cnt)
+        kept_top_level.add(idx)
+
+    if not kept_top_level:
+        return inner_filtered, []
+
+    internal_filtered = []
+    for idx, cnt in enumerate(contours):
+        parent_idx = int(hierarchy[idx][3])
+        if parent_idx in kept_top_level and cv2.contourArea(cnt) > min_area:
+            internal_filtered.append(cnt)
+
+    return inner_filtered, internal_filtered
     
 def calc_scale(image_rgb: np.ndarray, cube_length: float) -> float | None:
     """
@@ -459,8 +598,9 @@ def add_scalebar(qimg: QImage, zooms: np.ndarray, ax: int) -> tuple[QImage, floa
         bar_mm = max(5, int(max_px * mm_per_px))
     bar_px = int(round(bar_mm / mm_per_px))
 
+    vs = _get_viz()
     margin = max(6, int(round(0.03 * min(w, h))))
-    bar_thick = max(4, int(round(0.008 * min(w, h))))
+    bar_thick = max(4, int(round(0.008 * min(w, h) * float(vs.scalebar_thickness_multiplier))))
     label_h = max(12, int(round(0.028 * min(w, h))))
 
     painter = QPainter(qimg)
@@ -484,7 +624,8 @@ def add_scalebar(qimg: QImage, zooms: np.ndarray, ax: int) -> tuple[QImage, floa
     painter.drawLine(x1, y_bar, x2, y_bar)
 
     # Text (e.g., "20 mm")
-    painter.setPen(QColor(255, 255, 255))
+    sb_b, sb_g, sb_r = vs.scalebar_text_color_bgr
+    painter.setPen(QColor(int(sb_r), int(sb_g), int(sb_b)))
     font = painter.font()
     font.setPointSizeF(max(8.0, 0.9 * label_h))
     painter.setFont(font)

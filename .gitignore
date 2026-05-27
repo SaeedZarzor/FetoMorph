@@ -56,3 +56,9 @@ area_band_output_multi/
 docs/
 output/
 
+# Claude
+CLAUDE.md
+.claude/
+.wolf/
+profile_info.md
+
