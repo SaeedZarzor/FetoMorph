@@ -189,7 +189,7 @@ def compute_vtk_allmarks(
         if contour_mode != "internal_only":
             cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
         if contour_mode != "outer" and internal_filtered:
-            cv2.drawContours(bgr, internal_filtered, -1, (0, 255, 255), thickness)
+            cv2.drawContours(bgr, internal_filtered, -1, tuple(_get_viz().contour_internal_color_bgr), thickness)
 
         # Outer contours: rebuild a mask from ONLY the kept inner contours so
         # noise blobs rejected by the inner filter can't produce spurious outer
@@ -676,7 +676,7 @@ def compute_vtk_volume(
         if contour_mode != "internal_only":
             cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
         if contour_mode != "outer" and internal_filtered:
-            cv2.drawContours(bgr, internal_filtered, -1, (0, 255, 255), thickness)
+            cv2.drawContours(bgr, internal_filtered, -1, tuple(_get_viz().contour_internal_color_bgr), thickness)
 
         
 
@@ -1263,7 +1263,7 @@ def compute_compactness_vtk(parent,
         if contour_mode != "internal_only":
             cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
         if contour_mode != "outer" and internal_filtered:
-            cv2.drawContours(bgr, internal_filtered, -1, (0, 255, 255), thickness)
+            cv2.drawContours(bgr, internal_filtered, -1, tuple(_get_viz().contour_internal_color_bgr), thickness)
 
         # Convert pixel measurements to physical units
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)

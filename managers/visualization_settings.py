@@ -30,6 +30,7 @@ class VizDefaults:
     # --- Drawn-element colors (BGR for cv2) ---
     contour_inner_color_bgr: tuple = (0, 0, 255)
     contour_outer_color_bgr: tuple = (0, 255, 0)
+    contour_internal_color_bgr: tuple = (0, 255, 255)
     measurement_line_color_bgr: tuple = (255, 0, 0)
     sulcus_primary_color_bgr: tuple = (255, 0, 0)
     sulcus_secondary_color_bgr: tuple = (0, 215, 255)

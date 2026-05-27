@@ -215,6 +215,10 @@ class PreferencesDialog(QDialog):
         self._add_row(lay, "Outer contour:", self.btn_contour_outer,
             "Color of the convex-hull outline drawn outside the inner contour.")
 
+        self.btn_contour_internal = ColorButton(QColor("yellow"))
+        self._add_row(lay, "Internal contour:", self.btn_contour_internal,
+            "Color of the internal brain outline drawn on annotated images.")
+
         self.btn_measurement_line = ColorButton(QColor("blue"))
         self._add_row(lay, "Measurement line:", self.btn_measurement_line,
             "Color of measurement strokes (convexity-defect rays).")
