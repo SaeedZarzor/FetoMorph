@@ -423,14 +423,31 @@ class MetricsStore:
             "Area", "Perimeter", "LGI", "Compactness",
             "PrimarySulciCount", "SecondarySulciCount",
             "TertiarySulciCount", "UnclassifiedSulciCount",
-            "MinDepth", "MaxDepth", "MeanDepth",
-            "LGI", "Compactness", 
-        ]
-        cols = base_cols + metric_cols
+            "PrimaryMeanDepth", "SecondaryMeanDepth",
+            "TertiaryMeanDepth", "UnclassifiedMeanDepth",
+        )
+        # Adjustment parameters that may differ across measurement runs
+        # of the same file. Each becomes a per-row column so the values
+        # used for each measurement are visible inline.
+        extra_columns = (
+            "Kernel size",
+            "Pixel spacing",
+            "Slice thickness",
+            "Contour mode",
+            "Slice direction",
+            "Length unit",
+        )
 
-        flat_rows = []
-        for _path, rows in self.metrics.items():
-            if rows is None:
+        def _pixel_spacing(r: dict) -> str | None:
+            v = r.get("PixelSize")
+            if v in (None, ""):
+                return None
+            u = r.get("PixelSizeUnits") or r.get("LengthUnit") or ""
+            return f"{v} {u}/pixel".strip()
+
+        sheets: list[ResultsSheet] = []
+        for path, rows in self.metrics.items():
+            if not rows:
                 continue
             if isinstance(rows, dict):
                 rows = [rows]
@@ -457,11 +474,11 @@ class MetricsStore:
                 results_rows.append(row_dict)
 
             sheet_name = os.path.basename(path) if path else "Results"
-            # The top Parameters block is left intentionally empty for the
-            # cross-measurement dock export: the per-row columns below
-            # carry the authoritative per-run values, and a single summary
-            # block at the top would silently hide rows whose parameters
-            # differ from the first one.
+            # The top Parameters block is left intentionally empty for
+            # the cross-measurement dock export: the per-row columns
+            # below carry the authoritative per-run values, and a
+            # single summary block at the top would silently hide rows
+            # whose parameters differ from the first one.
             sheets.append(ResultsSheet(
                 sheet_name=sheet_name,
                 file_name=os.path.basename(path) if path else None,
@@ -475,26 +492,7 @@ class MetricsStore:
         if not sheets:
             QMessageBox.information(
                 mw, "Export Metrics",
-                "Pandas is required to export to Excel.\nInstall with:\n  pip install pandas openpyxl",
-            )
-            return
-
-        df = pd.DataFrame(flat_rows, columns=cols)
-
-        real_metric_cols = [
-            "PixelSize", "KernelSize", "SliceThickness",
-            "Length(PA)", "Width(LR)", "Height(IS)",
-            "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
-            "TertiarySulciCount", "UnclassifiedSulciCount",
-            "MinDepth", "MaxDepth", "MeanDepth",
-            "LGI", "Compactness",
-        ]
-        has_any_metric = df[real_metric_cols].notna().any(axis=1)
-        df = df.loc[has_any_metric].copy()
-
-        if df.empty:
-            QMessageBox.information(mw, "Export Metrics", "No non-empty metrics to export yet.")
+                "No non-empty metrics to export yet.")
             return
 
         last_dir = getattr(self.mw, "last_dir", os.getcwd())
