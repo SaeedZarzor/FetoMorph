@@ -404,23 +404,27 @@ class MetricsStore:
     # ------------------------------------------------------------------
 
     def export_metrics_excel(self) -> None:
-        """Export all collected metrics to an Excel .xlsx file."""
+        """Export collected metrics to an Excel workbook with one
+        spec-layout sheet per source file. Each per-measurement row
+        carries the adjustment parameters that were active when that
+        row was recorded, so re-measuring the same file with different
+        kernel size / pixel size / threshold / contour mode produces
+        rows that reflect those changes."""
         mw = self.mw
         if not self.metrics:
             QMessageBox.information(mw, "Export Metrics", "No metrics to export yet.")
             return
 
-        base_cols = ["File", "Kind"]
-        metric_cols = [
-            "Label", "Annotation", "Source", "SliceDirection",
-            "PixelSize", "PixelSizeUnits", "KernelSize", "LengthUnit", "SliceThickness",
-            "ContourMode", "Length(PA)", "Width(LR)", "Height(IS)", "SliceKind",
-            "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
+        from helpers.results_excel_format import (
+            ResultsSheet, write_results_workbook,
+        )
+
+        metric_keys = (
+            "Area", "Perimeter", "LGI", "Compactness",
+            "PrimarySulciCount", "SecondarySulciCount",
             "TertiarySulciCount", "UnclassifiedSulciCount",
-            "PrimaryMeanDepth", "SecondaryMeanDepth", "TertiaryMeanDepth",
             "MinDepth", "MaxDepth", "MeanDepth",
-            "LGI", "Compactness",
+            "LGI", "Compactness", 
         ]
         cols = base_cols + metric_cols
 
@@ -430,17 +434,46 @@ class MetricsStore:
                 continue
             if isinstance(rows, dict):
                 rows = [rows]
-            for row in rows:
-                flat_rows.append({c: row.get(c) for c in cols})
+            non_empty = [r for r in rows if isinstance(r, dict)
+                         and any(r.get(k) is not None for k in metric_keys)]
+            if not non_empty:
+                continue
 
-        if not flat_rows:
-            QMessageBox.information(mw, "Export Metrics", "No metrics to export yet.")
-            return
+            results_rows = []
+            for i, r in enumerate(non_empty, start=1):
+                section = (r.get("Annotation") or r.get("Source")
+                           or r.get("Label") or f"Row {i}")
+                row_dict = {
+                    "Section": section,
+                    "Kernel size": r.get("KernelSize"),
+                    "Pixel spacing": _pixel_spacing(r),
+                    "Slice thickness": r.get("SliceThickness"),
+                    "Contour mode": r.get("ContourMode"),
+                    "Slice direction": r.get("SliceDirection"),
+                    "Length unit": r.get("LengthUnit"),
+                }
+                for k in metric_keys:
+                    row_dict[k] = r.get(k)
+                results_rows.append(row_dict)
 
-        try:
-            import pandas as pd
-        except Exception:
-            QMessageBox.critical(
+            sheet_name = os.path.basename(path) if path else "Results"
+            # The top Parameters block is left intentionally empty for the
+            # cross-measurement dock export: the per-row columns below
+            # carry the authoritative per-run values, and a single summary
+            # block at the top would silently hide rows whose parameters
+            # differ from the first one.
+            sheets.append(ResultsSheet(
+                sheet_name=sheet_name,
+                file_name=os.path.basename(path) if path else None,
+                folder=(os.path.dirname(path) if path else None) or None,
+                parameters={},
+                rows=results_rows,
+                extra_columns=extra_columns,
+                drop_empty_columns=True,
+            ))
+
+        if not sheets:
+            QMessageBox.information(
                 mw, "Export Metrics",
                 "Pandas is required to export to Excel.\nInstall with:\n  pip install pandas openpyxl",
             )
@@ -454,7 +487,6 @@ class MetricsStore:
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
             "TertiarySulciCount", "UnclassifiedSulciCount",
-            "PrimaryMeanDepth", "SecondaryMeanDepth", "TertiaryMeanDepth",
             "MinDepth", "MaxDepth", "MeanDepth",
             "LGI", "Compactness",
         ]
@@ -465,17 +497,11 @@ class MetricsStore:
             QMessageBox.information(mw, "Export Metrics", "No non-empty metrics to export yet.")
             return
 
-        drop_all_null = [
-            c for c in real_metric_cols + ["Label", "Annotation", "Source", "SliceDirection", "LengthUnit", "PixelSizeUnits"]
-            if c in df.columns and df[c].isna().all()
-        ]
-        if drop_all_null:
-            df.drop(columns=drop_all_null, inplace=True)
-
         last_dir = getattr(self.mw, "last_dir", os.getcwd())
         default_name = os.path.join(last_dir, "metrics.xlsx")
         path, _ = QFileDialog.getSaveFileName(
-            mw, "Export Metrics to Excel…", default_name, "Excel Workbook (*.xlsx)",
+            mw, "Export Metrics to Excel…", default_name,
+            "Excel Workbook (*.xlsx)",
         )
         if not path:
             return
@@ -495,19 +521,23 @@ class MetricsStore:
                     print(f"Created folder: {folder}")
                 except Exception as ex:
                     logger.error("Error creating folder: %s", ex)
-                    QMessageBox.critical(mw, "Export Failed", f"Could not create folder:\n{ex}")
+                    QMessageBox.critical(
+                        mw, "Export Failed",
+                        f"Could not create folder:\n{ex}")
                     return
             else:
                 return
 
         try:
-            df.to_excel(path, index=False)
+            write_results_workbook(path, sheets)
             print(f"Exported metrics to: {path}")
             if folder:
                 self.mw.last_dir = folder
         except Exception as ex:
             logger.error("Error exporting metrics: %s", ex)
-            QMessageBox.critical(mw, "Export Failed", f"{type(ex).__name__}: {ex}")
+            QMessageBox.critical(
+                mw, "Export Failed",
+                f"{type(ex).__name__}: {ex}")
 
     # ------------------------------------------------------------------
     # Utilities
