@@ -98,7 +98,7 @@ class FileManager:
     def save_view(self) -> None:
         """Ask path & save exactly what is displayed."""
         mw = self.mw
-        if mw._active_view not in ("image", "vtk"):
+        if mw._active_view not in ("image", "vtk", "chart"):
             QMessageBox.information(mw, "Save View", "Nothing to save.")
             return
         base = "view"
@@ -139,6 +139,11 @@ class FileManager:
                 ok = pm.save(path)
                 if not ok:
                     raise RuntimeError("Failed to save image widget snapshot.")
+            elif mw._active_view == "chart":
+                canvas = getattr(mw, "_similarity_canvas", None)
+                if canvas is None:
+                    raise RuntimeError("No chart is currently displayed.")
+                canvas.figure.savefig(path, dpi=200, bbox_inches="tight")
             else:
                 rw = mw.vtk_view.vtkWidget.GetRenderWindow()
                 rw.Render()

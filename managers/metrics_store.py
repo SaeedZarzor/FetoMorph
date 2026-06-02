@@ -164,6 +164,9 @@ class MetricsStore:
                 "SecondarySulciCount": None,
                 "TertiarySulciCount": None,
                 "UnclassifiedSulciCount": None,
+                "PrimaryMeanDepth": None,
+                "SecondaryMeanDepth": None,
+                "TertiaryMeanDepth": None,
                 "MinDepth": None,
                 "MaxDepth": None,
                 "MeanDepth": None,
@@ -240,10 +243,16 @@ class MetricsStore:
 
         sds = vals.pop("sulci_depth_sets", None)
         if sds is not None and isinstance(sds, dict):
-            row["PrimarySulciCount"] = len(sds.get("primary", []))
-            row["SecondarySulciCount"] = len(sds.get("secondary", []))
-            row["TertiarySulciCount"] = len(sds.get("tertiary", []))
-            row["UnclassifiedSulciCount"] = len(sds.get("unclassified", []))
+            for key, row_key, mean_key in (
+                ("primary", "PrimarySulciCount", "PrimaryMeanDepth"),
+                ("secondary", "SecondarySulciCount", "SecondaryMeanDepth"),
+                ("tertiary", "TertiarySulciCount", "TertiaryMeanDepth"),
+                ("unclassified", "UnclassifiedSulciCount", None),
+            ):
+                vals_list = sds.get(key, [])
+                row[row_key] = len(vals_list)
+                if mean_key is not None:
+                    row[mean_key] = (sum(vals_list) / len(vals_list)) if vals_list else None
 
         ld = vals.pop("dimensions", None)
         if ld is not None:
@@ -285,8 +294,9 @@ class MetricsStore:
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
             "TertiarySulciCount", "UnclassifiedSulciCount",
+            "PrimaryMeanDepth", "SecondaryMeanDepth", "TertiaryMeanDepth",
             "MinDepth", "MaxDepth", "MeanDepth",
-            "LGI", "Compactness", 
+            "LGI", "Compactness",
         ]
 
     def show_results_dock(self) -> None:
@@ -408,8 +418,9 @@ class MetricsStore:
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
             "TertiarySulciCount", "UnclassifiedSulciCount",
+            "PrimaryMeanDepth", "SecondaryMeanDepth", "TertiaryMeanDepth",
             "MinDepth", "MaxDepth", "MeanDepth",
-            "LGI", "Compactness", 
+            "LGI", "Compactness",
         ]
         cols = base_cols + metric_cols
 
@@ -443,6 +454,7 @@ class MetricsStore:
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
             "TertiarySulciCount", "UnclassifiedSulciCount",
+            "PrimaryMeanDepth", "SecondaryMeanDepth", "TertiaryMeanDepth",
             "MinDepth", "MaxDepth", "MeanDepth",
             "LGI", "Compactness",
         ]

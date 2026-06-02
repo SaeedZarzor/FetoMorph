@@ -18,6 +18,10 @@ from functions.measurements_vtk import *
 from functions.optimization import optimization
 from functions.pial_to_stl import pial_pair_to_combined_stl, pial_to_stl
 from helpers.helpers import compactness_2D, compactness_3D
+from helpers.gestational_week_profile import (
+    GestationalWeekProfile, GASPResult, GASPSummary, METRIC_MAP,
+    MetricStats, WeekProfile, compute_similarity_scores,
+)
 from helpers.read_excel import conver_excel
 from managers.metrics_store import MetricsStore
 from managers.view_manager import ViewManager
@@ -1918,4 +1922,846 @@ class MeasurementDispatcher:
         except Exception as ex:
             logger.error("Combined STL failed: %s", ex)
             QMessageBox.critical(self.mw, "Pial (rh & lh) → Combined STL", f"{type(ex).__name__}: {ex}")
-        
+
+    def _detect_axis(self, measured: dict) -> str | None:
+        """Auto-detect the anatomical axis from stored metrics, CNN, or slice direction."""
+        valid = ("sagittal", "coronal", "axial")
+
+        stored = measured.get("SliceKind")
+        if stored in valid:
+            return stored
+
+        if self.mw.current_kind == "image" and os.path.isfile(self.mw.current_path):
+            from helpers.slice_kind_classifier import classify_slice_kind
+            img_bgr = cv2.imread(self.mw.current_path)
+            if img_bgr is not None:
+                label, conf = classify_slice_kind(img_bgr)
+                if label in valid and conf >= 0.6:
+                    return label
+
+        dir_map = {"X": "sagittal", "Y": "coronal", "Z": "axial"}
+        sd = getattr(self.mw, "slice_direction", None)
+        if sd in dir_map:
+            return dir_map[sd]
+
+        return None
+
+    def _show_gasp_week_detail(
+        self,
+        result: GASPResult,
+        ref: WeekProfile | None,
+        measured: dict,
+        metric_labels: dict[str, str],
+        result_alt: GASPResult | None = None,
+    ) -> None:
+        """Open a dialog with a full metric table for a single gestational week."""
+        dlg = QDialog(self.mw)
+        dlg.setWindowTitle(f"Week {result.week} — GASP Detail")
+        dlg.resize(820, 460)
+        layout = QVBoxLayout(dlg)
+
+        if result_alt is not None:
+            header_text = (
+                f"<b>Gestational Week {result.week}</b> &nbsp;|&nbsp; "
+                f"Gaussian = {result.gasp:.2%} &nbsp;&nbsp; "
+                f"Global Distance = {result_alt.gasp:.2%}")
+        else:
+            header_text = (
+                f"<b>Gestational Week {result.week}</b> &nbsp;|&nbsp; "
+                f"GASP = {result.gasp:.2%}")
+        header = QLabel(header_text)
+        header.setTextFormat(Qt.RichText)
+        layout.addWidget(header)
+
+        cols = ["Metric", "Measured", "Ref Mean", "Ref Std",
+                "Ref Min", "Ref Max", "z-score", "Similarity", "OOR"]
+        table = QTableView()
+        model = QStandardItemModel(0, len(cols), dlg)
+        model.setHorizontalHeaderLabels(cols)
+
+        for meas_key, ref_field in METRIC_MAP.items():
+            val = measured.get(meas_key)
+            label = metric_labels.get(ref_field, ref_field)
+
+            stats: MetricStats | None = getattr(ref, ref_field, None) if ref else None
+            z = result.z_scores.get(ref_field)
+            sim = result.per_metric.get(ref_field)
+            oor = result.out_of_range.get(ref_field, False)
+
+            def _fmt(v, decimals=4):
+                if v is None:
+                    return ""
+                try:
+                    return f"{float(v):.{decimals}f}"
+                except (TypeError, ValueError):
+                    return str(v)
+
+            row_items = [
+                QStandardItem(label),
+                QStandardItem(_fmt(val)),
+                QStandardItem(_fmt(stats.mean if stats else None)),
+                QStandardItem(_fmt(stats.std if stats else None)),
+                QStandardItem(_fmt(stats.min if stats else None)),
+                QStandardItem(_fmt(stats.max if stats else None)),
+                QStandardItem(_fmt(z)),
+                QStandardItem(f"{sim:.2%}" if sim is not None else ""),
+                QStandardItem("Yes" if oor else ""),
+            ]
+            for it in row_items[1:]:
+                it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            if oor:
+                for it in row_items:
+                    it.setBackground(QColor(255, 235, 235))
+            model.appendRow(row_items)
+
+        table.setModel(model)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table.setEditTriggers(QTableView.NoEditTriggers)
+        table.setSelectionBehavior(QTableView.SelectRows)
+        layout.addWidget(table)
+
+        btn = QPushButton("Close")
+        btn.clicked.connect(dlg.close)
+        layout.addWidget(btn, alignment=Qt.AlignRight)
+
+        dlg.exec()
+
+    def on_measure_similarity_profile(self):
+        """Ask the user how to provide hallmark data, then dispatch.
+
+        The mesh-section option appears only when an STL/VTK mesh has
+        already been measured (allmarks computed) AND the 2D slices have
+        been generated and are currently being browsed via the slider.
+        """
+        mesh_ready = self._mesh_section_workflow_ready()
+
+        mb = QMessageBox(self.mw)
+        mb.setWindowTitle("Similarity Profile")
+        mb.setIcon(QMessageBox.Question)
+        mb.setText("How do you want to provide the brain hallmark data?")
+        info_lines = [
+            "Import Image — load a brain image, run the measurement "
+            "pipeline, then score it.",
+            "Enter Data Manually — type hallmark values (Area, "
+            "Perimeter, LGI, …) into a form.",
+        ]
+        if mesh_ready:
+            info_lines.append(
+                "Use Current Mesh Section — score the slice currently "
+                "shown by the slider."
+            )
+        mb.setInformativeText("\n".join(info_lines))
+        btn_import = mb.addButton("Import Image…", QMessageBox.AcceptRole)
+        btn_manual = mb.addButton("Enter Data Manually…", QMessageBox.ActionRole)
+        btn_mesh = (mb.addButton("Use Current Mesh Section", QMessageBox.ActionRole)
+                    if mesh_ready else None)
+        mb.addButton(QMessageBox.Cancel)
+        mb.exec()
+        clicked = mb.clickedButton()
+        if clicked is btn_import:
+            self._similarity_profile_from_image()
+        elif clicked is btn_manual:
+            self._similarity_profile_manual()
+        elif btn_mesh is not None and clicked is btn_mesh:
+            self._similarity_profile_from_mesh_section()
+
+    def _mesh_section_workflow_ready(self) -> bool:
+        """Return True if the per-slice similarity workflow is available."""
+        mw = self.mw
+        is_mesh = bool(getattr(mw, "is_vtk", False)) or (
+            mw.current_kind == "stl")
+        if not is_mesh:
+            return False
+        out_dir = getattr(mw, "current_output_dir", None)
+        if not out_dir or not os.path.isdir(out_dir):
+            return False
+        view = getattr(mw, "view", None)
+        if (getattr(view, "slice_nav_mode", None) != "png"
+                or not getattr(view, "slice_nav_items", None)):
+            return False
+        store = getattr(mw, "metrics_store", None)
+        rows = store.metrics.get(mw.current_path) if store and mw.current_path else None
+        if not rows:
+            return False
+        return self._mesh_per_slice_xlsx_path() is not None
+
+    def _mesh_per_slice_xlsx_path(self) -> str | None:
+        """Locate the per-slice Excel produced by the mesh allmarks pass."""
+        mw = self.mw
+        out_dir = getattr(mw, "current_output_dir", None)
+        if not out_dir or not os.path.isdir(out_dir):
+            return None
+        candidates = []
+        if mw.current_kind == "stl":
+            candidates.append(os.path.join(out_dir, "Mesh_Allmarks.xlsx"))
+        if getattr(mw, "is_vtk", False):
+            sd = getattr(mw, "slice_direction", None) or "Y"
+            candidates.append(os.path.join(
+                out_dir, f"Mesh_Allmarks_{sd}.xlsx"))
+        for p in candidates:
+            if os.path.isfile(p):
+                return p
+        return None
+
+    def _similarity_profile_from_image(self):
+        """Image-based similarity profile.
+
+        Requires that at least one measurement (allmarks, area, perimeter, etc.)
+        has already been recorded for the current file.  The axis is detected
+        automatically from the slice-kind classifier or the slice direction.
+        """
+        if not self.mw.current_path:
+            QMessageBox.information(self.mw, "Similarity Profile",
+                "No file is loaded. Open a file and run a measurement first.")
+            return
+
+        reply = QMessageBox.information(
+            self.mw, "Similarity Profile",
+            "To obtain an accurate comparison, make sure to adjust the "
+            "image scale properly and set the kernel size to 25.",
+            QMessageBox.Ok | QMessageBox.Cancel, QMessageBox.Ok)
+        if reply != QMessageBox.Ok:
+            return
+
+        rows = self.mw.metrics_store.metrics.get(self.mw.current_path)
+        if not rows:
+            mb = QMessageBox(self.mw)
+            mb.setWindowTitle("Similarity Profile")
+            mb.setIcon(QMessageBox.Information)
+            mb.setText("No morphometric measurements found for the current file.")
+            mb.setInformativeText(
+                "Run 'All hallmarks' first, or adjust the image (scale, kernel "
+                "size, ROI) before measuring.")
+            btn_allmarks = mb.addButton("Compute All Hallmarks", QMessageBox.AcceptRole)
+            btn_adjust = mb.addButton("Adjust Image…", QMessageBox.ActionRole)
+            mb.addButton(QMessageBox.Cancel)
+            mb.exec()
+            clicked = mb.clickedButton()
+            if clicked is btn_allmarks:
+                self.on_measure_allmarks()
+                self._similarity_profile_from_image()
+            elif clicked is btn_adjust:
+                self.mw._enter_adjustment_mode()
+                self.mw.statusBar().showMessage(
+                    "Adjust the image (scale, kernel, ROI), then press "
+                    "Shift+Alt+E to continue.")
+                print("[Similarity Profile] Adjust the image now and press "
+                      "Shift+Alt+E to continue.")
+                self.mw.wait_for_resume()
+                self.mw.statusBar().clearMessage()
+                self.mw._exit_adjustment_mode()
+                self.on_measure_allmarks()
+                self._similarity_profile_from_image()
+            return
+
+        if isinstance(rows, dict):
+            rows = [rows]
+        measured = rows[-1]
+
+        has_data = any(measured.get(k) is not None for k in
+                       ("Area", "Perimeter", "LGI", "Compactness", "PrimarySulciCount","SecondarySulciCount","TertiarySulciCount","UnclassifiedSulciCount", "PrimaryMeanDepth","SecondaryMeanDepth","TertiaryMeanDepth","UnclassifiedMeanDepth"))
+        if not has_data:
+            QMessageBox.information(self.mw, "Similarity Profile",
+                "The latest measurement row has no comparable metrics.\n"
+                "Run 'All hallmarks' first to populate area, perimeter, LGI, etc.")
+            return
+
+        axis = self._detect_axis(measured)
+        if axis is None:
+            QMessageBox.warning(self.mw, "Similarity Profile",
+                "Could not determine the anatomical axis automatically.\n"
+                "Please run 'All hallmarks' first so the slice classifier can identify the axis.")
+            return
+
+        self._run_similarity_profile(measured, axis)
+
+    def _similarity_profile_manual(self):
+        """Open the manual hallmark-entry dialog and score against the registry."""
+        from widgets.manual_gasp_dialog import ManualGASPDialog
+        settings = getattr(self.mw, "settings", None)
+        default_kernel = getattr(settings, "kernel_size", 25)
+        default_unit = getattr(settings, "units_length", None) or "mm"
+        default_pixel = None
+        if settings is not None and self.mw.current_path:
+            default_pixel = settings.image_scales.get(
+                self.mw.current_path, getattr(settings, "pixel_size", None))
+        default_name = getattr(self.mw, "custom_label", None) or ""
+
+        dlg = ManualGASPDialog(
+            self.mw,
+            default_axis="coronal",
+            default_unit=default_unit,
+            default_kernel_size=default_kernel,
+            default_pixel_size=default_pixel,
+            default_project_name=default_name,
+        )
+        if dlg.exec() != QDialog.Accepted:
+            return
+        vals = dlg.values()
+        measured = vals["measured"]
+        if not measured:
+            QMessageBox.information(self.mw, "Similarity Profile",
+                "No hallmark values were entered.")
+            return
+        axis = vals["axis"]
+        overrides = {
+            "project_name": vals["project_name"] or None,
+            "kernel_size": vals["kernel_size"],
+            "pixel_size": vals["pixel_size"],
+            "length_unit": vals["length_unit"],
+            "pixel_size_units": vals["length_unit"],
+            "source_path": None,
+            "source_label": "(manually entered)",
+        }
+        self._run_similarity_profile(measured, axis, manual_overrides=overrides)
+
+    def _similarity_profile_from_mesh_section(self):
+        """Score the slice currently selected on the slider for an STL/VTK mesh.
+
+        Requires that hallmarks have been computed (per-slice metrics Excel
+        present in *current_output_dir*) and the slider is in PNG-browse mode.
+        Disables the slider after a successful run so the selection cannot
+        drift away from the results.
+        """
+        mw = self.mw
+        if not self._mesh_section_workflow_ready():
+            QMessageBox.information(
+                mw, "Similarity Profile",
+                "This option needs a 3D mesh with hallmarks computed and 2D "
+                "slices generated. Run 'All hallmarks' on the mesh first.")
+            return
+
+        slice_idx = int(mw.slice_slider.value())
+        measured = self._load_mesh_per_slice_measured(slice_idx)
+        if not measured:
+            QMessageBox.warning(
+                mw, "Similarity Profile",
+                f"Could not find per-slice metrics for slice {slice_idx}.")
+            return
+
+        axis_map = {"X": "sagittal", "Y": "coronal", "Z": "axial"}
+        direction = (getattr(mw, "slice_direction", None) or "Y").upper()
+        axis = axis_map.get(direction, "coronal")
+
+        png_path = None
+        view = getattr(mw, "view", None)
+        items = list(getattr(view, "slice_nav_items", []) or [])
+        idx_map = list(getattr(view, "slice_nav_index_map", []) or [])
+        if idx_map:
+            for i, si in enumerate(idx_map):
+                if si == slice_idx and i < len(items):
+                    png_path = items[i]
+                    break
+        if png_path is None and items:
+            ix = slice_idx - int(mw.slice_slider.minimum())
+            if 0 <= ix < len(items):
+                png_path = items[ix]
+
+        base_name = (
+            os.path.splitext(os.path.basename(mw.current_path))[0]
+            if mw.current_path else "Mesh"
+        )
+        project_name = (
+            getattr(mw, "custom_label", None) or base_name
+        ) + f"_slice_{slice_idx}"
+
+        overrides = {
+            "project_name": project_name,
+            "source_path": png_path,
+            "source_label": (png_path or f"{base_name} — slice {slice_idx}"),
+        }
+        self._run_similarity_profile(measured, axis, manual_overrides=overrides)
+
+        try:
+            mw.nav_tb.hide()
+            mw.slice_slider.setEnabled(False)
+            print(f"[GASP] Slider locked to slice {slice_idx} "
+                  "(results match the selected section).")
+        except Exception as ex:
+            logger.debug("Could not disable slice slider: %s", ex)
+
+    def _load_mesh_per_slice_measured(self, slice_idx: int) -> dict | None:
+        """Read the per-slice hallmark values for *slice_idx* from the
+        mesh-allmarks Excel sitting in *current_output_dir*.
+
+        Returns a measured dict keyed by ``Area``/``Perimeter``/``LGI``/…
+        ready to be fed into ``_run_similarity_profile``.
+        """
+        xlsx_path = self._mesh_per_slice_xlsx_path()
+        if xlsx_path is None:
+            return None
+        mw = self.mw
+        if mw.current_kind == "stl":
+            unit = "mm"
+        else:
+            unit = (getattr(mw, "units_length", None)
+                    or getattr(getattr(mw, "settings", None),
+                               "units_length", None)
+                    or "mm")
+        try:
+            import pandas as pd
+            df = pd.read_excel(xlsx_path)
+        except Exception as ex:
+            logger.error("Could not read %s: %s", xlsx_path, ex)
+            return None
+        if "Slice" not in df.columns:
+            return None
+
+        row = df[df["Slice"] == slice_idx]
+        if row.empty:
+            row = df[df["Slice"].astype(str) == str(slice_idx)]
+        if row.empty:
+            return None
+        r = row.iloc[0]
+
+        def _f(col: str):
+            if col not in df.columns:
+                return None
+            v = r.get(col)
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                return None
+            if math.isnan(fv):
+                return None
+            return fv
+
+        def _i(col: str):
+            v = _f(col)
+            return int(v) if v is not None else None
+
+        from helpers.helpers import compactness_2D
+        area = _f(f"Inner_area_{unit}^2")
+        perim = _f(f"Inner_Perimeter_{unit}")
+        outer = _f(f"Outer_Perimeter_{unit}")
+        lgi = (perim / outer) if (perim and outer) else None
+        compact = (compactness_2D(area, perim)
+                   if (area is not None and perim) else None)
+
+        measured: dict = {}
+        if area is not None:
+            measured["Area"] = area
+        if perim is not None:
+            measured["Perimeter"] = perim
+        if lgi is not None:
+            measured["LGI"] = lgi
+        if compact is not None:
+            measured["Compactness"] = compact
+
+        for excel_col, meas_key in (
+            ("Primary_count", "PrimarySulciCount"),
+            ("Secondary_count", "SecondarySulciCount"),
+            ("Tertiary_count", "TertiarySulciCount"),
+            ("Unclassified_count", "UnclassifiedSulciCount"),
+        ):
+            v = _i(excel_col)
+            if v is not None:
+                measured[meas_key] = v
+
+        for prefix, meas_key in (
+            ("Primary", "PrimaryMeanDepth"),
+            ("Secondary", "SecondaryMeanDepth"),
+            ("Tertiary", "TertiaryMeanDepth"),
+            ("Unclassified", "UnclassifiedMeanDepth"),
+        ):
+            v = _f(f"{prefix}_mean_{unit}")
+            if v is None:
+                # Fall back to averaging v1/v2/v3 — the exporter writes
+                # individual values there (mean cell stays empty) when the
+                # subtype has 3 or fewer sulci on this slice.
+                vals = [_f(f"{prefix}_v{i}_{unit}") for i in (1, 2, 3)]
+                vals = [x for x in vals if x is not None]
+                if vals:
+                    v = sum(vals) / len(vals)
+            if v is not None:
+                measured[meas_key] = v
+
+        return measured
+
+    def _run_similarity_profile(self, measured, axis, *, manual_overrides=None):
+        """Compute the GASP summary for *measured* on *axis*, render the chart,
+        and write the per-run results folder.
+
+        *manual_overrides* supplies project name and analysis-parameter values
+        when there is no loaded image to read them from.
+        """
+        csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                "Examples", "gestational_week_reference.csv")
+        if not os.path.isfile(csv_path):
+            QMessageBox.critical(self.mw, "Similarity Profile",
+                f"Reference CSV not found:\n{csv_path}")
+            return
+
+        from managers.visualization_settings import get_active as _get_viz
+        viz = _get_viz()
+        gasp_method = getattr(viz, "gasp_method", "gaussian")
+        range_penalty = float(getattr(viz, "gasp_range_penalty", 0.0))
+        oor_beta = float(getattr(viz, "gasp_oor_beta", 1.0))
+        apply_penalty = bool(getattr(viz, "gasp_apply_penalty", True))
+        weighted_global = bool(getattr(viz, "gasp_weighted_global", True))
+
+        ref_to_attr = {
+            "area": "gasp_w_area",
+            "perimeter": "gasp_w_perimeter",
+            "lgi": "gasp_w_lgi",
+            "compactness": "gasp_w_compactness",
+            "primary_count": "gasp_w_primary_count",
+            "secondary_count": "gasp_w_secondary_count",
+            "tertiary_count": "gasp_w_tertiary_count",
+            "primary_sulcus_values": "gasp_w_primary_sulcus_values",
+            "secondary_sulcus_values": "gasp_w_secondary_sulcus_values",
+            "tertiary_sulcus_values": "gasp_w_tertiary_sulcus_values",
+        }
+        weights_user = {k: float(getattr(viz, a, 1.0)) for k, a in ref_to_attr.items()}
+
+        def _run(method: str) -> GASPSummary:
+            if method.startswith("mahal") and not weighted_global:
+                w = {k: 1.0 for k in weights_user}
+            else:
+                w = weights_user
+            return compute_similarity_scores(
+                measured, registry, axis,
+                method=method, weights=w,
+                apply_range_penalty=apply_penalty,
+                beta=oor_beta,
+            )
+
+        try:
+            registry = GestationalWeekProfile(csv_path)
+            # Set the module-level Gaussian λ at call time so it reflects the
+            # user's choice (RANGE_PENALTY is read inside compute_similarity_scores).
+            import helpers.gestational_week_profile as _gwp
+            _gwp.RANGE_PENALTY = range_penalty
+
+            if gasp_method == "both":
+                summary = _run("gaussian")
+                summary_alt = _run("mahalanobis")
+            else:
+                summary = _run(gasp_method)
+                summary_alt = None
+        except Exception as ex:
+            logger.error("Similarity profile failed: %s", ex)
+            QMessageBox.critical(self.mw, "Similarity Profile",
+                f"{type(ex).__name__}: {ex}")
+            return
+
+        if not summary.results:
+            QMessageBox.information(self.mw, "Similarity Profile",
+                "No reference weeks have data for the detected axis.")
+            return
+
+        sorted_by_week = sorted(summary.results, key=lambda r: r.week)
+        sorted_alt_by_week = (
+            sorted(summary_alt.results, key=lambda r: r.week)
+            if summary_alt is not None else None
+        )
+
+        metric_labels = {
+            "area": "Area", "perimeter": "Perimeter", "lgi": "LGI",
+            "compactness": "Compactness",
+            "primary_count": "Primary Count", "secondary_count": "Secondary Count",
+            "tertiary_count": "Tertiary Count",
+            "primary_sulcus_values": "Primary Depth",
+            "secondary_sulcus_values": "Secondary Depth",
+            "tertiary_sulcus_values": "Tertiary Depth",
+        }
+
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        from matplotlib.figure import Figure
+
+        n_weeks = len(sorted_by_week)
+        fig_h = max(4, n_weeks * 0.45)
+        fig = Figure(figsize=(7, fig_h))
+        ax = fig.add_subplot(111)
+
+        week_labels = [str(r.week) for r in sorted_by_week]
+
+        if sorted_alt_by_week is not None:
+            # Grouped bars: Gaussian (top) + Mahalanobis (bottom) per week
+            import numpy as _np
+            y_idx = _np.arange(n_weeks)
+            bar_h = 0.38
+            scores_g = [r.gasp for r in sorted_by_week]
+            scores_m = [r.gasp for r in sorted_alt_by_week]
+            bars = ax.barh(y_idx - bar_h / 2, scores_g, height=bar_h,
+                           color="#3498db", edgecolor="white",
+                           linewidth=0.5, label="Gaussian")
+            bars_alt = ax.barh(y_idx + bar_h / 2, scores_m, height=bar_h,
+                               color="#9b59b6", edgecolor="white",
+                               linewidth=0.5, label="Global Distance")
+            ax.set_yticks(y_idx)
+            ax.set_yticklabels(week_labels)
+            ax.legend(loc="lower right", fontsize=8)
+            method_label = "Both"
+        else:
+            scores = [r.gasp for r in sorted_by_week]
+            colors = ["#2ecc71" if r.week == summary.best_week else "#3498db"
+                      for r in sorted_by_week]
+            bars = ax.barh(week_labels, scores, color=colors,
+                           edgecolor="white", linewidth=0.5)
+            bars_alt = None
+            method_label = ("Global Distance" if gasp_method.startswith("mahal")
+                            else "Gaussian Similarity")
+
+        ax.set_ylabel("Gestational Week", fontsize=11)
+        ax.set_xlabel("GASP Score", fontsize=11)
+
+        gauss_color = "#1f6fa5"
+        mahal_color = "#7d3c98"
+
+        def _line(label: str, s: GASPSummary) -> str:
+            return (f"  ■  {label}    │  "
+                    f"best week {s.best_week}    GASP {s.max_gasp:.1%}    "
+                    f"est. GA {s.estimated_ga:.1f} w    "
+                    f"confidence: {s.confidence}")
+
+        if summary_alt is not None:
+            # Both methods: summary is Gaussian, summary_alt is Global Distance
+            primary_line = _line("GAUSSIAN SIMILARITY", summary)
+            primary_color = gauss_color
+            secondary_line = _line("GLOBAL DISTANCE   ", summary_alt)
+            secondary_color = mahal_color
+        elif gasp_method.startswith("mahal"):
+            primary_line = _line("GLOBAL DISTANCE", summary)
+            primary_color = mahal_color
+            secondary_line = None
+        else:
+            primary_line = _line("GAUSSIAN SIMILARITY", summary)
+            primary_color = gauss_color
+            secondary_line = None
+
+        # Clear ax title — using fig.suptitle + colored fig.text instead so each
+        # method's results are visually distinguishable.
+        ax.set_title("")
+        fig.suptitle(f"Gestational Age Similarity Profile  —  axis: {axis}",
+                     fontsize=12, fontweight="bold", y=0.995)
+        fig.text(0.5, 0.955, primary_line, ha="center", va="top", fontsize=9,
+                 color=primary_color, fontweight="bold", family="monospace")
+        if secondary_line is not None:
+            fig.text(0.5, 0.920, secondary_line, ha="center", va="top", fontsize=9,
+                     color=secondary_color, fontweight="bold", family="monospace")
+
+        ax.set_xlim(0, 1.12)
+        ax.axvline(x=summary.max_gasp, color="#e74c3c",
+                    linestyle="--", linewidth=0.8, alpha=0.6)
+        ax.invert_yaxis()
+
+        all_bars = list(bars) + (list(bars_alt) if bars_alt is not None else [])
+        for bar in all_bars:
+            ax.text(bar.get_width() + 0.015,
+                    bar.get_y() + bar.get_height() / 2,
+                    f"{bar.get_width():.0%}", ha="left", va="center", fontsize=7)
+
+        top_rect = 0.88 if summary_alt is not None else 0.92
+        fig.tight_layout(rect=[0, 0, 1, top_rect])
+
+        tooltip = ax.annotate(
+            "", xy=(0, 0), xytext=(15, 15),
+            textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.5", fc="#ffffcc",
+                      ec="#999999", alpha=0.95),
+            fontsize=9, visible=False)
+
+        def _hit_bar(event):
+            """Return (week_index, which_method) if the event falls on a bar."""
+            for i, bar in enumerate(bars):
+                if bar.contains(event)[0]:
+                    return i, "primary"
+            if bars_alt is not None:
+                for i, bar in enumerate(bars_alt):
+                    if bar.contains(event)[0]:
+                        return i, "alt"
+            return None, None
+
+        def on_hover(event):
+            if event.inaxes != ax:
+                if tooltip.get_visible():
+                    tooltip.set_visible(False)
+                    canvas_qt.draw_idle()
+                return
+            i, which = _hit_bar(event)
+            if i is None:
+                if tooltip.get_visible():
+                    tooltip.set_visible(False)
+                    canvas_qt.draw_idle()
+                return
+            r = (sorted_alt_by_week[i] if which == "alt"
+                 else sorted_by_week[i])
+            method_tag = ("Global Distance" if which == "alt"
+                          or (sorted_alt_by_week is None and gasp_method.startswith("mahal"))
+                          else "Gaussian")
+            lines = [f"Week {r.week}  ({method_tag})",
+                     f"GASP: {r.gasp:.2%}", ""]
+            for k, v in r.per_metric.items():
+                z = r.z_scores.get(k, 0.0)
+                oor = r.out_of_range.get(k, False)
+                label = metric_labels.get(k, k)
+                flag = " ⚠ OOR" if oor else ""
+                lines.append(f"  {label}: {v:.2%} (z={z:.2f}){flag}")
+            tooltip.set_text("\n".join(lines))
+            tooltip.xy = (event.xdata, event.ydata)
+            tooltip.set_visible(True)
+            canvas_qt.draw_idle()
+
+        def on_right_click(event):
+            if event.inaxes != ax or event.button != 3:
+                return
+            i, _which = _hit_bar(event)
+            if i is None:
+                return
+            r = sorted_by_week[i]
+            r_alt = sorted_alt_by_week[i] if sorted_alt_by_week is not None else None
+            ref = registry.get(r.week, axis)
+            self._show_gasp_week_detail(
+                r, ref, measured, metric_labels, r_alt)
+
+        canvas_qt = FigureCanvasQTAgg(fig)
+        canvas_qt.mpl_connect("motion_notify_event", on_hover)
+        canvas_qt.mpl_connect("button_press_event", on_right_click)
+
+        old = getattr(self.mw, "_similarity_canvas", None)
+        if old is not None:
+            old.setVisible(False)
+            self.mw.display_box.removeWidget(old)
+            old.deleteLater()
+
+        self.mw._similarity_canvas = canvas_qt
+        self.mw.display_box.addWidget(canvas_qt)
+        self.mw.image_label.setVisible(False)
+        self.mw.vtk_view.setVisible(False)
+        canvas_qt.setVisible(True)
+        self.mw._active_view = "chart"
+
+        uid = uuid.uuid4().hex[:8]
+        out_dir = os.path.join(self.mw.temp_dir, f"similarity_{uid}")
+        os.makedirs(out_dir, exist_ok=True)
+        self.mw.current_output_dir = out_dir
+        fig.savefig(os.path.join(out_dir, "similarity_profile.png"),
+                    dpi=150, bbox_inches="tight")
+
+        if summary_alt is not None:
+            method_banner = "Both methods (Gaussian Similarity + Global Distance)"
+            primary_banner = "Gaussian Similarity"
+        elif gasp_method.startswith("mahal"):
+            method_banner = "Global Distance (Diagonal Mahalanobis)"
+            primary_banner = "Global Distance"
+        else:
+            method_banner = "Metric-level Gaussian Similarity"
+            primary_banner = "Gaussian Similarity"
+
+        def _print_section(label: str, s: GASPSummary, sorted_results) -> None:
+            print(f"[GASP] ── {label} ──")
+            print(f"[GASP]   Best-matching week: {s.best_week}  "
+                  f"(GASP = {s.max_gasp:.2%})")
+            print(f"[GASP]   Estimated GA: {s.estimated_ga:.1f} weeks  "
+                  f"|  confidence: {s.confidence}")
+            print(f"[GASP]   Per-week scores:")
+            for r in sorted_results:
+                print(f"           Week {r.week}: {r.gasp:.2%}")
+
+        print(f"[GASP] Method: {method_banner}")
+        print(f"[GASP] Axis: {axis}")
+        _print_section(primary_banner, summary, sorted_by_week)
+
+        record_vals = dict(
+            GASPAxis=axis,
+            GASPMethod=method_banner,
+            GASPBestWeek=summary.best_week,
+            GASPScore=summary.max_gasp,
+            EstimatedGA=summary.estimated_ga,
+            GASPConfidence=summary.confidence,
+        )
+        if summary_alt is not None:
+            _print_section("Global Distance", summary_alt, sorted_alt_by_week)
+            record_vals.update(
+                GASPBestWeek_GlobalDistance=summary_alt.best_week,
+                GASPScore_GlobalDistance=summary_alt.max_gasp,
+                EstimatedGA_GlobalDistance=summary_alt.estimated_ga,
+            )
+
+        # Final one-line summary reflecting the chosen method(s).
+        if summary_alt is not None:
+            print(f"[GASP] FINAL SUMMARY  —  Gaussian: week {summary.best_week} "
+                  f"({summary.max_gasp:.1%}, GA {summary.estimated_ga:.1f}w)  "
+                  f"|  Global Distance: week {summary_alt.best_week} "
+                  f"({summary_alt.max_gasp:.1%}, GA {summary_alt.estimated_ga:.1f}w)")
+        else:
+            print(f"[GASP] FINAL SUMMARY ({primary_banner})  —  "
+                  f"best week {summary.best_week}, GASP {summary.max_gasp:.1%}, "
+                  f"estimated GA {summary.estimated_ga:.1f}w, "
+                  f"confidence: {summary.confidence}")
+
+        self.mw.metrics_store.record_metric_for(
+            self.mw.current_path, **record_vals)
+
+        try:
+            from helpers.gasp_export import export_gasp_results
+            settings = getattr(self.mw, "settings", None)
+            overrides = manual_overrides or {}
+
+            pixel_size = overrides.get("pixel_size")
+            if pixel_size is None and settings is not None:
+                pixel_size = settings.image_scales.get(
+                    self.mw.current_path,
+                    getattr(settings, "pixel_size", None),
+                )
+            pixel_size_units = overrides.get(
+                "pixel_size_units",
+                getattr(settings, "units_length", None))
+            length_unit = overrides.get(
+                "length_unit",
+                getattr(settings, "units_length", None))
+            kernel_size = overrides.get(
+                "kernel_size",
+                getattr(settings, "kernel_size", None))
+
+            override_name = overrides.get("project_name")
+            if override_name:
+                project_name = f"{override_name}_similarity_{uid}"
+            else:
+                base_name = (
+                    os.path.splitext(os.path.basename(self.mw.current_path))[0]
+                    if self.mw.current_path else "GASP"
+                )
+                project_name = (
+                    getattr(self.mw, "custom_label", None) or base_name
+                ) + f"_similarity_{uid}"
+
+            source_path = overrides.get("source_path", self.mw.current_path)
+            export_source = (
+                overrides.get("source_label")
+                if overrides.get("source_label") and not source_path
+                else source_path
+            )
+
+            params = dict(
+                method_banner=method_banner,
+                range_penalty=range_penalty,
+                oor_beta=oor_beta,
+                apply_penalty=apply_penalty,
+                weighted_global=weighted_global,
+                kernel_size=kernel_size,
+                pixel_size=pixel_size,
+                pixel_size_units=pixel_size_units,
+                length_unit=length_unit,
+                filtered_threshold=getattr(settings, "cnt_threshold", None),
+                contour_mode=getattr(settings, "contour_mode", None),
+            )
+            artifacts = export_gasp_results(
+                out_dir,
+                project_name=project_name,
+                source_path=export_source,
+                measured=measured,
+                summary=summary,
+                summary_alt=summary_alt,
+                registry=registry,
+                axis=axis,
+                params=params,
+                weights=weights_user,
+            )
+            print(f"[GASP] Wrote results folder: {out_dir}")
+            for k, v in artifacts.items():
+                print(f"[GASP]   {k}: {v}")
+        except Exception as ex:
+            logger.error("Failed to export GASP results: %s", ex, exc_info=True)

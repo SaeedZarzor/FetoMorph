@@ -36,7 +36,7 @@ from managers.file_manager import FileManager
 from managers.view_manager import ViewManager
 from managers.measurement_dispatcher import MeasurementDispatcher
 from managers.visualization_settings import VisualizationSettings, set_active as set_active_viz
-from widgets.preferences_dialog import PreferencesDialog
+from widgets.preferences_dialog import GASPOptionsDialog, PreferencesDialog
 
 import logging
 
@@ -360,13 +360,13 @@ class MainWindow(QMainWindow):
         self.act_meas_curve = QAction("Curve Length", self); self.act_meas_curve.triggered.connect(self.dispatcher.on_measure_curve_length); measures_menu.addAction(self.act_meas_curve)
         self.act_meas_stright = QAction("Straight", self); self.act_meas_stright.triggered.connect(self.dispatcher.on_measure_straight); measures_menu.addAction(self.act_meas_stright)
         self.act_meas_sulci = QAction("Sulci Depth", self); self.act_meas_sulci.triggered.connect(self.dispatcher.on_measure_sulci_depth); measures_menu.addAction(self.act_meas_sulci)
-        process_menu.addSeparator()
         
         analysis_menu = process_menu.addMenu("Analysis")
         self.act_meas_lgi = QAction("LGI", self); self.act_meas_lgi.triggered.connect(self.dispatcher.on_measure_lgi); analysis_menu.addAction(self.act_meas_lgi); self.act_meas_lgi.setToolTip("Compute Local Gyrification Index")
         self.act_meas_curvature = QAction("Curvature", self); self.act_meas_curvature.triggered.connect(self.dispatcher.on_measure_curvature); analysis_menu.addAction(self.act_meas_curvature)
         self.act_meas_compactness = QAction("Compactness", self); self.act_meas_compactness.triggered.connect(self.dispatcher.on_measure_compactness); analysis_menu.addAction(self.act_meas_compactness); self.act_meas_compactness.setToolTip("Measure of how closely a shape approaches the most space-efficient form")
         self.act_hausdorf = QAction("Hausdorff distance", self); self.act_hausdorf.triggered.connect(self.dispatcher.on_measure_hausdorff); analysis_menu.addAction(self.act_hausdorf)
+        self.act_similarity_profile = QAction("Similarity Profile", self); self.act_similarity_profile.triggered.connect(self.dispatcher.on_measure_similarity_profile); analysis_menu.addAction(self.act_similarity_profile); self.act_similarity_profile.setToolTip("Gestational Age Similarity Profile (GASP) compares the current brain's morphometrics to reference profiles for each gestational week, returning a similarity score that may help estimate the brain's developmental age.")
         process_menu.addSeparator()
         
         self.act_img_batch = QAction("Process images batch", self); self.act_img_batch.triggered.connect(self.dispatcher.on_process_batch); process_menu.addAction(self.act_img_batch)
@@ -384,9 +384,10 @@ class MainWindow(QMainWindow):
         self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.settings.set_kernel_dialog); Adjustments_menu.addAction(self.act_kernel_size)
         self.act_slice_thickness = QAction("Set Slice Thickness…", self); self.act_slice_thickness.triggered.connect(self.settings.set_slice_thickness_dialog); Adjustments_menu.addAction(self.act_slice_thickness); self.act_slice_thickness.setToolTip("Set the distance between slices")
         self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.settings.set_cnt_threshold_dialog); Adjustments_menu.addAction(self.act_cnt_threshold)
+        self.act_gasp_options = QAction("GASP Options", self); self.act_gasp_options.triggered.connect(self._open_gasp_options); Adjustments_menu.addAction(self.act_gasp_options)
         # Contour-accounting mode: 3-way exclusive submenu under Adjustments.
         from PySide6.QtGui import QActionGroup
-        contour_mode_menu = Adjustments_menu.addMenu("Contour accounting")
+        contour_mode_menu = Adjustments_menu.addMenu("Contour Accounting")
         self.contour_mode_group = QActionGroup(self)
         self.contour_mode_group.setExclusive(True)
 
@@ -544,6 +545,7 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Analysis", self.act_meas_curvature)
         self.ribbon.add_action("Analysis", self.act_meas_compactness)
         self.ribbon.add_action("Analysis", self.act_hausdorf)
+        self.ribbon.add_action("Analysis", self.act_similarity_profile)
         
         self.ribbon.add_action("Process", self.act_img_batch)
         self.ribbon.add_action("Process", self.act_optimization)
@@ -621,6 +623,11 @@ class MainWindow(QMainWindow):
     def _open_preferences(self):
         """Show the visualization preferences dialog."""
         dlg = PreferencesDialog(self.viz, self)
+        dlg.exec()
+
+    def _open_gasp_options(self):
+        """Show Gestational Age Similarity Profile options."""
+        dlg = GASPOptionsDialog(self.viz, self)
         dlg.exec()
 
     def _on_viz_settings_changed(self):

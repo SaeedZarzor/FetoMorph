@@ -76,6 +76,9 @@ class ViewManager:
         mw = self.mw
         mw.image_label.setVisible(False)
         mw.vtk_view.setVisible(False)
+        chart = getattr(mw, "_similarity_canvas", None)
+        if chart is not None:
+            chart.setVisible(False)
         w.setVisible(True)
         mw._active_view = "image" if w is mw.image_label else "vtk"
 
