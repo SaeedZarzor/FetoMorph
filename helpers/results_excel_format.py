@@ -6,9 +6,6 @@ Lays out one or more sheets in the same visual structure as the
     Results
         File name / Folder / User / Date
 
-    Parameters
-        Kernel size / Pixel spacing / Slice thickness / Filtered threshold / ...
-
     Mean results
         Section | Area | Perimeter | LGI | Compactness |
         Primary/Secondary/Tertiary/UnclassifiedSulciCount |
@@ -16,6 +13,10 @@ Lays out one or more sheets in the same visual structure as the
 
     Totals (optional)
         Volume / Surface Area / GI / Compactness / Total sulci / Mean depth
+
+    Parameters
+        Kernel size (mm) / Kernel size (px) / Pixel spacing / Slice thickness /
+        Filtered threshold / ...
 
     Footer: "The results were produced by FetoMorph."
 
@@ -61,7 +62,8 @@ TOTALS_HEADER = "Totals"
 FOOTER = "The results were produced by FetoMorph."
 
 PARAMETER_KEYS = (
-    "Kernel size",
+    "Kernel size (mm)",
+    "Kernel size (px)",
     "Pixel spacing",
     "Slice thickness",
     "Filtered threshold",
@@ -276,21 +278,9 @@ def _render_sheet(wb, ws, sheet: ResultsSheet, used_names: set[str],
         ws.cell(row=3, column=col + 1, value=value)
         col += 2
 
-    # Row 5 — Parameters block
+    # Results table comes first, then the Parameters block beneath it
+    # (per layout preference) — see the Parameters section below the Totals.
     row = 5
-    params = _sorted_parameters(sheet.parameters)
-    if sheet.drop_empty_columns:
-        params = [(k, v) for (k, v) in params if _is_populated(v)]
-    elif not params:
-        params = [(k, None) for k in PARAMETER_KEYS]
-    if params:
-        _write_section(ws, row, last_col, PARAMETERS_HEADER)
-        row += 1
-        for key, value in params:
-            ws.cell(row=row, column=2, value=key).font = _LABEL_FONT
-            ws.cell(row=row, column=3, value=_to_cell(value))
-            row += 1
-        row += 1  # blank line
 
     # Mean results header
     _write_section(ws, row, last_col, RESULTS_HEADER)
@@ -345,6 +335,22 @@ def _render_sheet(wb, ws, sheet: ResultsSheet, used_names: set[str],
             ws.cell(row=row, column=3, value=_to_cell(value))
             row += 1
         row += 1
+
+    # Parameters block — placed after the results so the metric columns
+    # read first, with the run parameters listed beneath them.
+    params = _sorted_parameters(sheet.parameters)
+    if sheet.drop_empty_columns:
+        params = [(k, v) for (k, v) in params if _is_populated(v)]
+    elif not params:
+        params = [(k, None) for k in PARAMETER_KEYS]
+    if params:
+        _write_section(ws, row, last_col, PARAMETERS_HEADER)
+        row += 1
+        for key, value in params:
+            ws.cell(row=row, column=2, value=key).font = _LABEL_FONT
+            ws.cell(row=row, column=3, value=_to_cell(value))
+            row += 1
+        row += 1  # blank line
 
     # Footer
     cell = ws.cell(row=row, column=2, value=FOOTER)
