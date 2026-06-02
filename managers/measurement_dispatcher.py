@@ -5,6 +5,8 @@ Extracted from MainWindow to consolidate measurement logic.
 
 from __future__ import annotations
 
+import math
+
 from deps import *
 from typing import TYPE_CHECKING
 from functions.nifti_to_image import draw_new_scale_bar
@@ -31,6 +33,17 @@ if TYPE_CHECKING:
     from FetoMorph import MainWindow
 
 logger = logging.getLogger("fetomorph")
+
+
+def _fmt_optional(value, precision: int = 2) -> str:
+    if value is None:
+        return "None"
+    try:
+        if math.isnan(float(value)):
+            return "NaN"
+        return f"{float(value):.{precision}f}"
+    except (TypeError, ValueError):
+        return str(value)
 
 
 class MeasurementDispatcher:
@@ -108,7 +121,7 @@ class MeasurementDispatcher:
             depth_sets = None
             if mode == "allmarks":
                 area, perimeter, perimeter_convex, lGI, compactness, depth, depth_sets, annotated_bgr, slice_kind = compute_image_allmarks(
-                    img_path, pixel_size=pixel_size, kernel_size=self.mw.kernel_size,
+                    img_path, pixel_size=pixel_size, kernel_size_mm=self.mw.settings.kernel_size_mm,
                     cnt_threshold=self.mw.cnt_threshold, unit=u, add_scalebar=False,
                     draw_hallmarks=self.mw.draw_hallmarks_on_image)
             elif mode == "perimeter":
@@ -121,7 +134,7 @@ class MeasurementDispatcher:
                     draw_hallmarks=self.mw.draw_hallmarks_on_image)
             elif mode == "lGI":
                 lGI, perimeter, perimeter_convex, annotated_bgr, slice_kind = compute_image_lGI(
-                    img_path, pixel_size=pixel_size, kernel_size=self.mw.kernel_size,
+                    img_path, pixel_size=pixel_size, kernel_size_mm=self.mw.settings.kernel_size_mm,
                     cnt_threshold=self.mw.cnt_threshold, unit=u, add_scalebar=False,
                     draw_hallmarks=self.mw.draw_hallmarks_on_image)
             elif mode == "sulci_depth":
@@ -158,10 +171,10 @@ class MeasurementDispatcher:
             # Record metrics and print
             if mode == "allmarks":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
-                    kernel_size=self.mw.kernel_size, area=area, perimeter=perimeter,
+                    kernel_size_mm=self.mw.settings.kernel_size_mm, kernel_size_px=self.mw.settings.kernel_size_px(pixel_size), area=area, perimeter=perimeter,
                     perimeter_convex=perimeter_convex, lgi=lGI, compactness=compactness,
                     sulci_depth=depth, sulci_depth_sets=depth_sets, slice_kind=slice_kind)
-                print(f"[Planar VTK allmarks] area={area:.2f} {u}^2, perimeter={perimeter:.2f} {u}, GI={lGI:.2f}")
+                print(f"[Planar VTK allmarks] area={area:.2f} {u}^2, perimeter={perimeter:.2f} {u}, GI={_fmt_optional(lGI)}")
                 print(f"[Planar VTK allmarks] Maximum Sulci Depth = {MetricsStore.depth_summary(depth, u)}")
 
             elif mode == "perimeter":
@@ -174,12 +187,12 @@ class MeasurementDispatcher:
                 print(f"[Planar VTK area] area={area:.2f} {u}^2")
             elif mode == "lGI":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
-                    kernel_size=self.mw.kernel_size, lgi=lGI, slice_kind=slice_kind)
-                print(f"[Planar VTK lGI] GI={lGI:.2f}")
+                    kernel_size_mm=self.mw.settings.kernel_size_mm, kernel_size_px=self.mw.settings.kernel_size_px(pixel_size), lgi=lGI, slice_kind=slice_kind)
+                print(f"[Planar VTK lGI] GI={_fmt_optional(lGI)}")
             elif mode == "compactness":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
-                    kernel_size=self.mw.kernel_size, compactness=compactness, slice_kind=slice_kind)
-                print(f"[Planar VTK compactness] Compactness={compactness:.2f}")
+                    kernel_size_mm=self.mw.settings.kernel_size_mm, kernel_size_px=self.mw.settings.kernel_size_px(pixel_size), compactness=compactness, slice_kind=slice_kind)
+                print(f"[Planar VTK compactness] Compactness={_fmt_optional(compactness)}")
             elif mode == "sulci_depth":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
                     sulci_depth=depth, sulci_depth_sets=depth_sets, slice_kind=slice_kind)
@@ -216,7 +229,7 @@ class MeasurementDispatcher:
                 area, perimeter, perimeter_convex, lGI, compactness, depth, depth_sets, annotated_bgr, slice_kind = compute_image_allmarks(
                     image_path,
                     pixel_size=px_size,
-                    kernel_size= self.mw.kernel_size,
+                    kernel_size_mm=self.mw.settings.kernel_size_mm,
                     cnt_threshold=self.mw.cnt_threshold,
                     unit = u,
                     add_scalebar=not bool(self.mw.image_scale_from_scalebar.get(self.mw.current_path, False)),
@@ -227,8 +240,8 @@ class MeasurementDispatcher:
                 print(f"Annotated area = {area:.2f} {u}^2.")
                 print(f"Annotated Perimeter = {perimeter:.2f} {u}.")
                 print(f"Convex Perimeter = {perimeter_convex:.2f} {u}.")
-                print(f"LGI (Convex Perimeter/ Perimeter) = {lGI:.2f} .")
-                print(f"Compactness = {compactness:.2f} .")
+                print(f"LGI (Convex Perimeter/ Perimeter) = {_fmt_optional(lGI)} .")
+                print(f"Compactness = {_fmt_optional(compactness)} .")
                 print(f"Maximum Sulci Depth = {MetricsStore.depth_summary(depth, u)}")
                 
                 # Convert BGR ndarray → QPixmap and show (no disk write)
@@ -252,7 +265,8 @@ class MeasurementDispatcher:
                     pixel_size_units = f"{self.mw.units_length}/pixel",
                     unit = self.mw.units_length,
                     pixel_size = self.mw.pixel_size,
-                    kernel_size = self.mw.kernel_size,
+                    kernel_size_mm=self.mw.settings.kernel_size_mm,
+                    kernel_size_px=self.mw.settings.kernel_size_px(px_size),
                     area=area,
                     perimeter=perimeter,
                     perimeter_convex = perimeter_convex,
@@ -279,7 +293,7 @@ class MeasurementDispatcher:
                 
                 labels = self.mw.nifti_selected_regions if self.mw.nifti_selected_regions else self.mw.labels_available
                 dims, area, volume, gi, depth, saved_pngs, valid_slices = compute_nifti_allmarks(self, file_path=nif_path,
-                out_dir=out_dir,valid_labels = labels, min_contour_area=self.mw.cnt_threshold, kernel_size = self.mw.kernel_size)
+                out_dir=out_dir, valid_labels=labels, min_contour_area=self.mw.cnt_threshold, kernel_size_mm=self.mw.settings.kernel_size_mm)
             
                 if area is None:
                     return
@@ -287,7 +301,7 @@ class MeasurementDispatcher:
                 # record metrics (consistent with your global export; units in mm unless noted)
                 self.mw.metrics_store.record_metric_for(
                     self.mw.current_path,
-                    kernel_size = self.mw.kernel_size,
+                    kernel_size_mm=self.mw.settings.kernel_size_mm,
                     dimensions = dims,
                     unit = "cm",
                     volume=volume,
@@ -326,7 +340,7 @@ class MeasurementDispatcher:
 
                 self.mw.current_output_dir = out_dir
                 source_label, dims, area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_stl_allmarks(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
-                kernel_size = self.mw.kernel_size, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
+                kernel_size_mm=self.mw.settings.kernel_size_mm, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
             
                 if source_label == "not_brain":
                     QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
@@ -338,7 +352,7 @@ class MeasurementDispatcher:
                 self.mw.metrics_store.record_metric_for(
                     self.mw.current_path,
                     source = source_label,
-                    kernel_size = self.mw.kernel_size,
+                    kernel_size_mm=self.mw.settings.kernel_size_mm,
                     dimensions = dims,
                     unit = "cm",
                     slice_thickness= self.mw.slice_thickness,
@@ -390,7 +404,7 @@ class MeasurementDispatcher:
 
                 u = self.mw.units_length
                 area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_vtk_allmarks(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
-                    kernel_size = self.mw.kernel_size, Slice_direction = self.mw.slice_direction, Physical_dim= self.mw.physical_dim, unit = u, slice_thickness=self.mw.slice_thickness,
+                    kernel_size_mm=self.mw.settings.kernel_size_mm, Slice_direction=self.mw.slice_direction, Physical_dim=self.mw.physical_dim, unit=u, slice_thickness=self.mw.slice_thickness,
                     contour_mode=self.mw.contour_mode)
 
                 if area is None:
@@ -400,7 +414,7 @@ class MeasurementDispatcher:
                 self.mw.metrics_store.record_metric_for(
                     self.mw.current_path,
                     direction = self.mw.slice_direction,
-                    kernel_size = self.mw.kernel_size,
+                    kernel_size_mm=self.mw.settings.kernel_size_mm,
                     unit = u,
                     dimensions = self.mw.physical_dim,
                     slice_thickness= self.mw.slice_thickness,
@@ -860,13 +874,13 @@ class MeasurementDispatcher:
                 lGI,perimeter, perimeter_convex, annotated_bgr, slice_kind = compute_image_lGI(
                     image_path,
                     pixel_size = px_size,
-                    kernel_size= self.mw.kernel_size,
+                    kernel_size_mm=self.mw.settings.kernel_size_mm,
                     cnt_threshold=self.mw.cnt_threshold,
                     unit = u,
                     add_scalebar=not bool(self.mw.image_scale_from_scalebar.get(self.mw.current_path, False)),
                     draw_hallmarks=self.mw.draw_hallmarks_on_image,
                 )
-                print(f"lGI = {lGI:.2f}.")
+                print(f"lGI = {_fmt_optional(lGI)}.")
 
                 label_text = self.mw.get_label_for_cropped_path(image_path)
                 if label_text:
@@ -884,7 +898,8 @@ class MeasurementDispatcher:
                     pixel_size_units = f"{self.mw.units_length}/pixel",
                     unit = self.mw.units_length,
                     pixel_size = self.mw.pixel_size,
-                    kernel_size = self.mw.kernel_size,
+                    kernel_size_mm=self.mw.settings.kernel_size_mm,
+                    kernel_size_px=self.mw.settings.kernel_size_px(px_size),
                     perimeter=perimeter, perimeter_convex=perimeter_convex, lgi=lGI,
                     slice_kind=slice_kind)
 
@@ -914,13 +929,13 @@ class MeasurementDispatcher:
                     self.mw.current_output_dir = out_dir
                     labels = self.mw.nifti_selected_regions if self.mw.nifti_selected_regions else self.mw.labels_available
 
-                    lGI,saved_pngs, valid_slices = compute_nifti_lGI(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.mw.cnt_threshold, kernel_size= self.mw.kernel_size,)
+                    lGI, saved_pngs, valid_slices = compute_nifti_lGI(self, file_path=nif_path, out_dir=out_dir, valid_labels=labels, min_contour_area=self.mw.cnt_threshold, kernel_size_mm=self.mw.settings.kernel_size_mm)
                 
                     if lGI is None:
                         return
 
                     # record metrics (consistent with your global export; units in mm unless noted)
-                    self.mw.metrics_store.record_metric_for(self.mw.current_path, kernel_size= self.mw.kernel_size ,lgi = lGI,)
+                    self.mw.metrics_store.record_metric_for(self.mw.current_path, kernel_size_mm=self.mw.settings.kernel_size_mm, lgi=lGI)
 
                     self.mw.view.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
                     
@@ -956,7 +971,7 @@ class MeasurementDispatcher:
                         file_path=stl_path,
                         out_dir=out_dir,
                         min_contour_area=self.mw.cnt_threshold,
-                        kernel_size=self.mw.kernel_size,
+                        kernel_size_mm=self.mw.settings.kernel_size_mm,
                         slice_thickness=self.mw.slice_thickness,
                         build_solid=False,   # keep False for stability
                         Slice_direction=self.mw.slice_direction,
@@ -970,7 +985,7 @@ class MeasurementDispatcher:
                     self.mw.metrics_store.record_metric_for(
                         self.mw.current_path,
                         source = source_label,
-                        kernel_size = self.mw.kernel_size,
+                        kernel_size_mm=self.mw.settings.kernel_size_mm,
                         dimensions = dims,
                         unit = "cm",
                         slice_thickness= self.mw.slice_thickness,
@@ -1002,7 +1017,7 @@ class MeasurementDispatcher:
                 
                 self.mw.current_output_dir = out_dir
                 source_label, dims, gi, saved_pngs, valid_slices = compute_stl_lGI(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
-                kernel_size = self.mw.kernel_size, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
+                kernel_size_mm=self.mw.settings.kernel_size_mm, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
             
                 if source_label == "not_brain":
                     QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
@@ -1014,7 +1029,7 @@ class MeasurementDispatcher:
                 self.mw.metrics_store.record_metric_for(
                     self.mw.current_path,
                     source = source_label,
-                    kernel_size = self.mw.kernel_size,
+                    kernel_size_mm=self.mw.settings.kernel_size_mm,
                     dimensions = dims,
                     unit = "cm",
                     slice_thickness= self.mw.slice_thickness,
@@ -1051,7 +1066,7 @@ class MeasurementDispatcher:
 
                 u = self.mw.units_length
                 gi, saved_pngs, valid_slices = compute_vtk_lGI(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
-                    kernel_size = self.mw.kernel_size, Slice_direction = self.mw.slice_direction, Physical_dim= self.mw.physical_dim, unit = u, slice_thickness=self.mw.slice_thickness)
+                    kernel_size_mm=self.mw.settings.kernel_size_mm, Slice_direction=self.mw.slice_direction, Physical_dim=self.mw.physical_dim, unit=u, slice_thickness=self.mw.slice_thickness)
             
                 if gi is None:
                     return
@@ -1060,7 +1075,7 @@ class MeasurementDispatcher:
                 self.mw.metrics_store.record_metric_for(
                     self.mw.current_path,
                     direction = self.mw.slice_direction,
-                    kernel_size = self.mw.kernel_size,
+                    kernel_size_mm=self.mw.settings.kernel_size_mm,
                     unit = u,
                     dimensions = self.mw.physical_dim,
                     slice_thickness= self.mw.slice_thickness,
@@ -1513,7 +1528,7 @@ class MeasurementDispatcher:
                 if cv2.imread(img_path) is None:
                     raise ValueError(f"Could not read image: {img_path}")
 
-            valid_slices, saved_pngs = process_on_images_batch(dir_path, out_dir, pixel_size=px_size, kernel_size= self.mw.kernel_size,
+            valid_slices, saved_pngs = process_on_images_batch(dir_path, out_dir, pixel_size=px_size, kernel_size_mm=self.mw.settings.kernel_size_mm,
                 cnt_threshold = self.mw.cnt_threshold, unit = u)
                 
             self.mw.view.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
@@ -2180,7 +2195,7 @@ class MeasurementDispatcher:
         """Open the manual hallmark-entry dialog and score against the registry."""
         from widgets.manual_gasp_dialog import ManualGASPDialog
         settings = getattr(self.mw, "settings", None)
-        default_kernel = getattr(settings, "kernel_size", 25)
+        default_kernel = getattr(settings, "kernel_size_mm", 5.0)
         default_unit = getattr(settings, "units_length", None) or "mm"
         default_pixel = None
         if settings is not None and self.mw.current_path:
@@ -2207,7 +2222,7 @@ class MeasurementDispatcher:
         axis = vals["axis"]
         overrides = {
             "project_name": vals["project_name"] or None,
-            "kernel_size": vals["kernel_size"],
+            "kernel_size_mm": vals["kernel_size"],
             "pixel_size": vals["pixel_size"],
             "length_unit": vals["length_unit"],
             "pixel_size_units": vals["length_unit"],
@@ -2291,34 +2306,34 @@ class MeasurementDispatcher:
         xlsx_path = self._mesh_per_slice_xlsx_path()
         if xlsx_path is None:
             return None
-        mw = self.mw
-        if mw.current_kind == "stl":
-            unit = "mm"
-        else:
-            unit = (getattr(mw, "units_length", None)
-                    or getattr(getattr(mw, "settings", None),
-                               "units_length", None)
-                    or "mm")
+
+        # The allmarks Excel is written in the shared spec layout
+        # (helpers.results_excel_format), so it must be parsed with
+        # read_results_sheet — a raw pd.read_excel sees the title/merged cells,
+        # not a flat table, and the per-slice column is "Section", not "Slice".
         try:
-            import pandas as pd
-            df = pd.read_excel(xlsx_path)
+            from helpers.results_excel_format import read_results_sheet
+            data = read_results_sheet(xlsx_path)
         except Exception as ex:
             logger.error("Could not read %s: %s", xlsx_path, ex)
             return None
-        if "Slice" not in df.columns:
-            return None
 
-        row = df[df["Slice"] == slice_idx]
-        if row.empty:
-            row = df[df["Slice"].astype(str) == str(slice_idx)]
-        if row.empty:
+        def _as_int(v):
+            try:
+                return int(float(v))
+            except (TypeError, ValueError):
+                return None
+
+        target = None
+        for r in data.get("rows", []):
+            if _as_int(r.get("Section")) == int(slice_idx):
+                target = r
+                break
+        if target is None:
             return None
-        r = row.iloc[0]
 
         def _f(col: str):
-            if col not in df.columns:
-                return None
-            v = r.get(col)
+            v = target.get(col)
             try:
                 fv = float(v)
             except (TypeError, ValueError):
@@ -2332,12 +2347,15 @@ class MeasurementDispatcher:
             return int(v) if v is not None else None
 
         from helpers.helpers import compactness_2D
-        area = _f(f"Inner_area_{unit}^2")
-        perim = _f(f"Inner_Perimeter_{unit}")
-        outer = _f(f"Outer_Perimeter_{unit}")
-        lgi = (perim / outer) if (perim and outer) else None
-        compact = (compactness_2D(area, perim)
-                   if (area is not None and perim) else None)
+        # The spec sheet already carries resolved per-slice LGI / Compactness /
+        # mean-depth columns (keys match the GASP measured-dict names), so they
+        # map straight across. Compactness falls back to a recompute if absent.
+        area = _f("Area")
+        perim = _f("Perimeter")
+        lgi = _f("LGI")
+        compact = _f("Compactness")
+        if compact is None and area is not None and perim:
+            compact = compactness_2D(area, perim)
 
         measured: dict = {}
         if area is not None:
@@ -2349,33 +2367,17 @@ class MeasurementDispatcher:
         if compact is not None:
             measured["Compactness"] = compact
 
-        for excel_col, meas_key in (
-            ("Primary_count", "PrimarySulciCount"),
-            ("Secondary_count", "SecondarySulciCount"),
-            ("Tertiary_count", "TertiarySulciCount"),
-            ("Unclassified_count", "UnclassifiedSulciCount"),
-        ):
-            v = _i(excel_col)
+        for col in ("PrimarySulciCount", "SecondarySulciCount",
+                    "TertiarySulciCount", "UnclassifiedSulciCount"):
+            v = _i(col)
             if v is not None:
-                measured[meas_key] = v
+                measured[col] = v
 
-        for prefix, meas_key in (
-            ("Primary", "PrimaryMeanDepth"),
-            ("Secondary", "SecondaryMeanDepth"),
-            ("Tertiary", "TertiaryMeanDepth"),
-            ("Unclassified", "UnclassifiedMeanDepth"),
-        ):
-            v = _f(f"{prefix}_mean_{unit}")
-            if v is None:
-                # Fall back to averaging v1/v2/v3 — the exporter writes
-                # individual values there (mean cell stays empty) when the
-                # subtype has 3 or fewer sulci on this slice.
-                vals = [_f(f"{prefix}_v{i}_{unit}") for i in (1, 2, 3)]
-                vals = [x for x in vals if x is not None]
-                if vals:
-                    v = sum(vals) / len(vals)
+        for col in ("PrimaryMeanDepth", "SecondaryMeanDepth",
+                    "TertiaryMeanDepth", "UnclassifiedMeanDepth"):
+            v = _f(col)
             if v is not None:
-                measured[meas_key] = v
+                measured[col] = v
 
         return measured
 
@@ -2712,9 +2714,12 @@ class MeasurementDispatcher:
             length_unit = overrides.get(
                 "length_unit",
                 getattr(settings, "units_length", None))
-            kernel_size = overrides.get(
-                "kernel_size",
-                getattr(settings, "kernel_size", None))
+            kernel_size_mm = overrides.get(
+                "kernel_size_mm",
+                getattr(settings, "kernel_size_mm", None))
+            kernel_size_px = None
+            if settings is not None and pixel_size is not None:
+                kernel_size_px = settings.kernel_size_px(pixel_size)
 
             override_name = overrides.get("project_name")
             if override_name:
@@ -2741,7 +2746,8 @@ class MeasurementDispatcher:
                 oor_beta=oor_beta,
                 apply_penalty=apply_penalty,
                 weighted_global=weighted_global,
-                kernel_size=kernel_size,
+                kernel_size_mm=kernel_size_mm,
+                kernel_size_px=kernel_size_px,
                 pixel_size=pixel_size,
                 pixel_size_units=pixel_size_units,
                 length_unit=length_unit,
