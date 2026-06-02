@@ -19,10 +19,12 @@ from deps import *
 from helpers.helpers import (
     compute_kernel_convex,
     contours_exclude,
-    calc_scale,
+    calc_scale_with_metadata,
     get_red_rect_offset,
     make_scale_cube,
+    prepare_orthographic_slice_render,
     slice_at,
+    validate_scale_cube_sanity,
     compactness_2D,
     compactness_3D,
     image_annotation_style,
@@ -42,14 +44,18 @@ from helpers.check_mesh import check_brain
 from managers.visualization_settings import get_active as _get_viz
 from constants import (
     BINARY_THRESHOLD_DEFAULT,
-    RED_CHANNEL_MIN,
-    GREEN_CHANNEL_MAX,
+    DEFAULT_KERNEL_SIZE_MM,
     DEFECT_FIXED_POINT,
     SULCUS_TERTIARY_MIN_FRACTION,
     SULCUS_PRIMARY_MAX_FRACTION,
 )
 
 logger = logging.getLogger("fetomorph.stl")
+
+
+def _to_kernel_px(kernel_size_mm: float, pixel_size_mm: float) -> int:
+    px = max(3, int(round(float(kernel_size_mm) / max(float(pixel_size_mm), 1e-9))))
+    return px
 
 
 def _stl_slice_setup(mesh, brain_dim, Slice_direction: str, pixel_spacing: float = 0.1):
@@ -85,13 +91,40 @@ def _stl_slice_setup(mesh, brain_dim, Slice_direction: str, pixel_spacing: float
     }
 
 
+def _require_scale_calibration(
+    p,
+    Slice_direction: str,
+    cube_len: float,
+    mesh_center,
+    sample_slice: float,
+    offset: float,
+    view_fn_name: str,
+    *,
+    physical_cube_len: float | None = None,
+) -> dict:
+    scale_cube = make_scale_cube(Slice_direction, cube_len, mesh_center, sample_slice, offset)
+    ok, metadata = validate_scale_cube_sanity(
+        p,
+        scale_cube,
+        float(physical_cube_len if physical_cube_len is not None else cube_len),
+        getattr(p, view_fn_name),
+        background="white",
+    )
+    if not ok:
+        raise ValueError(
+            "Scale cube calibration failed before processing slices: "
+            f"{metadata.get('calibration_status')}"
+        )
+    return metadata
+
+
 # ----------------- main API -----------------
 def compute_stl_allmarks(
     parent,
     file_path: str,
     out_dir: str,
     min_contour_area: float = 20.0,
-    kernel_size: int = 5,
+    kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM,
     slice_thickness: float = 0.5,
     Slice_direction: str = "Y"):
     """Compute all hallmarks (volume, area, GI, sulci depths) from an STL mesh.
@@ -104,7 +137,7 @@ def compute_stl_allmarks(
         file_path: Path to the ``.stl`` file.
         out_dir: Output directory for slice PNGs and Excel.
         min_contour_area: Minimum contour area (pixels) to keep.
-        kernel_size: Morph-close kernel diameter for outer contour.
+        kernel_size_mm: Morph-close kernel diameter for outer contour, in mm.
         slice_thickness: Distance between slices (mm).
 
     Returns:
@@ -161,6 +194,7 @@ def compute_stl_allmarks(
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
     rows = []
+    kernel_px_values: list[int] = []
     slice_class_data: list = []
     sections_list: list[pv.PolyData] = []
     total_depth = []
@@ -170,8 +204,15 @@ def compute_stl_allmarks(
 
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
+    p.parallel_projection = True
     cube_len = sd["cube_len"]
     max_dim = sd["max_dim"]
+    _require_scale_calibration(
+        p, Slice_direction, cube_len, mesh.center, float(slice_positions[0]),
+        max_dim, sd["view_fn_name"],
+    )
+    calibration_metadata: list[dict] = []
+    invalid_calibration_rows: list[dict] = []
     for idx, k in enumerate(slice_positions):
         normal, origin = slice_at(mesh, Slice_direction, k)
         section = mesh.slice(normal=normal, origin=origin)
@@ -185,15 +226,30 @@ def compute_stl_allmarks(
                          i_size=brain_dim[sd["pre_axis"]]*1.5, j_size=brain_dim[sd["next_axis"]]*1.5,
                          i_resolution=1, j_resolution=1)
         p.clear()
-        p.add_mesh(scale_cube, color="red")
-        p.add_mesh(section, color="black")
-        getattr(p, sd["view_fn_name"])()
+        p.add_mesh(scale_cube, color="red", lighting=False)
+        p.add_mesh(section, color="black", lighting=False)
+        prepare_orthographic_slice_render(p, getattr(p, sd["view_fn_name"]))
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = calc_scale(img_rgb, cube_len)
+        mm_per_px, scale_meta, red_rect = calc_scale_with_metadata(img_rgb, cube_len)
+        if mm_per_px is None:
+            print(f"[STL Scale] Scale cube was not detected or failed validation. {scale_meta.get('calibration_status')}. Measurements for this slice were skipped.")
+            invalid_calibration_rows.append({
+                "Section": idx,
+                "cube_len_mm": scale_meta.get("cube_len_mm"),
+                "detected_cube_size_px": scale_meta.get("detected_cube_size_px"),
+                "computed_mm_per_px": scale_meta.get("computed_mm_per_px"),
+                "projection_mode": scale_meta.get("projection_mode"),
+                "cube_detection_method": scale_meta.get("cube_detection_method"),
+                "calibration_status": scale_meta.get("calibration_status"),
+                "calibration_error_percent": scale_meta.get("calibration_error_percent"),
+            })
+            continue
+        calibration_metadata.append(scale_meta)
+        kernel_size_px = _to_kernel_px(kernel_size_mm, mm_per_px)
 
 
         # Prepare masks / contours (pixel space)
@@ -201,8 +257,6 @@ def compute_stl_allmarks(
         h_img, w_img = bgr.shape[:2]
         thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
-
         # Binary for contours
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -219,7 +273,7 @@ def compute_stl_allmarks(
         # components after morph-close.
         inner_mask = np.zeros_like(bw)
         cv2.drawContours(inner_mask, inner_filtered, -1, 255, thickness=cv2.FILLED)
-        kernel = compute_kernel_convex(max(1, int(kernel_size)))
+        kernel = compute_kernel_convex(kernel_size_px)
         closed = cv2.morphologyEx(inner_mask, cv2.MORPH_CLOSE, kernel)
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
@@ -286,6 +340,7 @@ def compute_stl_allmarks(
             mean_depth,                         # mean_depth_mm
             *per_class_cells,
         ])
+        kernel_px_values.append(kernel_size_px)
         # Accumulate
         sum_inner_mm += inner_perim_mm
         sum_outer_mm += outer_perim_mm
@@ -334,7 +389,7 @@ def compute_stl_allmarks(
         overall_mean = (sum(total_depth_mm) / overall_n) if overall_n else None
 
         results_rows = []
-        for r, dsets, png_path in zip(rows, slice_class_data, saved_pngs):
+        for r, dsets, png_path, kernel_px, cal_meta in zip(rows, slice_class_data, saved_pngs, kernel_px_values, calibration_metadata):
             idx, _kind, _ncont, area_mm, inner_perim_mm, outer_perim_mm = r[:6]
             lgi = ((inner_perim_mm / outer_perim_mm)
                    if outer_perim_mm else None)
@@ -343,6 +398,14 @@ def compute_stl_allmarks(
             d = dsets if isinstance(dsets, dict) else {}
             results_rows.append({
                 "Section": idx,
+                "Kernel_px": int(kernel_px),
+                "cube_len_mm": cal_meta.get("cube_len_mm"),
+                "detected_cube_size_px": cal_meta.get("detected_cube_size_px"),
+                "computed_mm_per_px": cal_meta.get("computed_mm_per_px"),
+                "projection_mode": cal_meta.get("projection_mode"),
+                "cube_detection_method": cal_meta.get("cube_detection_method"),
+                "calibration_status": cal_meta.get("calibration_status"),
+                "calibration_error_percent": cal_meta.get("calibration_error_percent"),
                 "Area": area_mm,
                 "Perimeter": inner_perim_mm,
                 "LGI": lgi,
@@ -361,13 +424,20 @@ def compute_stl_allmarks(
                     None, d.get("unclassified", []) or []),
                 "_section_link": png_path,
             })
+        results_rows.extend(invalid_calibration_rows)
 
         parameters = {
-            "Kernel size": int(kernel_size),
+            "Kernel size (mm)": float(kernel_size_mm),
+            "Kernel size (px)": (
+                f"per-slice, range {min(kernel_px_values)}-{max(kernel_px_values)}"
+                if kernel_px_values else None),
             "Pixel spacing": "0.1 mm/pixel (rendering); per-slice from cube",
             "Slice thickness": float(slice_thickness),
             "Filtered threshold": float(min_contour_area),
             "Slice direction": Slice_direction,
+            "projection_mode": "parallel",
+            "cube_detection_method": "HSV red mask + morphology + minAreaRect",
+            "calibration_status": "valid" if calibration_metadata else "no valid calibrated slices",
         }
         totals = {
             "Volume (cm^3)": round(float(brain_volume), 2),
@@ -384,6 +454,16 @@ def compute_stl_allmarks(
             folder=os.path.dirname(file_path) or None,
             parameters=parameters,
             rows=results_rows,
+            extra_columns=(
+                "Kernel_px",
+                "cube_len_mm",
+                "detected_cube_size_px",
+                "computed_mm_per_px",
+                "projection_mode",
+                "cube_detection_method",
+                "calibration_status",
+                "calibration_error_percent",
+            ),
             totals=totals,
             drop_empty_columns=True,
         )
@@ -403,7 +483,7 @@ def compute_stl_lGI(
     file_path: str,
     out_dir: str,
     min_contour_area: float = 20.0,
-    kernel_size: int = 5,
+    kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM,
     slice_thickness: float = 0.5,
     build_solid: bool = False,
     Slice_direction: str = "Y",
@@ -418,7 +498,7 @@ def compute_stl_lGI(
         file_path: Path to the ``.stl`` file.
         out_dir: Output directory.
         min_contour_area: Minimum contour area (pixels) to keep.
-        kernel_size: Morph-close kernel diameter.
+        kernel_size_mm: Morph-close kernel diameter, in mm.
         slice_thickness: Distance between slices (mm).
         build_solid: If True, extrude outer contours into a solid mesh.
 
@@ -483,7 +563,12 @@ def compute_stl_lGI(
 
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
+    p.parallel_projection = True
     cube_len = sd["cube_len"]
+    _require_scale_calibration(
+        p, Slice_direction, cube_len, mesh.center, float(slice_positions[0]),
+        sd["max_dim"], sd["view_fn_name"],
+    )
 
     for idx, k in enumerate(slice_positions):
         normal, origin = slice_at(mesh, Slice_direction, k)
@@ -498,15 +583,19 @@ def compute_stl_lGI(
                          i_size=brain_dim[sd["pre_axis"]]*1.5, j_size=brain_dim[sd["next_axis"]]*1.5,
                          i_resolution=1, j_resolution=1)
         p.clear()
-        p.add_mesh(scale_cube, color="red")
-        p.add_mesh(section, color="black")
-        getattr(p, sd["view_fn_name"])()
+        p.add_mesh(scale_cube, color="red", lighting=False)
+        p.add_mesh(section, color="black", lighting=False)
+        prepare_orthographic_slice_render(p, getattr(p, sd["view_fn_name"]))
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = calc_scale(img_rgb, cube_len)
+        mm_per_px, scale_meta, red_rect = calc_scale_with_metadata(img_rgb, cube_len)
+        if mm_per_px is None:
+            print(f"[STL Scale] Scale cube was not detected or failed validation. {scale_meta.get('calibration_status')}. Measurements for this slice were skipped.")
+            continue
+        kernel_size_px = _to_kernel_px(kernel_size_mm, mm_per_px)
 
 
         # Prepare masks / contours (pixel space)
@@ -514,8 +603,6 @@ def compute_stl_lGI(
         h_img, w_img = bgr.shape[:2]
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
-
         # Binary for contours
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -532,7 +619,7 @@ def compute_stl_lGI(
         # components after morph-close.
         inner_mask = np.zeros_like(bw)
         cv2.drawContours(inner_mask, inner_filtered, -1, 255, thickness=cv2.FILLED)
-        kernel = compute_kernel_convex(max(1, int(kernel_size)))
+        kernel = compute_kernel_convex(kernel_size_px)
         closed = cv2.morphologyEx(inner_mask, cv2.MORPH_CLOSE, kernel)
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
@@ -548,7 +635,7 @@ def compute_stl_lGI(
         sum_inner_mm += inner_perim_mm
         sum_outer_mm += outer_perim_mm
         GI_slice = (inner_perim_mm / outer_perim_mm) if outer_perim_mm > 0 else 0.0
-        rows.append([idx, len(inner_filtered), inner_perim_mm, outer_perim_mm, GI_slice])
+        rows.append([idx, len(inner_filtered), kernel_size_px, inner_perim_mm, outer_perim_mm, GI_slice])
 
         # Save annotated slice
         slice_path = os.path.join(out_dir_slices, f"slice_{idx:03d}.png")
@@ -591,8 +678,9 @@ def compute_stl_lGI(
         
     # Save per-slice + total to Excel
     try:
-        df = pd.DataFrame(rows, columns=["Slice", "Inner_Perimeter_mm", "Outer_Perimeter_mm", "GI"])
-        df.loc[len(df)] = ["GI", round(GI_total, 3), None, None]
+        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", "Kernel_px", "Inner_Perimeter_mm", "Outer_Perimeter_mm", "GI"])
+        df.insert(0, "Kernel_size_mm", float(kernel_size_mm))
+        df.loc[len(df)] = [float(kernel_size_mm), "GI", None, None, None, None, round(GI_total, 3)]
         xlsx_path = os.path.join(out_dir, "STL_lGI.xlsx")
         df.to_excel(xlsx_path, index=False)
         print(f"[STL lGI] Saved Excel → {xlsx_path}")
@@ -700,7 +788,12 @@ def compute_stl_volume(
 
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
+    p.parallel_projection = True
     cube_len = sd["cube_len"]
+    _require_scale_calibration(
+        p, Slice_direction, cube_len, mesh.center, float(slice_positions[0]),
+        sd["max_dim"], sd["view_fn_name"],
+    )
 
     for idx, k in enumerate(slice_positions):
         normal, origin = slice_at(mesh, Slice_direction, k)
@@ -714,15 +807,18 @@ def compute_stl_volume(
                          i_size=brain_dim[sd["pre_axis"]]*1.5, j_size=brain_dim[sd["next_axis"]]*1.5,
                          i_resolution=1, j_resolution=1)
         p.clear()
-        p.add_mesh(scale_cube, color="red")
-        p.add_mesh(section, color="black")
-        getattr(p, sd["view_fn_name"])()
+        p.add_mesh(scale_cube, color="red", lighting=False)
+        p.add_mesh(section, color="black", lighting=False)
+        prepare_orthographic_slice_render(p, getattr(p, sd["view_fn_name"]))
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = calc_scale(img_rgb, cube_len)
+        mm_per_px, scale_meta, red_rect = calc_scale_with_metadata(img_rgb, cube_len)
+        if mm_per_px is None:
+            print(f"[STL Scale] Scale cube was not detected or failed validation. {scale_meta.get('calibration_status')}. Measurements for this slice were skipped.")
+            continue
 
 
         # Prepare masks / contours (pixel space)
@@ -730,8 +826,6 @@ def compute_stl_volume(
         h_img, w_img = bgr.shape[:2]
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
-
         # Binary for contours
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -871,7 +965,12 @@ def compute_stl_area(
 
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
+    p.parallel_projection = True
     cube_len = sd["cube_len"]
+    _require_scale_calibration(
+        p, Slice_direction, cube_len, mesh.center, float(slice_positions[0]),
+        sd["max_dim"], sd["view_fn_name"],
+    )
 
     for idx, k in enumerate(slice_positions):
         normal, origin = slice_at(mesh, Slice_direction, k)
@@ -885,15 +984,18 @@ def compute_stl_area(
                          i_size=brain_dim[sd["pre_axis"]]*1.5, j_size=brain_dim[sd["next_axis"]]*1.5,
                          i_resolution=1, j_resolution=1)
         p.clear()
-        p.add_mesh(scale_cube, color="red")
-        p.add_mesh(section, color="black")
-        getattr(p, sd["view_fn_name"])()
+        p.add_mesh(scale_cube, color="red", lighting=False)
+        p.add_mesh(section, color="black", lighting=False)
+        prepare_orthographic_slice_render(p, getattr(p, sd["view_fn_name"]))
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = calc_scale(img_rgb, cube_len)
+        mm_per_px, scale_meta, red_rect = calc_scale_with_metadata(img_rgb, cube_len)
+        if mm_per_px is None:
+            print(f"[STL Scale] Scale cube was not detected or failed validation. {scale_meta.get('calibration_status')}. Measurements for this slice were skipped.")
+            continue
 
 
         # Prepare masks / contours (pixel space)
@@ -901,8 +1003,6 @@ def compute_stl_area(
         h_img, w_img = bgr.shape[:2]
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
-
         # Binary for contours
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1041,8 +1141,13 @@ def compute_stl_sulci_depth(
 
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
+    p.parallel_projection = True
     cube_len = sd["cube_len"]
     max_dim = sd["max_dim"]
+    _require_scale_calibration(
+        p, Slice_direction, cube_len, mesh.center, float(slice_positions[0]),
+        max_dim, sd["view_fn_name"],
+    )
     for idx, k in enumerate(slice_positions):
         normal, origin = slice_at(mesh, Slice_direction, k)
         section = mesh.slice(normal=normal, origin=origin)
@@ -1055,15 +1160,18 @@ def compute_stl_sulci_depth(
                          i_size=brain_dim[sd["pre_axis"]]*1.5, j_size=brain_dim[sd["next_axis"]]*1.5,
                          i_resolution=1, j_resolution=1)
         p.clear()
-        p.add_mesh(scale_cube, color="red")
-        p.add_mesh(section, color="black")
-        getattr(p, sd["view_fn_name"])()
+        p.add_mesh(scale_cube, color="red", lighting=False)
+        p.add_mesh(section, color="black", lighting=False)
+        prepare_orthographic_slice_render(p, getattr(p, sd["view_fn_name"]))
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = calc_scale(img_rgb, cube_len)
+        mm_per_px, scale_meta, red_rect = calc_scale_with_metadata(img_rgb, cube_len)
+        if mm_per_px is None:
+            print(f"[STL Scale] Scale cube was not detected or failed validation. {scale_meta.get('calibration_status')}. Measurements for this slice were skipped.")
+            continue
 
 
         # Prepare masks / contours (pixel space)
@@ -1071,8 +1179,6 @@ def compute_stl_sulci_depth(
         h_img, w_img = bgr.shape[:2]
         thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
-
         # Binary for contours
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1284,7 +1390,12 @@ def compute_compactness_stl(
 
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
+    p.parallel_projection = True
     cube_len = sd["cube_len"]
+    _require_scale_calibration(
+        p, Slice_direction, cube_len, mesh.center, float(slice_positions[0]),
+        sd["max_dim"], sd["view_fn_name"],
+    )
 
     for idx, k in enumerate(slice_positions):
         normal, origin = slice_at(mesh, Slice_direction, k)
@@ -1298,23 +1409,24 @@ def compute_compactness_stl(
                          i_size=brain_dim[sd["pre_axis"]] * 1.5, j_size=brain_dim[sd["next_axis"]] * 1.5,
                          i_resolution=1, j_resolution=1)
         p.clear()
-        p.add_mesh(scale_cube, color="red")
-        p.add_mesh(section, color="black")
-        getattr(p, sd["view_fn_name"])()
+        p.add_mesh(scale_cube, color="red", lighting=False)
+        p.add_mesh(section, color="black", lighting=False)
+        prepare_orthographic_slice_render(p, getattr(p, sd["view_fn_name"]))
 
         # Screenshot
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = calc_scale(img_rgb, cube_len)
+        mm_per_px, scale_meta, red_rect = calc_scale_with_metadata(img_rgb, cube_len)
+        if mm_per_px is None:
+            print(f"[STL Scale] Scale cube was not detected or failed validation. {scale_meta.get('calibration_status')}. Measurements for this slice were skipped.")
+            continue
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         h_img, w_img = bgr.shape[:2]
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
-
         # Binary for contours
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)

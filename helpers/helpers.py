@@ -512,32 +512,102 @@ def split_inner_and_internal_contours(
 
     return inner_filtered, internal_filtered
     
-def calc_scale(image_rgb: np.ndarray, cube_length: float) -> float | None:
+SCALE_CUBE_DETECTION_METHOD = "HSV red mask + morphology + minAreaRect"
+
+
+def red_scale_cube_mask(image_rgb: np.ndarray) -> np.ndarray:
+    """Return a cleaned HSV red mask for the rendered scale cube."""
+    hsv = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2HSV)
+    lower_red = cv2.inRange(hsv, np.array([0, 80, 80]), np.array([10, 255, 255]))
+    upper_red = cv2.inRange(hsv, np.array([170, 80, 80]), np.array([179, 255, 255]))
+    mask = cv2.bitwise_or(lower_red, upper_red)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    return mask.astype("uint8")
+
+
+def calc_scale_with_metadata(
+    image_rgb: np.ndarray,
+    cube_length: float,
+    *,
+    expected_px_range: tuple[float, float] | None = None,
+    min_area_px: float = 25.0,
+    max_aspect_error: float = 0.35,
+) -> tuple[float | None, dict, np.ndarray]:
+    """Detect the red scale cube and return ``(mm_per_px, metadata, mask)``.
+
+    The visible cube face should be approximately square and parallel to the
+    camera plane. A failed validation returns ``None`` with a clear status.
     """
-    Compute mm-per-pixel from a red reference cube drawn in the render.
-    cube_length_mm: the real cube side length (x_length) in mm.
-    """
-    red_rect = np.where((image_rgb[:, :, 0] > 150) & (image_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
-    _, thresh_red = cv2.threshold(red_rect, 150, 255, 0)
-    contours, _ = cv2.findContours(thresh_red, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    metadata = {
+        "cube_len_mm": float(cube_length),
+        "detected_cube_size_px": None,
+        "computed_mm_per_px": None,
+        "projection_mode": "parallel",
+        "cube_detection_method": SCALE_CUBE_DETECTION_METHOD,
+        "calibration_status": "failed",
+        "calibration_error_percent": None,
+    }
+    mask = red_scale_cube_mask(image_rgb)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        print("[Scale] No red reference contour found; default scale 1.0 mm/px")
-        return 1.0
-    # Use the largest red blob as reference
-    x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
-    if float(w)>0:
-        scale = (cube_length/float(w))
-    else:
-        print("[STL Scale] Cup length error: cup length not found!")
-        return None
-    return scale
+        metadata["calibration_status"] = "failed: no red contour"
+        return None, metadata, mask
+
+    contour = max(contours, key=cv2.contourArea)
+    area = float(cv2.contourArea(contour))
+    if area < min_area_px:
+        metadata["calibration_status"] = f"failed: red contour area {area:.1f} below {min_area_px:.1f}px"
+        return None, metadata, mask
+
+    rect = cv2.minAreaRect(contour)
+    width_px, height_px = (float(rect[1][0]), float(rect[1][1]))
+    if width_px <= 0 or height_px <= 0:
+        metadata["calibration_status"] = "failed: fitted red rectangle has non-positive dimensions"
+        return None, metadata, mask
+
+    long_px = max(width_px, height_px)
+    short_px = min(width_px, height_px)
+    aspect = long_px / max(short_px, 1e-9)
+    if aspect > (1.0 + max_aspect_error):
+        metadata["detected_cube_size_px"] = long_px
+        metadata["calibration_status"] = f"failed: red contour aspect ratio {aspect:.3f} is not square"
+        return None, metadata, mask
+
+    if expected_px_range is None:
+        h, w = image_rgb.shape[:2]
+        expected_px_range = (5.0, 0.75 * float(min(h, w)))
+    lo, hi = expected_px_range
+    if long_px < lo or long_px > hi:
+        metadata["detected_cube_size_px"] = long_px
+        metadata["calibration_status"] = f"failed: detected cube size {long_px:.1f}px outside [{lo:.1f}, {hi:.1f}]"
+        return None, metadata, mask
+
+    mm_per_px = float(cube_length) / long_px
+    measured_cube_len = mm_per_px * long_px
+    error_percent = abs(measured_cube_len - float(cube_length)) / max(float(cube_length), 1e-9) * 100.0
+    metadata.update({
+        "detected_cube_size_px": long_px,
+        "computed_mm_per_px": mm_per_px,
+        "calibration_status": "valid",
+        "calibration_error_percent": error_percent,
+    })
+    return mm_per_px, metadata, mask
+
+
+def calc_scale(image_rgb: np.ndarray, cube_length: float) -> float | None:
+    """Compatibility wrapper returning only mm-per-pixel."""
+    mm_per_px, metadata, _mask = calc_scale_with_metadata(image_rgb, cube_length)
+    if mm_per_px is None:
+        print(f"[Scale] Scale cube was not detected or failed validation. {metadata['calibration_status']}. Measurements for this slice were skipped.")
+    return mm_per_px
     
 def get_red_rect_offset(image_rgb: np.ndarray) -> np.ndarray:  # noqa: returning shape (2,)
     """
     Detect red rectangle and return its center (x,y) in pixels — used to zero-align contours.
     """
-    red_mask = (image_rgb[:, :, 0] > 150) & (image_rgb[:, :, 1] < 50)
-    coords = np.argwhere(red_mask)
+    coords = np.argwhere(red_scale_cube_mask(image_rgb) > 0)
     if coords.size == 0:
         return np.array([0, 0])
     y_min, x_min = coords.min(axis=0)
@@ -729,23 +799,67 @@ def make_scale_cube(Slice_direction: str, cube_len: float, origin, s: float, off
     Returns:
         A ``pv.PolyData`` cube positioned beside the slice.
     """
-    # choose thin axis and translation vector
+    offset = float(offset) + float(cube_len)
+    thickness = max(float(cube_len) * 0.01, 1e-6)
     if Slice_direction == "X":
-        c = (s, origin[1], origin[2])
-        cube = pv.Cube(center = c, x_length=0.01, y_length=cube_len, z_length=cube_len)
-        cube.translate((-0.05, offset, offset), inplace=True)
+        c = (float(s), float(origin[1]) + offset, float(origin[2]) + offset)
+        cube = pv.Cube(center=c, x_length=thickness, y_length=cube_len, z_length=cube_len)
     elif Slice_direction == "Y":
-        c = (origin[0],s, origin[2])
-        cube = pv.Cube(center = c, x_length=cube_len, y_length=0.01, z_length=cube_len)
-        cube.translate((offset,-0.05 , offset), inplace=True)
+        c = (float(origin[0]) + offset, float(s), float(origin[2]) + offset)
+        cube = pv.Cube(center=c, x_length=cube_len, y_length=thickness, z_length=cube_len)
     elif Slice_direction == "Z":
-        c = (origin[0], origin[1], s)
-        cube = pv.Cube(center = c, x_length=cube_len, y_length=cube_len, z_length=0.01)
-        cube.translate((offset, offset, -0.05), inplace=True)
+        c = (float(origin[0]) + offset, float(origin[1]) + offset, float(s))
+        cube = pv.Cube(center=c, x_length=cube_len, y_length=cube_len, z_length=thickness)
     else:
         raise ValueError("Slice_direction must be 'X','Y','Z'.")
 
     return cube
+
+
+def prepare_orthographic_slice_render(p, view_fn) -> None:
+    """Apply reproducible camera settings before a PyVista slice screenshot."""
+    view_fn()
+    try:
+        p.parallel_projection = True
+    except Exception:
+        pass
+    try:
+        p.enable_parallel_projection()
+    except Exception:
+        pass
+    p.reset_camera()
+    try:
+        p.camera.zoom(0.95)
+    except Exception:
+        pass
+
+
+def validate_scale_cube_sanity(
+    p,
+    scale_cube,
+    cube_len_mm: float,
+    view_fn,
+    *,
+    background: str,
+) -> tuple[bool, dict]:
+    """Render a reference-only calibration frame and validate detection."""
+    p.clear()
+    p.set_background(background)
+    p.add_mesh(scale_cube, color="red", lighting=False)
+    prepare_orthographic_slice_render(p, view_fn)
+    img_rgb = p.screenshot(return_img=True)
+    mm_per_px, metadata, _mask = calc_scale_with_metadata(img_rgb, cube_len_mm)
+    if mm_per_px is None:
+        return False, metadata
+    detected_px = metadata.get("detected_cube_size_px")
+    measured_cube_len = mm_per_px * float(detected_px)
+    error_percent = abs(measured_cube_len - float(cube_len_mm)) / max(float(cube_len_mm), 1e-9) * 100.0
+    metadata["calibration_error_percent"] = error_percent
+    if error_percent > 1.0:
+        metadata["calibration_status"] = f"failed: sanity error {error_percent:.3f}% exceeds 1%"
+        return False, metadata
+    metadata["calibration_status"] = "valid: sanity check passed"
+    return True, metadata
 
 def compactness_2D(area: float, perimeter: float) -> float:
     if perimeter == 0:

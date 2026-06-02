@@ -19,10 +19,12 @@ from helpers.helpers import (
     compute_kernel_convex,
     contours_exclude,
     split_inner_and_internal_contours,
-    calc_scale,
+    calc_scale_with_metadata,
     get_red_rect_offset,
     slice_at,
     make_scale_cube,
+    prepare_orthographic_slice_render,
+    validate_scale_cube_sanity,
     compactness_3D,
     compactness_2D,
     image_annotation_style,
@@ -42,14 +44,48 @@ from helpers.slice_kind_classifier import classify_slice_kind
 from managers.visualization_settings import get_active as _get_viz
 from constants import (
     BINARY_THRESHOLD_VTK,
-    RED_CHANNEL_MIN,
-    GREEN_CHANNEL_MAX,
+    DEFAULT_KERNEL_SIZE_MM,
     DEFECT_FIXED_POINT,
     SULCUS_TERTIARY_MIN_FRACTION,
     SULCUS_PRIMARY_MAX_FRACTION,
 )
 
 logger = logging.getLogger("fetomorph.vtk")
+VTK_RENDER_WINDOW_SIZE = (1024, 1024)
+
+
+def _to_kernel_px(kernel_size_mm: float, pixel_size_mm: float) -> int:
+    px = max(3, int(round(float(kernel_size_mm) / max(float(pixel_size_mm), 1e-9))))
+    return px
+
+
+def _view_fn(p, Slice_direction: str):
+    return {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]
+
+
+def _require_scale_calibration(
+    p,
+    Slice_direction: str,
+    cube_len: float,
+    physical_cube_len: float,
+    mesh_center,
+    sample_slice: float,
+    offset: float,
+) -> dict:
+    scale_cube = make_scale_cube(Slice_direction, cube_len, mesh_center, sample_slice, offset)
+    ok, metadata = validate_scale_cube_sanity(
+        p,
+        scale_cube,
+        float(physical_cube_len),
+        _view_fn(p, Slice_direction),
+        background="black",
+    )
+    if not ok:
+        raise ValueError(
+            "Scale cube calibration failed before processing slices: "
+            f"{metadata.get('calibration_status')}"
+        )
+    return metadata
 
     
 # ----------------- main API -----------------
@@ -58,7 +94,7 @@ def compute_vtk_allmarks(
     file_path: str,
     out_dir: str,
     min_contour_area: float = 20.0,
-    kernel_size: int = 5,
+    kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM,
     Slice_direction: Literal["X", "Y", "Z"] = "Y",
     Physical_dim: Sequence[int] | None = None,
     unit: str = "mm",
@@ -71,7 +107,7 @@ def compute_vtk_allmarks(
         file_path: Path to the ``.vtk`` file.
         out_dir: Output directory.
         min_contour_area: Minimum contour area (pixels) to keep.
-        kernel_size: Morph-close kernel diameter.
+        kernel_size_mm: Morph-close kernel diameter, in mm.
         Slice_direction: Axis to slice along.
         Physical_dim: Real-world ``[X, Y, Z]`` dimensions for unit scaling.
         unit: Label for output units.
@@ -128,6 +164,7 @@ def compute_vtk_allmarks(
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
     rows = []
+    kernel_px_values: list[int] = []
     sections_list: list[pv.PolyData] = []
     total_depth = []
     slice_class_data: list = []
@@ -137,14 +174,23 @@ def compute_vtk_allmarks(
 
     # VTK renders use a black background → threshold is BINARY_THRESHOLD_VTK (150)
     # instead of the 200 used for white-background STL renders.
-    p = pv.Plotter(off_screen=True)
+    p = pv.Plotter(off_screen=True, window_size=VTK_RENDER_WINDOW_SIZE)
     p.set_background("black")
+    p.parallel_projection = True
 
     # Cyclic axis indexing: for a given slice axis, pre_axis and next_axis
     # give the two in-plane axes used for plane sizing and cube placement.
     pre_axis = (axis_index - 1) % 3
     next_axis = (axis_index + 1) % 3
     cube_len = max(1e-6, mesh_dim[0] / 10.0)
+    scale_cube_offset = max(mesh_dim[pre_axis], mesh_dim[next_axis])
+    physical_cube_len = cube_len * mesh_dim_scaled[0]
+    _require_scale_calibration(
+        p, Slice_direction, cube_len, physical_cube_len, mesh.center,
+        float(slice_positions[0]), scale_cube_offset,
+    )
+    calibration_metadata: list[dict] = []
+    invalid_calibration_rows: list[dict] = []
 
     for idx, k in enumerate(slice_positions):
         normal, origin = slice_at(mesh, Slice_direction, k)
@@ -153,29 +199,41 @@ def compute_vtk_allmarks(
         if section.n_points == 0:
             continue
 
-        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, scale_cube_offset)
 
         plane = pv.Plane(center=origin,
                  direction=normal,
                  i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,
                  i_resolution=1, j_resolution=1)
         p.clear()
-        p.add_mesh(section, color="#ffffff", opacity=1)
-        p.add_mesh(scale_cube, color="red")
-        # Select camera view matching the slice plane orientation.
-        {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]()
+        p.add_mesh(section, color="#ffffff", opacity=1, lighting=False)
+        p.add_mesh(scale_cube, color="red", lighting=False)
+        prepare_orthographic_slice_render(p, _view_fn(p, Slice_direction))
 
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Scale cube is rendered in physical mm (cube_len × mesh_dim_scaled[0]).
-        mm_per_px = calc_scale(img_rgb, cube_len*mesh_dim_scaled[0])
+        mm_per_px, scale_meta, red_rect = calc_scale_with_metadata(img_rgb, physical_cube_len)
+        if mm_per_px is None:
+            print(f"[VTK Scale] Scale cube was not detected or failed validation. {scale_meta.get('calibration_status')}. Measurements for this slice were skipped.")
+            invalid_calibration_rows.append({
+                "Section": idx,
+                "cube_len_mm": scale_meta.get("cube_len_mm"),
+                "detected_cube_size_px": scale_meta.get("detected_cube_size_px"),
+                "computed_mm_per_px": scale_meta.get("computed_mm_per_px"),
+                "projection_mode": scale_meta.get("projection_mode"),
+                "cube_detection_method": scale_meta.get("cube_detection_method"),
+                "calibration_status": scale_meta.get("calibration_status"),
+                "calibration_error_percent": scale_meta.get("calibration_error_percent"),
+            })
+            continue
+        calibration_metadata.append(scale_meta)
+        kernel_size_px = _to_kernel_px(kernel_size_mm, mm_per_px)
 
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         h_img, w_img = bgr.shape[:2]
         thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
-
         # Use BINARY_THRESHOLD_VTK (150) for black-background VTK renders.
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
         contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
@@ -196,7 +254,7 @@ def compute_vtk_allmarks(
         # components after morph-close.
         inner_mask = np.zeros_like(bw)
         cv2.drawContours(inner_mask, inner_filtered, -1, 255, thickness=cv2.FILLED)
-        kernel = compute_kernel_convex(max(1, int(kernel_size)))
+        kernel = compute_kernel_convex(kernel_size_px)
         closed = cv2.morphologyEx(inner_mask, cv2.MORPH_CLOSE, kernel)
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
@@ -270,6 +328,7 @@ def compute_vtk_allmarks(
             mean_depth,                         # mean_depth_{unit}
             *per_class_cells,
             ])
+        kernel_px_values.append(kernel_size_px)
         # Accumulate
         sum_inner_mm += inner_perim_mm
         sum_outer_mm += outer_perim_mm
@@ -312,7 +371,7 @@ def compute_vtk_allmarks(
         overall_mean = (sum(total_depth) / overall_n) if overall_n else None
 
         results_rows = []
-        for r, dsets, png_path in zip(rows, slice_class_data, saved_pngs):
+        for r, dsets, png_path, kernel_px, cal_meta in zip(rows, slice_class_data, saved_pngs, kernel_px_values, calibration_metadata):
             idx, _ncont, area_u, inner_perim_u, outer_perim_u = r[:5]
             lgi = ((inner_perim_u / outer_perim_u)
                    if outer_perim_u else None)
@@ -321,6 +380,14 @@ def compute_vtk_allmarks(
             d = dsets if isinstance(dsets, dict) else {}
             results_rows.append({
                 "Section": idx,
+                "Kernel_px": int(kernel_px),
+                "cube_len_mm": cal_meta.get("cube_len_mm"),
+                "detected_cube_size_px": cal_meta.get("detected_cube_size_px"),
+                "computed_mm_per_px": cal_meta.get("computed_mm_per_px"),
+                "projection_mode": cal_meta.get("projection_mode"),
+                "cube_detection_method": cal_meta.get("cube_detection_method"),
+                "calibration_status": cal_meta.get("calibration_status"),
+                "calibration_error_percent": cal_meta.get("calibration_error_percent"),
                 "Area": area_u,
                 "Perimeter": inner_perim_u,
                 "LGI": lgi,
@@ -339,15 +406,22 @@ def compute_vtk_allmarks(
                     None, d.get("unclassified", []) or []),
                 "_section_link": png_path,
             })
+        results_rows.extend(invalid_calibration_rows)
 
         parameters = {
-            "Kernel size": int(kernel_size),
+            "Kernel size (mm)": float(kernel_size_mm),
+            "Kernel size (px)": (
+                f"per-slice, range {min(kernel_px_values)}-{max(kernel_px_values)}"
+                if kernel_px_values else None),
             "Pixel spacing": f"per-slice from cube ({unit}/pixel)",
             "Slice thickness": float(slice_thickness),
             "Filtered threshold": float(min_contour_area),
             "Slice direction": Slice_direction,
             "Contour mode": contour_mode,
             "Length unit": unit,
+            "projection_mode": "parallel",
+            "cube_detection_method": "HSV red mask + morphology + minAreaRect",
+            "calibration_status": "valid" if calibration_metadata else "no valid calibrated slices",
         }
         totals = {
             f"Volume ({unit}^3)": round(float(Volume), 4),
@@ -365,6 +439,16 @@ def compute_vtk_allmarks(
             folder=os.path.dirname(file_path) or None,
             parameters=parameters,
             rows=results_rows,
+            extra_columns=(
+                "Kernel_px",
+                "cube_len_mm",
+                "detected_cube_size_px",
+                "computed_mm_per_px",
+                "projection_mode",
+                "cube_detection_method",
+                "calibration_status",
+                "calibration_error_percent",
+            ),
             totals=totals,
             drop_empty_columns=True,
         )
@@ -385,7 +469,7 @@ def compute_vtk_lGI(
     file_path: str,
     out_dir: str,
     min_contour_area: float = 20.0,
-    kernel_size: int = 5,
+    kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM,
     Slice_direction: Literal["X", "Y", "Z"] = "Y",
     Physical_dim: Sequence[int] | None = None,
     unit: str = "mm",
@@ -397,7 +481,7 @@ def compute_vtk_lGI(
         file_path: Path to the ``.vtk`` file.
         out_dir: Output directory.
         min_contour_area: Minimum contour area (pixels) to keep.
-        kernel_size: Morph-close kernel diameter.
+        kernel_size_mm: Morph-close kernel diameter, in mm.
         Slice_direction: Axis to slice along.
         Physical_dim: Real-world ``[X, Y, Z]`` dimensions for unit scaling.
         unit: Label for output units.
@@ -458,12 +542,19 @@ def compute_vtk_lGI(
     sum_outer_mm = 0.0
     
     # --- Use a context manager so the plotter is *guaranteed* to be closed safely
-    p = pv.Plotter(off_screen=True)
+    p = pv.Plotter(off_screen=True, window_size=VTK_RENDER_WINDOW_SIZE)
     p.set_background("black")
+    p.parallel_projection = True
     
     pre_axis = (axis_index - 1) % 3
     next_axis = (axis_index + 1) % 3
     cube_len = max(1e-6, mesh_dim[0] / 10.0)
+    scale_cube_offset = max(mesh_dim[pre_axis], mesh_dim[next_axis])
+    physical_cube_len = cube_len * mesh_dim_scaled[0]
+    _require_scale_calibration(
+        p, Slice_direction, cube_len, physical_cube_len, mesh.center,
+        float(slice_positions[0]), scale_cube_offset,
+    )
 
     for idx, k in enumerate(slice_positions):
         # Cross-section slice
@@ -474,30 +565,32 @@ def compute_vtk_lGI(
             continue
 
         # Red cube reference (10% of X extent)
-        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, scale_cube_offset)
         
         plane = pv.Plane(center=origin,
                  direction=normal,  # plane normal
                  i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,  # side lengths
                  i_resolution=1, j_resolution=1)        # Render: section + scale cube
         p.clear()
-        p.add_mesh(section, color="#ffffff", opacity=1)
-        p.add_mesh(scale_cube, color="red")
-        {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]()
+        p.add_mesh(section, color="#ffffff", opacity=1, lighting=False)
+        p.add_mesh(scale_cube, color="red", lighting=False)
+        prepare_orthographic_slice_render(p, _view_fn(p, Slice_direction))
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = calc_scale(img_rgb, cube_len*mesh_dim_scaled[0])
+        mm_per_px, scale_meta, red_rect = calc_scale_with_metadata(img_rgb, physical_cube_len)
+        if mm_per_px is None:
+            print(f"[VTK Scale] Scale cube was not detected or failed validation. {scale_meta.get('calibration_status')}. Measurements for this slice were skipped.")
+            continue
+        kernel_size_px = _to_kernel_px(kernel_size_mm, mm_per_px)
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         h_img, w_img = bgr.shape[:2]
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
-
         # Binary for contours
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -514,7 +607,7 @@ def compute_vtk_lGI(
         # components after morph-close.
         inner_mask = np.zeros_like(bw)
         cv2.drawContours(inner_mask, inner_filtered, -1, 255, thickness=cv2.FILLED)
-        kernel = compute_kernel_convex(max(1, int(kernel_size)))
+        kernel = compute_kernel_convex(kernel_size_px)
         closed = cv2.morphologyEx(inner_mask, cv2.MORPH_CLOSE, kernel)
         outer_candidates, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         outer_filtered = [c for c in outer_candidates if cv2.contourArea(c) > float(min_contour_area)]
@@ -536,7 +629,7 @@ def compute_vtk_lGI(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
-        rows.append([idx, len(inner_filtered), inner_perim_mm, outer_perim_mm, GI_slice])
+        rows.append([idx, len(inner_filtered), kernel_size_px, inner_perim_mm, outer_perim_mm, GI_slice])
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
         plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         sections_list.append(section)
@@ -554,8 +647,9 @@ def compute_vtk_lGI(
         all_slices_mesh = pv.PolyData()
     # Save per-slice + total to Excel
     try:
-        rows.append(["GI",round(GI_total,2)])
-        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", f"Inner_Perimeter_{unit}", f"Outer_Perimeter_{unit}" ,"Sulci_lGI"])
+        rows.append(["GI", None, None, None, None, round(GI_total, 2)])
+        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", "Kernel_px", f"Inner_Perimeter_{unit}", f"Outer_Perimeter_{unit}", "Sulci_lGI"])
+        df.insert(0, "Kernel_size_mm", float(kernel_size_mm))
         
        
         
@@ -647,12 +741,19 @@ def compute_vtk_volume(
     sum_area = 0.0
     
     # --- Use a context manager so the plotter is *guaranteed* to be closed safely
-    p = pv.Plotter(off_screen=True)
+    p = pv.Plotter(off_screen=True, window_size=VTK_RENDER_WINDOW_SIZE)
     p.set_background("black")
+    p.parallel_projection = True
     
     pre_axis = (axis_index - 1) % 3
     next_axis = (axis_index + 1) % 3
     cube_len = max(1e-6, mesh_dim[0] / 10.0)
+    scale_cube_offset = max(mesh_dim[pre_axis], mesh_dim[next_axis])
+    physical_cube_len = cube_len * mesh_dim_scaled[0]
+    _require_scale_calibration(
+        p, Slice_direction, cube_len, physical_cube_len, mesh.center,
+        float(slice_positions[0]), scale_cube_offset,
+    )
 
     for idx, k in enumerate(slice_positions):
         # Cross-section slice
@@ -663,7 +764,7 @@ def compute_vtk_volume(
             continue
 
         # Red cube reference (10% of X extent)
-        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, scale_cube_offset)
         
         plane = pv.Plane(center=origin,
                  direction=normal,  # plane normal
@@ -671,15 +772,18 @@ def compute_vtk_volume(
                  i_resolution=1, j_resolution=1)
         # Render: section + scale cube
         p.clear()
-        p.add_mesh(section, color="#ffffff", opacity=1)
-        p.add_mesh(scale_cube, color="red")
-        {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]()
+        p.add_mesh(section, color="#ffffff", opacity=1, lighting=False)
+        p.add_mesh(scale_cube, color="red", lighting=False)
+        prepare_orthographic_slice_render(p, _view_fn(p, Slice_direction))
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = calc_scale(img_rgb, cube_len*mesh_dim_scaled[0])
+        mm_per_px, scale_meta, red_rect = calc_scale_with_metadata(img_rgb, physical_cube_len)
+        if mm_per_px is None:
+            print(f"[VTK Scale] Scale cube was not detected or failed validation. {scale_meta.get('calibration_status')}. Measurements for this slice were skipped.")
+            continue
 
 
         # Prepare masks / contours (pixel space)
@@ -687,8 +791,6 @@ def compute_vtk_volume(
         h_img, w_img = bgr.shape[:2]
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
-
         # Binary for contours
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
         contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
@@ -832,12 +934,19 @@ def compute_vtk_area(
     sum_inner_mm = 0.0
     
     # --- Use a context manager so the plotter is *guaranteed* to be closed safely
-    p = pv.Plotter(off_screen=True)
+    p = pv.Plotter(off_screen=True, window_size=VTK_RENDER_WINDOW_SIZE)
     p.set_background("black")
+    p.parallel_projection = True
     
     pre_axis = (axis_index - 1) % 3
     next_axis = (axis_index + 1) % 3
     cube_len = max(1e-6, mesh_dim[0] / 10.0)
+    scale_cube_offset = max(mesh_dim[pre_axis], mesh_dim[next_axis])
+    physical_cube_len = cube_len * mesh_dim_scaled[0]
+    _require_scale_calibration(
+        p, Slice_direction, cube_len, physical_cube_len, mesh.center,
+        float(slice_positions[0]), scale_cube_offset,
+    )
 
     for idx, k in enumerate(slice_positions):
         # Cross-section slice
@@ -848,30 +957,31 @@ def compute_vtk_area(
             continue
 
         # Red cube reference (10% of X extent)
-        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, scale_cube_offset)
         
         plane = pv.Plane(center=origin,
                  direction=normal,  # plane normal
                  i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,  # side lengths
                  i_resolution=1, j_resolution=1)        # Render: section + scale cube
         p.clear()
-        p.add_mesh(section, color="#ffffff", opacity=1)
-        p.add_mesh(scale_cube, color="red")
-        {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]()
+        p.add_mesh(section, color="#ffffff", opacity=1, lighting=False)
+        p.add_mesh(scale_cube, color="red", lighting=False)
+        prepare_orthographic_slice_render(p, _view_fn(p, Slice_direction))
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = calc_scale(img_rgb, cube_len*mesh_dim_scaled[0])
+        mm_per_px, scale_meta, red_rect = calc_scale_with_metadata(img_rgb, physical_cube_len)
+        if mm_per_px is None:
+            print(f"[VTK Scale] Scale cube was not detected or failed validation. {scale_meta.get('calibration_status')}. Measurements for this slice were skipped.")
+            continue
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         h_img, w_img = bgr.shape[:2]
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
-
         # Binary for contours
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1004,12 +1114,19 @@ def compute_vtk_sulci_depth(
     slice_class_data: list = []
 
     # --- Use a context manager so the plotter is *guaranteed* to be closed safely
-    p = pv.Plotter(off_screen=True)
+    p = pv.Plotter(off_screen=True, window_size=VTK_RENDER_WINDOW_SIZE)
     p.set_background("black")
+    p.parallel_projection = True
 
     pre_axis = (axis_index - 1) % 3
     next_axis = (axis_index + 1) % 3
     cube_len = max(1e-6, mesh_dim[0] / 10.0)
+    scale_cube_offset = max(mesh_dim[pre_axis], mesh_dim[next_axis])
+    physical_cube_len = cube_len * mesh_dim_scaled[0]
+    _require_scale_calibration(
+        p, Slice_direction, cube_len, physical_cube_len, mesh.center,
+        float(slice_positions[0]), scale_cube_offset,
+    )
 
     for idx, k in enumerate(slice_positions):
         # Cross-section slice
@@ -1020,30 +1137,31 @@ def compute_vtk_sulci_depth(
             continue
 
         # Red cube reference (10% of X extent)
-        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, scale_cube_offset)
 
         plane = pv.Plane(center=origin,
                  direction=normal,  # plane normal
                  i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,  # side lengths
                  i_resolution=1, j_resolution=1)        # Render: section + scale cube
         p.clear()
-        p.add_mesh(section, color="#ffffff", opacity=1)
-        p.add_mesh(scale_cube, color="red")
-        {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]()
+        p.add_mesh(section, color="#ffffff", opacity=1, lighting=False)
+        p.add_mesh(scale_cube, color="red", lighting=False)
+        prepare_orthographic_slice_render(p, _view_fn(p, Slice_direction))
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = calc_scale(img_rgb, cube_len*mesh_dim_scaled[0])
+        mm_per_px, scale_meta, red_rect = calc_scale_with_metadata(img_rgb, physical_cube_len)
+        if mm_per_px is None:
+            print(f"[VTK Scale] Scale cube was not detected or failed validation. {scale_meta.get('calibration_status')}. Measurements for this slice were skipped.")
+            continue
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         h_img, w_img = bgr.shape[:2]
         thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
-
         # Binary for contours
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1236,12 +1354,19 @@ def compute_compactness_vtk(parent,
     sum_area_mm2 = 0.0
 
     # --- Use a context manager so the plotter is *guaranteed* to be closed safely
-    p = pv.Plotter(off_screen=True)
+    p = pv.Plotter(off_screen=True, window_size=VTK_RENDER_WINDOW_SIZE)
     p.set_background("black")
+    p.parallel_projection = True
 
     pre_axis = (axis_index - 1) % 3
     next_axis = (axis_index + 1) % 3
     cube_len = max(1e-6, mesh_dim[0] / 10.0)
+    scale_cube_offset = max(mesh_dim[pre_axis], mesh_dim[next_axis])
+    physical_cube_len = cube_len * mesh_dim_scaled[0]
+    _require_scale_calibration(
+        p, Slice_direction, cube_len, physical_cube_len, mesh.center,
+        float(slice_positions[0]), scale_cube_offset,
+    )
 
     for idx, k in enumerate(slice_positions):
         # Cross-section slice
@@ -1252,30 +1377,31 @@ def compute_compactness_vtk(parent,
             continue
 
         # Red cube reference (10% of X extent)
-        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, mesh_dim[pre_axis]/2)
+        scale_cube = make_scale_cube(Slice_direction, cube_len, mesh.center, k, scale_cube_offset)
 
         plane = pv.Plane(center=origin,
                  direction=normal,  # plane normal
                  i_size=mesh_dim[pre_axis]*1.5, j_size=mesh_dim[next_axis]*1.5,  # side lengths
                  i_resolution=1, j_resolution=1)        # Render: section + scale cube
         p.clear()
-        p.add_mesh(section, color="#ffffff", opacity=1)
-        p.add_mesh(scale_cube, color="red")
-        {"X": p.view_yz, "Y": p.view_xz, "Z": p.view_xy}[Slice_direction]()
+        p.add_mesh(section, color="#ffffff", opacity=1, lighting=False)
+        p.add_mesh(scale_cube, color="red", lighting=False)
+        prepare_orthographic_slice_render(p, _view_fn(p, Slice_direction))
 
         # Screenshot (array for processing, file for debugging)
         img_rgb = p.screenshot(return_img=True, filename=os.path.join(out_dir_origin, f"image_{idx:03d}.png"))
 
         # Compute mm/px scale from the red cube
-        mm_per_px = calc_scale(img_rgb, cube_len*mesh_dim_scaled[0])
+        mm_per_px, scale_meta, red_rect = calc_scale_with_metadata(img_rgb, physical_cube_len)
+        if mm_per_px is None:
+            print(f"[VTK Scale] Scale cube was not detected or failed validation. {scale_meta.get('calibration_status')}. Measurements for this slice were skipped.")
+            continue
 
         # Prepare masks / contours (pixel space)
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         h_img, w_img = bgr.shape[:2]
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        red_rect = np.where((img_rgb[:, :, 0] > RED_CHANNEL_MIN) & (img_rgb[:, :, 1] < GREEN_CHANNEL_MAX), 255, 0).astype("uint8")
-
         # Binary for contours
         _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
         contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
