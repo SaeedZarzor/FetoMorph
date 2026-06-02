@@ -69,6 +69,8 @@ def process_on_images_batch(directory_path,
     saved_pngs = []
     total_depth: list = []
     slice_class_data: list = []
+    lgi_per_image: list[float] = []
+    compactness_per_image: list[float] = []
     count = 0
     out_dir_Batch = os.path.join(out_dir, "image_Batch")
     os.makedirs(out_dir_Batch, exist_ok=True)
@@ -229,42 +231,93 @@ def process_on_images_batch(directory_path,
             per_class_cells = [None] * len(sulcus_export_columns(unit))
             slice_class_data.append(None)
 
-        sheet1.append([
-            file_name, slice_kind, area, perimeter, perimeter_convex,
-            perimeter_rate, compactness,
-            len(depth),
-            (min(depth) if depth else None),
-            (max(depth) if depth else None),
-            mean_depth,
-            *per_class_cells,
-        ])
+        if perimeter_convex > 0:
+            lgi_per_image.append(perimeter_rate)
+        if compactness is not None:
+            compactness_per_image.append(compactness)
 
+        # Per-image row carries the values the spec-layout writer
+        # reads (area / perimeters / per-class depth sets).
+        sheet1.append({
+            "file_name": file_name,
+            "area": area,
+            "perimeter": perimeter,
+            "perimeter_convex": perimeter_convex,
+            "lgi": perimeter_rate if perimeter_convex > 0 else None,
+            "compactness": compactness,
+            "depth_sets": depth_sets if use_percent_filter else {},
+            "png_path": new_path,
+        })
 
-    base_cols = [
-        'File', 'SliceKind', 'area', 'perimeter', 'perimeter_convex',
-        'LGI', 'Compactness',
-        'Sulci_count', f'min_depth_{unit}', f'max_depth_{unit}', f'mean_depth_{unit}',
-    ]
-    per_class_cols = sulcus_export_columns(unit)
-    cols = base_cols + per_class_cols
-    total_width = len(cols)
+    # Write the per-image table + parameters + aggregates using the
+    # shared spec layout (Results / Parameters / Mean results / Totals /
+    # footer). Section cells become internal links to embedded
+    # annotated-image tabs so Excel does not raise its external-link
+    # security prompt.
+    try:
+        from helpers.results_excel_format import (
+            ResultsSheet, write_results_workbook, subtype_mean,
+        )
 
-    overall_depth_sets = empty_depth_sets()
-    for dsets in slice_class_data:
-        if dsets is None:
-            continue
-        for k in SULCUS_CLASSES:
-            overall_depth_sets[k].extend(dsets.get(k, []))
+        results_rows = []
+        for r in sheet1:
+            d = r["depth_sets"] or {}
+            results_rows.append({
+                "Section": r["file_name"],
+                "Area": r["area"],
+                "Perimeter": r["perimeter"],
+                "LGI": r["lgi"],
+                "Compactness": r["compactness"],
+                "PrimarySulciCount": len(d.get("primary", []) or []),
+                "SecondarySulciCount": len(d.get("secondary", []) or []),
+                "TertiarySulciCount": len(d.get("tertiary", []) or []),
+                "UnclassifiedSulciCount": len(d.get("unclassified", []) or []),
+                "PrimaryMeanDepth": subtype_mean(
+                    None, d.get("primary", []) or []),
+                "SecondaryMeanDepth": subtype_mean(
+                    None, d.get("secondary", []) or []),
+                "TertiaryMeanDepth": subtype_mean(
+                    None, d.get("tertiary", []) or []),
+                "UnclassifiedMeanDepth": subtype_mean(
+                    None, d.get("unclassified", []) or []),
+                "_section_link": r["png_path"],
+            })
 
+        parameters = {
+            "Kernel size": int(kernel_size),
+            "Pixel spacing": f"{pixel_size} {unit}/pixel",
+            "Filtered threshold": float(cnt_threshold),
+            "Length unit": unit,
+        }
+        totals: dict = {}
+        if lgi_per_image:
+            totals["LGI (mean across images)"] = round(
+                sum(lgi_per_image) / len(lgi_per_image), 4)
+        if compactness_per_image:
+            totals["Compactness (mean across images)"] = round(
+                sum(compactness_per_image) / len(compactness_per_image), 4)
+        overall_n = len(total_depth)
+        if overall_n:
+            totals["Total sulci count"] = int(overall_n)
+            totals[f"Mean sulci depth ({unit})"] = round(
+                sum(total_depth) / overall_n, 4)
 
-    sheet1.append(pad_row(['PixelSize:', pixel_size], total_width))
-    sheet1.append(pad_row(['PixelSizeUnits:', unit], total_width))
-    sheet1.append(pad_row(['KernelSize:', kernel_size], total_width))
-    fd = pd.DataFrame(data=sheet1, columns=cols)
-    fd = drop_empty_columns(fd)
+        sheet = ResultsSheet(
+            sheet_name=os.path.basename(directory_path) or "Batch",
+            file_name=os.path.basename(directory_path.rstrip(os.sep))
+                or "(batch)",
+            folder=os.path.dirname(directory_path.rstrip(os.sep)) or None,
+            parameters=parameters,
+            rows=results_rows,
+            totals=totals if totals else None,
+            drop_empty_columns=True,
+        )
+        xlsx_path = os.path.join(out_dir, "Batch_Allmarks.xlsx")
+        write_results_workbook(xlsx_path, [sheet])
+        print(f"[Process Batch] Saved Excel → {xlsx_path}")
+    except Exception as ex:
+        print(f"[Process Batch] WARN: could not save Excel: {ex}")
 
-    xlsx_path = os.path.join(out_dir, "Batch_Allmarks.xlsx")
-    fd.to_excel(xlsx_path, index=False)
     print(f"[Process Batch] {count} images in {directory_path} have been processed")
     return valid_slices, saved_pngs
     

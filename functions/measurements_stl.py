@@ -324,48 +324,71 @@ def compute_stl_allmarks(
     else:
         all_slices_mesh = pv.PolyData()
 
-    # Save per-slice + total to Excel
+    # Save per-slice + totals to Excel using the shared spec layout.
     try:
-        per_class_cols = sulcus_export_columns("mm")
-        base_cols = [
-            "Slice", "SliceKind", "Count_of_cont.", "Inner_area_mm^2",
-            "Inner_Perimeter_mm", "Outer_Perimeter_mm", "Sulci_count",
-            "min_depth_mm", "max_depth_mm", "mean_depth_mm",
-        ]
-        total_width = len(base_cols) + len(per_class_cols)
-
-        overall_depth_sets = empty_depth_sets()
-        for dsets in slice_class_data:
-            if dsets is None:
-                continue
-            for k in SULCUS_CLASSES:
-                overall_depth_sets[k].extend(dsets.get(k, []))
+        from helpers.results_excel_format import (
+            ResultsSheet, write_results_workbook, subtype_mean,
+        )
 
         overall_n = len(total_depth_mm)
-        overall_min = min(total_depth_mm) if total_depth_mm else None
-        overall_max = max(total_depth_mm) if total_depth_mm else None
         overall_mean = (sum(total_depth_mm) / overall_n) if overall_n else None
 
-        summary_base = [None] * len(base_cols)
-        summary_base[0] = "Sulci_overall_summary"
-        summary_base[base_cols.index("Sulci_count")]   = overall_n
-        summary_base[base_cols.index("min_depth_mm")]  = overall_min
-        summary_base[base_cols.index("max_depth_mm")]  = overall_max
-        summary_base[base_cols.index("mean_depth_mm")] = overall_mean
-        rows.append(pad_row(
-            [*summary_base, *sulcus_export_cells(overall_depth_sets)],
-            total_width,
-        ))
+        results_rows = []
+        for r, dsets, png_path in zip(rows, slice_class_data, saved_pngs):
+            idx, _kind, _ncont, area_mm, inner_perim_mm, outer_perim_mm = r[:6]
+            lgi = ((inner_perim_mm / outer_perim_mm)
+                   if outer_perim_mm else None)
+            compact = (compactness_2D(area_mm, inner_perim_mm)
+                       if inner_perim_mm else None)
+            d = dsets if isinstance(dsets, dict) else {}
+            results_rows.append({
+                "Section": idx,
+                "Area": area_mm,
+                "Perimeter": inner_perim_mm,
+                "LGI": lgi,
+                "Compactness": compact,
+                "PrimarySulciCount": len(d.get("primary", []) or []),
+                "SecondarySulciCount": len(d.get("secondary", []) or []),
+                "TertiarySulciCount": len(d.get("tertiary", []) or []),
+                "UnclassifiedSulciCount": len(d.get("unclassified", []) or []),
+                "PrimaryMeanDepth": subtype_mean(
+                    None, d.get("primary", []) or []),
+                "SecondaryMeanDepth": subtype_mean(
+                    None, d.get("secondary", []) or []),
+                "TertiaryMeanDepth": subtype_mean(
+                    None, d.get("tertiary", []) or []),
+                "UnclassifiedMeanDepth": subtype_mean(
+                    None, d.get("unclassified", []) or []),
+                "_section_link": png_path,
+            })
 
-        rows.append(pad_row(["Volume cm^3", round(brain_volume, 2), "Surface Area cm^2", round(Area, 2)], total_width))
-        rows.append(pad_row(["GI", round(GI_total, 2)], total_width))
-        rows.append(pad_row(["Compactness", round(comp_3D, 2)], total_width))
-
-        df = pd.DataFrame(rows, columns=base_cols + per_class_cols)
-        df = drop_empty_columns(df)
-
+        parameters = {
+            "Kernel size": int(kernel_size),
+            "Pixel spacing": "0.1 mm/pixel (rendering); per-slice from cube",
+            "Slice thickness": float(slice_thickness),
+            "Filtered threshold": float(min_contour_area),
+            "Slice direction": Slice_direction,
+        }
+        totals = {
+            "Volume (cm^3)": round(float(brain_volume), 2),
+            "Surface Area (cm^2)": round(float(Area), 2),
+            "GI": round(float(GI_total), 4),
+            "Compactness": round(float(comp_3D), 4),
+            "Total sulci count": int(overall_n),
+            "Mean sulci depth (mm)": (round(float(overall_mean), 3)
+                                       if overall_mean is not None else None),
+        }
+        sheet = ResultsSheet(
+            sheet_name=os.path.basename(file_path) or "Results",
+            file_name=os.path.basename(file_path),
+            folder=os.path.dirname(file_path) or None,
+            parameters=parameters,
+            rows=results_rows,
+            totals=totals,
+            drop_empty_columns=True,
+        )
         xlsx_path = os.path.join(out_dir, "Mesh_Allmarks.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
         print(f"[STL All Hallmarks] Saved Excel → {xlsx_path}")
     except Exception as ex:
         print(f"[STL All Hallmarks] WARN: could not save Excel: {ex}")

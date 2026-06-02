@@ -18,6 +18,7 @@ from deps import *
 from scipy.ndimage import binary_opening, binary_closing, label
 from nibabel.affines import apply_affine
 from helpers.helpers import (
+    compactness_2D,
     compute_kernel_convex,
     defect_mm_per_px_and_fixed,
     image_annotation_style,
@@ -262,45 +263,78 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
         # Convert depth values from mm to cm for reporting.
         total_depth = [x / 10 for x in total_depth]
 
-        # Build the integrated Sulci_overall_summary row.
-        base_cols = [
-            "Slice", "Inner_area_mm^2", "Inner_Perimeter_mm", "Outer_Perimeter_mm",
-            "Sulci_count", "min_depth_mm", "max_depth_mm", "mean_depth_mm",
-        ]
-        per_class_cols = sulcus_export_columns("mm")
-        cols = base_cols + per_class_cols
-        total_width = len(cols)
+        # Save per-slice + totals to Excel using the shared spec layout.
+        try:
+            from helpers.results_excel_format import (
+                ResultsSheet, write_results_workbook, subtype_mean,
+            )
 
-        overall_depth_sets = empty_depth_sets()
-        for dsets in slice_class_data:
-            if dsets is None:
-                continue
-            for k in SULCUS_CLASSES:
-                overall_depth_sets[k].extend(dsets.get(k, []))
+            overall_n = len(total_depth_mm)
+            overall_mean = ((sum(total_depth_mm) / overall_n)
+                            if overall_n else None)
 
-        overall_n = len(total_depth_mm)
-        overall_min = min(total_depth_mm) if total_depth_mm else None
-        overall_max = max(total_depth_mm) if total_depth_mm else None
-        overall_mean = (sum(total_depth_mm) / overall_n) if overall_n else None
+            results_rows = []
+            for r, dsets, png_path in zip(
+                    sheet1, slice_class_data, saved_pngs):
+                idx, slice_area_mm, inner_perim_mm, outer_perim_mm = r[:4]
+                lgi = ((inner_perim_mm / outer_perim_mm)
+                       if outer_perim_mm else None)
+                compact = (compactness_2D(slice_area_mm, inner_perim_mm)
+                           if inner_perim_mm else None)
+                d = dsets if isinstance(dsets, dict) else {}
+                results_rows.append({
+                    "Section": int(idx),
+                    "Area": slice_area_mm,
+                    "Perimeter": inner_perim_mm,
+                    "LGI": lgi,
+                    "Compactness": compact,
+                    "PrimarySulciCount": len(d.get("primary", []) or []),
+                    "SecondarySulciCount": len(d.get("secondary", []) or []),
+                    "TertiarySulciCount": len(d.get("tertiary", []) or []),
+                    "UnclassifiedSulciCount":
+                        len(d.get("unclassified", []) or []),
+                    "PrimaryMeanDepth": subtype_mean(
+                        None, d.get("primary", []) or []),
+                    "SecondaryMeanDepth": subtype_mean(
+                        None, d.get("secondary", []) or []),
+                    "TertiaryMeanDepth": subtype_mean(
+                        None, d.get("tertiary", []) or []),
+                    "UnclassifiedMeanDepth": subtype_mean(
+                        None, d.get("unclassified", []) or []),
+                    "_section_link": png_path,
+                })
 
-        summary_base = [None] * len(base_cols)
-        summary_base[0] = "Sulci_overall_summary"
-        summary_base[base_cols.index("Sulci_count")]    = overall_n
-        summary_base[base_cols.index("min_depth_mm")]   = overall_min
-        summary_base[base_cols.index("max_depth_mm")]   = overall_max
-        summary_base[base_cols.index("mean_depth_mm")]  = overall_mean
-        sheet1.append(pad_row(
-            [*summary_base, *sulcus_export_cells(overall_depth_sets)],
-            total_width,
-        ))
-
-        sheet1.append(pad_row(["Volume cm^3", round(brain_volume, 2), "Surface Area cm^2", round(Area, 2)], total_width))
-        sheet1.append(pad_row(["GI", round(GI_total, 2)], total_width))
-
-        df = pd.DataFrame(sheet1, columns=cols)
-        df = drop_empty_columns(df)
-        xlsx_path = os.path.join(out_dir, "Brain_Allmarks.xlsx")
-        df.to_excel(xlsx_path, index=False)
+            parameters = {
+                "Kernel size": int(kernel_size),
+                "Pixel spacing": (
+                    f"{float(pixel_size_x):.4f} × {float(pixel_size_z):.4f} mm "
+                    "(in-plane)"),
+                "Slice thickness": float(pixel_size_y),
+                "Filtered threshold": float(min_contour_area),
+            }
+            totals = {
+                "Volume (cm^3)": round(float(brain_volume), 2),
+                "Surface Area (cm^2)": round(float(Area), 2),
+                "GI": round(float(GI_total), 4),
+                "Total sulci count": int(overall_n),
+                "Mean sulci depth (mm)": (round(float(overall_mean), 3)
+                                           if overall_mean is not None
+                                           else None),
+            }
+            sheet = ResultsSheet(
+                sheet_name=os.path.basename(file_path) or "Results",
+                file_name=os.path.basename(file_path),
+                folder=os.path.dirname(file_path) or None,
+                parameters=parameters,
+                rows=results_rows,
+                totals=totals,
+                drop_empty_columns=True,
+            )
+            xlsx_path = os.path.join(out_dir, "Brain_Allmarks.xlsx")
+            write_results_workbook(xlsx_path, [sheet])
+            print(f"[NIfTI All hallmarks] Saved Excel → {xlsx_path}")
+        except Exception as ex:
+            print(f"[NIfTI All hallmarks] WARN: could not save Excel: {ex}")
             
 
         # Step 3: Apply Mask & Save Extracted Brain NIfTI
