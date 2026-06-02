@@ -869,4 +869,113 @@ def compactness_2D(area: float, perimeter: float) -> float:
 def compactness_3D(volume: float, surface_area: float) -> float:
     if surface_area == 0:
         return 0
-    return (36 * 3.141592653589793 * (volume ** 2)) / (surface_area ** 3)
+    comp = (36 * 3.141592653589793 * (volume ** 2)) / (surface_area ** 3)
+    if comp > 1.0:
+        print(f"[Compactness 3D] WARN: compactness {comp:.4f} > 1.0 — surface area is likely "
+              f"underestimated relative to volume (check unit consistency).")
+    return comp
+
+
+SURFACE_AREA_METHOD = "frustum_with_caps"
+
+
+def frustum_surface_area(slices, *, legacy_slice_thickness: float | None = None):
+    """Estimate an outer surface area from a stack of cross-sections.
+
+    Models the solid between consecutive slices as a conical frustum: each
+    lateral band is ``((P_i + P_{i+1})/2) × slant`` where the slant height
+    ``√(Δh² + (r_{i+1}-r_i)²)`` uses equivalent radii ``r = √(A/π)`` to correct
+    for the slope of the outer envelope between slices. Top and bottom cap
+    areas (the first and last cross-sections) are added.
+
+    Args:
+        slices: Iterable of ``(h_i, P_i, A_i)`` — slice position, perimeter,
+            and cross-sectional area. Positions/perimeters/areas must share a
+            consistent unit (e.g. mm, mm, mm²). Only slices with ``A>0``,
+            ``P>0`` and a finite position are used.
+        legacy_slice_thickness: If given, also report the old stack-of-slabs
+            lateral area ``Σ P_i × thickness`` under ``surface_area_lateral_old``.
+
+    Returns:
+        ``(S_total, metadata)`` where ``S_total`` is in the same area unit as
+        ``A`` (``None`` if no valid slices). ``metadata`` carries the spec keys
+        plus a ``warnings`` list.
+    """
+    meta = {
+        "surface_area_method": SURFACE_AREA_METHOD,
+        "number_of_valid_slices": 0,
+        "surface_area_frustum_lateral": None,
+        "surface_area_caps": None,
+        "surface_area_frustum_total": None,
+        "surface_area_lateral_old": None,
+        "top_cap_area": None,
+        "bottom_cap_area": None,
+        "slice_spacing_mode": None,
+        "warnings": [],
+    }
+
+    valid = []
+    for item in slices:
+        h, P, A = item
+        if h is None or P is None or A is None:
+            continue
+        if not (np.isfinite(h) and np.isfinite(P) and np.isfinite(A)):
+            continue
+        if A > 0 and P > 0:
+            valid.append((float(h), float(P), float(A)))
+
+    meta["number_of_valid_slices"] = len(valid)
+    if not valid:
+        meta["warnings"].append(
+            "No valid slices (area>0, perimeter>0, finite position); surface area undefined.")
+        return None, meta
+
+    valid.sort(key=lambda t: t[0])
+    hs = [t[0] for t in valid]
+    Ps = [t[1] for t in valid]
+    As = [t[2] for t in valid]
+    rs = [float(np.sqrt(A / np.pi)) for A in As]
+
+    if legacy_slice_thickness is not None:
+        meta["surface_area_lateral_old"] = sum(Ps) * float(legacy_slice_thickness)
+
+    meta["top_cap_area"] = As[0]
+    meta["bottom_cap_area"] = As[-1]
+
+    if len(valid) == 1:
+        total = 2.0 * As[0]
+        meta.update({
+            "surface_area_frustum_lateral": 0.0,
+            "surface_area_caps": total,
+            "surface_area_frustum_total": total,
+            "slice_spacing_mode": "single_slice",
+        })
+        meta["warnings"].append(
+            "Only one valid slice was available; frustum lateral surface could not be "
+            "computed. Returned 2×A_first as the surface area.")
+        return total, meta
+
+    dhs = [hs[i + 1] - hs[i] for i in range(len(hs) - 1)]
+    if not all(d > 0 for d in dhs):
+        meta["warnings"].append(
+            "Slice positions are not strictly increasing after sorting; spacing may be degenerate.")
+    dh0 = dhs[0]
+    uniform = all(abs(d - dh0) <= 1e-6 * max(abs(dh0), 1.0) for d in dhs)
+    meta["slice_spacing_mode"] = "uniform" if uniform else "nonuniform"
+
+    lateral = 0.0
+    for i in range(len(valid) - 1):
+        dh = hs[i + 1] - hs[i]
+        slant = float(np.sqrt(dh * dh + (rs[i + 1] - rs[i]) ** 2))
+        lateral += ((Ps[i] + Ps[i + 1]) / 2.0) * slant
+
+    caps = As[0] + As[-1]
+    total = lateral + caps
+    meta.update({
+        "surface_area_frustum_lateral": lateral,
+        "surface_area_caps": caps,
+        "surface_area_frustum_total": total,
+    })
+    if total <= 0:
+        meta["warnings"].append("Computed total surface area ≤ 0.")
+    return total, meta

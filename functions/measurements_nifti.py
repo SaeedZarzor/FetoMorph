@@ -20,6 +20,7 @@ from nibabel.affines import apply_affine
 from helpers.helpers import (
     compactness_2D,
     compute_kernel_convex,
+    frustum_surface_area,
     defect_mm_per_px_and_fixed,
     image_annotation_style,
     SULCUS_CLASS_COLORS,
@@ -33,10 +34,14 @@ from helpers.helpers import (
     pad_row,
     drop_empty_columns,
 )
-from constants import DEFECT_FIXED_POINT, SULCUS_TERTIARY_MIN_FRACTION, SULCUS_PRIMARY_MAX_FRACTION
+from constants import DEFAULT_KERNEL_SIZE_MM, DEFECT_FIXED_POINT, SULCUS_TERTIARY_MIN_FRACTION, SULCUS_PRIMARY_MAX_FRACTION
 
 logger = logging.getLogger("fetomorph.nifti")
 
+
+def _to_kernel_px(kernel_size_mm: float, pixel_size_mm: float) -> int:
+    px = max(3, int(round(float(kernel_size_mm) / max(float(pixel_size_mm), 1e-9))))
+    return px
 
 
 def compute_nifti_dims(brain_mask: np.ndarray, affine: np.ndarray) -> list[float]:
@@ -81,7 +86,7 @@ def compute_nifti_dims(brain_mask: np.ndarray, affine: np.ndarray) -> list[float
 
 
 
-def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: set[int],min_contour_area: float=30, kernel_size: int=5, ):
+def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: set[int], min_contour_area: float = 30, kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM):
     """Compute all hallmarks (volume, area, GI, sulci depths) from a NIfTI segmentation.
 
     Iterates over coronal slices (axis 1), extracts inner/outer contours,
@@ -94,7 +99,7 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
         out_dir: Output directory for slice PNGs and Excel.
         valid_labels: Set of integer segmentation labels to include.
         min_contour_area: Minimum contour area (pixels) to keep.
-        kernel_size: Morph-close kernel diameter for outer contour.
+        kernel_size_mm: Morph-close kernel diameter for outer contour, in mm.
 
     Returns:
         Tuple of ``(dims_cm, area_cm2, volume_cm3, GI, depths, saved_pngs, valid_slices)``
@@ -117,6 +122,7 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
     # Voxel face area in the coronal plane (X × Z) — used to convert
     # pixel counts to physical mm² per slice.
     pixel_area_mm2 = pixel_size_x* pixel_size_z
+    kernel_size_px = _to_kernel_px(kernel_size_mm, max(pixel_size_x, pixel_size_z))
 
     if not valid_labels:
         print(" [NIfTI All hallmarks] Warning: None of the selected regions are present in this NIfTI file!")
@@ -144,6 +150,7 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
     sheet1=[]
     sum_area = 0
     sum_inner,sum_outer = 0, 0
+    frustum_slices: list[tuple[float, float, float]] = []  # (h_mm, perimeter_mm, area_mm2)
     valid_slices = []
     saved_pngs = []
     total_depth = []
@@ -175,7 +182,7 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
             # outer components after morph-close.
             inner_mask_only = np.zeros_like(slice_mask)
             cv2.drawContours(inner_mask_only, filtered_contours, -1, 1, thickness=cv2.FILLED)
-            closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
+            closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size_px))
             outer_contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             filtered_outer_contours = [cnt for cnt in outer_contours if cv2.contourArea(cnt) > min_contour_area]
             outer_cnt_mm = [cnt.astype(np.float32) * [pixel_size_x, pixel_size_z] for cnt in filtered_outer_contours]
@@ -184,6 +191,8 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
             # Save perimeters
             sum_inner += inner_perimeter
             sum_outer += outer_perimeter
+            # Frustum surface: slice position (mm) = idx × slice spacing.
+            frustum_slices.append((float(idx) * pixel_size_y, inner_perimeter, slice_area))
             GI_slice = inner_perimeter / outer_perimeter if outer_perimeter > 0 else 0
                 
             # Create a grayscale image for visualization
@@ -253,9 +262,13 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
         # Volume integration: sum of slice areas (mm²) × slice spacing (mm) → mm³,
         # then /1000 → cm³.
         brain_volume = (sum_area * pixel_size_y)/1000
-        # Surface area: sum of inner perimeters (mm) × slice spacing → mm²,
-        # then /100 → cm².
-        Area = sum_inner * pixel_size_y /100
+        # Surface area: frustum-with-caps approximation (mm²), then /100 → cm².
+        # Legacy stack-of-slabs lateral area is kept in sa_meta for comparison.
+        sa_total_mm2, sa_meta = frustum_surface_area(
+            frustum_slices, legacy_slice_thickness=pixel_size_y)
+        for w in sa_meta["warnings"]:
+            print(f"[NIfTI All hallmarks] WARN: {w}")
+        Area = (sa_total_mm2 / 100) if sa_total_mm2 is not None else 0.0
         GI_total = sum_inner / sum_outer if sum_outer > 0 else 0
         # Snapshot mm-unit depths for the per-mm Excel summary row before
         # the in-place cm conversion below.
@@ -305,12 +318,31 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                 })
 
             parameters = {
-                "Kernel size": int(kernel_size),
+                "Kernel size (mm)": float(kernel_size_mm),
+                "Kernel size (px)": int(kernel_size_px),
                 "Pixel spacing": (
                     f"{float(pixel_size_x):.4f} × {float(pixel_size_z):.4f} mm "
                     "(in-plane)"),
                 "Slice thickness": float(pixel_size_y),
                 "Filtered threshold": float(min_contour_area),
+                "surface_area_method": sa_meta["surface_area_method"],
+                "surface_area_frustum_total (cm^2)": (
+                    round(sa_meta["surface_area_frustum_total"] / 100, 4)
+                    if sa_meta["surface_area_frustum_total"] is not None else None),
+                "surface_area_frustum_lateral (cm^2)": (
+                    round(sa_meta["surface_area_frustum_lateral"] / 100, 4)
+                    if sa_meta["surface_area_frustum_lateral"] is not None else None),
+                "surface_area_caps (cm^2)": (
+                    round(sa_meta["surface_area_caps"] / 100, 4)
+                    if sa_meta["surface_area_caps"] is not None else None),
+                "top_cap_area (cm^2)": (
+                    round(sa_meta["top_cap_area"] / 100, 4)
+                    if sa_meta["top_cap_area"] is not None else None),
+                "bottom_cap_area (cm^2)": (
+                    round(sa_meta["bottom_cap_area"] / 100, 4)
+                    if sa_meta["bottom_cap_area"] is not None else None),
+                "number_of_valid_slices": int(sa_meta["number_of_valid_slices"]),
+                "slice_spacing_mode": sa_meta["slice_spacing_mode"],
             }
             totals = {
                 "Volume (cm^3)": round(float(brain_volume), 2),
@@ -611,7 +643,7 @@ def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[
     
     
 
-def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30, kernel_size: int=5):
+def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30, kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM):
     """Compute the gyrification index (GI) from a NIfTI segmentation.
 
     GI = total inner perimeter / total outer perimeter across all coronal
@@ -624,7 +656,7 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
         out_dir: Output directory for slice PNGs and Excel.
         valid_labels: Set of integer segmentation labels to include.
         min_contour_area: Minimum contour area (pixels) to keep.
-        kernel_size: Morph-close kernel diameter.
+        kernel_size_mm: Morph-close kernel diameter, in mm.
 
     Returns:
         Tuple of ``(GI_total, saved_pngs, valid_slices)`` or ``None``.
@@ -639,6 +671,7 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
 
     # Extract pixel size
     pixel_size_x, pixel_size_y, pixel_size_z = voxel_size[:3]
+    kernel_size_px = _to_kernel_px(kernel_size_mm, max(pixel_size_x, pixel_size_z))
 
     print(f"[NIfTI lGI] voxel size: {pixel_size_x:.4f} x {pixel_size_y:.4f} x {pixel_size_z:.4f} mm")
 
@@ -708,7 +741,7 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
             # outer components after morph-close.
             inner_mask_only = np.zeros_like(slice_mask)
             cv2.drawContours(inner_mask_only, filtered_contours, -1, 1, thickness=cv2.FILLED)
-            closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
+            closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size_px))
             outer_contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             filtered_outer_contours = [cnt for cnt in outer_contours if cv2.contourArea(cnt) > min_contour_area]
             outer_cnt_mm = [cnt.astype(np.float32) * [pixel_size_x, pixel_size_z] for cnt in filtered_outer_contours]
@@ -747,7 +780,7 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
 #                    cv2.drawContours(contour_image, [hull_draw], -1, (0, 255, 0), 1)  # Green convex hull
 
                 
-            sheet1.append([idx, inner_perimeter, outer_perimeter])
+            sheet1.append([idx, kernel_size_px, inner_perimeter, outer_perimeter, GI_slice])
                     
             slice_path = os.path.join(out_dir_slices, f"brain_slice_{idx:03d}.png")
             cv2.imwrite(slice_path, annotated)
@@ -760,9 +793,10 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
         GI_total = sum_inner / sum_outer if sum_outer > 0 else 0
 
 
-        sheet1.append(["GI",round(GI_total,2)])
+        sheet1.append(["GI", None, None, None, round(GI_total, 2)])
 
-        df = pd.DataFrame(sheet1, columns=["Slice", "Inner_Perimeter_mm", "Outer_Perimeter_mm"])
+        df = pd.DataFrame(sheet1, columns=["Slice", "Kernel_px", "Inner_Perimeter_mm", "Outer_Perimeter_mm", "GI"])
+        df.insert(0, "Kernel_size_mm", float(kernel_size_mm))
         xlsx_path = os.path.join(out_dir, "Brain_lGI.xlsx")
         df.to_excel(xlsx_path, index=False)
             
@@ -986,5 +1020,3 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
     else:
         QMessageBox.information(parent, "[NIfTI Sulci depth]", "All slices were filtered out (too small).")
         return
-
-

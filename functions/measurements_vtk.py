@@ -27,6 +27,7 @@ from helpers.helpers import (
     validate_scale_cube_sanity,
     compactness_3D,
     compactness_2D,
+    frustum_surface_area,
     image_annotation_style,
     SULCUS_CLASS_COLORS,
     SULCUS_CLASSES,
@@ -932,7 +933,9 @@ def compute_vtk_area(
     sections_list: list[pv.PolyData] = []
     rows = []
     sum_inner_mm = 0.0
-    
+    frustum_slices: list[tuple[float, float, float]] = []  # (h_phys, perimeter, area) in `unit`
+    axis_scale = float(mesh_dim_scaled[axis_index])  # mesh units → physical units along slice axis
+
     # --- Use a context manager so the plotter is *guaranteed* to be closed safely
     p = pv.Plotter(off_screen=True, window_size=VTK_RENDER_WINDOW_SIZE)
     p.set_background("black")
@@ -993,10 +996,17 @@ def compute_vtk_area(
         inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) > float(min_contour_area)]
         cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
-        # Perimeters (mm)
+        # Perimeters (physical `unit`)
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
         inner_perim_mm = inner_perim_px * mm_per_px
         sum_inner_mm += inner_perim_mm
+
+        # Cross-sectional area (physical unit²) and physical slice position for
+        # the frustum surface approximation. `k` is in mesh units, so scale it
+        # onto the physical axis to match the area/perimeter units.
+        inner_area_px = sum(cv2.contourArea(c) for c in inner_filtered)
+        inner_area_phys = inner_area_px * (mm_per_px ** 2)
+        frustum_slices.append((float(k) * axis_scale, inner_perim_mm, inner_area_phys))
 
         # Save annotated slice
         slice_path = os.path.join(out_dir_slices, f"slice_{idx:03d}.png")
@@ -1010,8 +1020,17 @@ def compute_vtk_area(
         sections_list.append(plane)
     # ---- end with: plotter is fully and safely closed here ----
 
-    # Totals
-    Area = sum_inner_mm * slice_thickness_eff
+    # Totals — frustum-with-caps surface area (physical unit²). The legacy
+    # stack-of-slabs lateral area is kept under sa_meta["surface_area_lateral_old"].
+    sa_total, sa_meta = frustum_surface_area(
+        frustum_slices, legacy_slice_thickness=slice_thickness_eff)
+    for w in sa_meta["warnings"]:
+        print(f"[VTK Area] WARN: {w}")
+    if sa_total is None:
+        print("[VTK Area] WARN: no valid slices for frustum surface; reporting 0.")
+        Area = 0.0
+    else:
+        Area = sa_total
     if sections_list:
         all_slices_mesh = pv.merge(sections_list)
 #        all_slices_mesh.active_scalars_name = "RGB"
@@ -1022,6 +1041,15 @@ def compute_vtk_area(
     # Save per-slice + total to Excel
     try:
         rows.append([f"Surface Area {unit}^2", Area])
+        rows.append(["surface_area_method", sa_meta["surface_area_method"]])
+        rows.append([f"surface_area_frustum_total_{unit}2", sa_meta["surface_area_frustum_total"]])
+        rows.append([f"surface_area_frustum_lateral_{unit}2", sa_meta["surface_area_frustum_lateral"]])
+        rows.append([f"surface_area_caps_{unit}2", sa_meta["surface_area_caps"]])
+        rows.append([f"surface_area_lateral_old_{unit}2", sa_meta["surface_area_lateral_old"]])
+        rows.append([f"top_cap_area_{unit}2", sa_meta["top_cap_area"]])
+        rows.append([f"bottom_cap_area_{unit}2", sa_meta["bottom_cap_area"]])
+        rows.append(["number_of_valid_slices", sa_meta["number_of_valid_slices"]])
+        rows.append(["slice_spacing_mode", sa_meta["slice_spacing_mode"]])
 
         df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", f"Inner_Perimeter_{unit}"])
             

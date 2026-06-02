@@ -27,6 +27,7 @@ from helpers.helpers import (
     validate_scale_cube_sanity,
     compactness_2D,
     compactness_3D,
+    frustum_surface_area,
     image_annotation_style,
     SULCUS_CLASS_COLORS,
     SULCUS_CLASSES,
@@ -961,6 +962,7 @@ def compute_stl_area(
     valid_slices: list[int] = []
     rows = []
     sum_inner_mm = 0.0
+    frustum_slices: list[tuple[float, float, float]] = []  # (h_mm, perimeter_mm, area_mm2)
     sections_list: list[pv.PolyData] = []
 
     p = pv.Plotter(off_screen=True, window_size=window_size)
@@ -1019,6 +1021,10 @@ def compute_stl_area(
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
         inner_perim_mm = inner_perim_px * mm_per_px
 
+        # Cross-sectional area (mm²) for the frustum surface approximation
+        inner_area_px = sum(cv2.contourArea(c) for c in inner_filtered)
+        inner_area_mm2 = inner_area_px * (mm_per_px ** 2)
+        frustum_slices.append((float(k), inner_perim_mm, inner_area_mm2))
 
         rows.append([idx, len(inner_filtered), inner_perim_mm])
         # Accumulate
@@ -1038,8 +1044,18 @@ def compute_stl_area(
       
     # ---- end with: plotter is fully and safely closed here ----
 
-    # Totals
-    Area = sum_inner_mm * slice_thickness_eff /100
+    # Totals — frustum-with-caps surface area (mm²), then /100 → cm².
+    # The legacy stack-of-slabs lateral area (Σ perimeter × thickness) is kept
+    # for comparison in `sa_meta["surface_area_lateral_old"]`.
+    sa_total_mm2, sa_meta = frustum_surface_area(
+        frustum_slices, legacy_slice_thickness=slice_thickness_eff)
+    for w in sa_meta["warnings"]:
+        print(f"[STL Area] WARN: {w}")
+    if sa_total_mm2 is None:
+        print("[STL Area] WARN: no valid slices for frustum surface; reporting 0.")
+        Area = 0.0
+    else:
+        Area = sa_total_mm2 / 100
     if sections_list:
         all_slices_mesh = pv.merge(sections_list)
 #        all_slices_mesh.active_scalars_name = "RGB"
@@ -1051,8 +1067,17 @@ def compute_stl_area(
     # Save per-slice + total to Excel
     try:
         rows.append(["Surface Area cm^2",round(Area,2)])
+        rows.append(["surface_area_method", sa_meta["surface_area_method"]])
+        rows.append(["surface_area_frustum_total_mm2", sa_meta["surface_area_frustum_total"]])
+        rows.append(["surface_area_frustum_lateral_mm2", sa_meta["surface_area_frustum_lateral"]])
+        rows.append(["surface_area_caps_mm2", sa_meta["surface_area_caps"]])
+        rows.append(["surface_area_lateral_old_mm2", sa_meta["surface_area_lateral_old"]])
+        rows.append(["top_cap_area_mm2", sa_meta["top_cap_area"]])
+        rows.append(["bottom_cap_area_mm2", sa_meta["bottom_cap_area"]])
+        rows.append(["number_of_valid_slices", sa_meta["number_of_valid_slices"]])
+        rows.append(["slice_spacing_mode", sa_meta["slice_spacing_mode"]])
         df = pd.DataFrame(rows, columns=["Slice","Count_of_cont.", "Inner_Perimeter_mm"])
-            
+
         xlsx_path = os.path.join(out_dir, "Mesh_Area.xlsx")
         df.to_excel(xlsx_path, index=False)
         print(f"[STL Area] Saved Excel → {xlsx_path}")
