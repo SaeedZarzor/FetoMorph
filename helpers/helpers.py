@@ -876,6 +876,41 @@ def compactness_3D(volume: float, surface_area: float) -> float:
     return comp
 
 
+def area_correction_factor(mesh_area_mm2: float, slice_sum_area_mm2: float,
+                           *, location: str) -> float:
+    """Return ``mesh_area / slice_sum_area`` with sanity guards.
+
+    The slice-sum surface area underestimates the exact ``mesh.area``; this
+    ratio scales the slice-sum surface measures back onto the true mesh scale.
+    A non-positive slice sum yields a neutral ``1.0`` factor; an out-of-range
+    factor is warned about but never raised, per the measurement contract.
+
+    Args:
+        mesh_area_mm2: Exact surface area from PyVista (mm²).
+        slice_sum_area_mm2: Slice-sum inner surface area (mm²).
+        location: Caller tag for the ``[Warning] <location> — <msg>`` log.
+
+    Returns:
+        The (possibly out-of-range) correction factor.
+    """
+    from constants import (
+        AREA_CORRECTION_FACTOR_MIN,
+        AREA_CORRECTION_FACTOR_MAX,
+    )
+    if slice_sum_area_mm2 > 0:
+        factor = float(mesh_area_mm2) / float(slice_sum_area_mm2)
+    else:
+        factor = 1.0
+        print(f"[Warning] {location} — slice-sum area is non-positive "
+              f"({slice_sum_area_mm2}); using neutral correction factor 1.0.")
+        return factor
+    if not (AREA_CORRECTION_FACTOR_MIN <= factor <= AREA_CORRECTION_FACTOR_MAX):
+        print(f"[Warning] {location} — area correction factor {factor:.4f} is "
+              f"outside [{AREA_CORRECTION_FACTOR_MIN}, {AREA_CORRECTION_FACTOR_MAX}]; "
+              f"continuing with the computed factor (check geometry/units).")
+    return factor
+
+
 SURFACE_AREA_METHOD = "frustum_with_caps"
 
 

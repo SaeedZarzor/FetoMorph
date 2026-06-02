@@ -28,6 +28,7 @@ from helpers.helpers import (
     compactness_2D,
     compactness_3D,
     frustum_surface_area,
+    area_correction_factor,
     image_annotation_style,
     SULCUS_CLASS_COLORS,
     SULCUS_CLASSES,
@@ -364,8 +365,19 @@ def compute_stl_allmarks(
     brain_volume = (sum_area * slice_thickness_eff)/1000
     Area = sum_inner_mm * slice_thickness_eff /100
     GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
-    comp_3D  = compactness_3D(brain_volume, Area) 
-    
+    comp_3D  = compactness_3D(brain_volume, Area)
+
+    # Surface-area correction factor: scale the slice-sum surface measures onto
+    # the exact mesh.area. The factor applies to both inner and closing areas,
+    # so GI (a same-surface ratio) is unchanged; the corrected absolute areas
+    # are reported for audit. STL mesh.area is already in mm².
+    inner_area_slice_sum_mm2 = sum_inner_mm * slice_thickness_eff
+    closing_area_slice_sum_mm2 = sum_outer_mm * slice_thickness_eff
+    mesh_area_mm2 = float(mesh.area)
+    acf = area_correction_factor(
+        mesh_area_mm2, inner_area_slice_sum_mm2, location="STL allmarks")
+    closing_area_corrected_mm2 = closing_area_slice_sum_mm2 * acf
+
     # Snapshot mm-unit depths for the per-mm Excel summary row before
     # the in-place cm conversion below.
     total_depth_mm = list(total_depth)
@@ -448,6 +460,10 @@ def compute_stl_allmarks(
             "Total sulci count": int(overall_n),
             "Mean sulci depth (mm)": (round(float(overall_mean), 3)
                                        if overall_mean is not None else None),
+            "Area_slice_sum_cm2": round(inner_area_slice_sum_mm2 / 100, 4),
+            "Area_mesh_cm2": round(mesh_area_mm2 / 100, 4),
+            "Area_correction_factor": round(float(acf), 4),
+            "Closing_area_corrected_cm2": round(closing_area_corrected_mm2 / 100, 4),
         }
         sheet = ResultsSheet(
             sheet_name=os.path.basename(file_path) or "Results",
@@ -669,6 +685,16 @@ def compute_stl_lGI(
     # Totals
     GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
     print(f"[STL lGI] GI_total = {GI_total:.6f}")
+
+    # Surface-area correction factor (slice-sum vs exact mesh.area). Scales both
+    # inner and closing areas, so GI is unchanged; corrected areas are audited.
+    inner_area_slice_sum_mm2 = sum_inner_mm * slice_thickness_eff
+    closing_area_slice_sum_mm2 = sum_outer_mm * slice_thickness_eff
+    mesh_area_mm2 = float(mesh.area)
+    acf = area_correction_factor(
+        mesh_area_mm2, inner_area_slice_sum_mm2, location="STL lGI")
+    closing_area_corrected_mm2 = closing_area_slice_sum_mm2 * acf
+
     if sections_list:
         all_slices_mesh = pv.merge(sections_list)
 #        all_slices_mesh.active_scalars_name = "RGB"
@@ -679,11 +705,19 @@ def compute_stl_lGI(
         
     # Save per-slice + total to Excel
     try:
+        from helpers.results_excel_format import (
+            highlight_correction_factor_xlsx as _highlight_correction_factor,
+        )
         df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", "Kernel_px", "Inner_Perimeter_mm", "Outer_Perimeter_mm", "GI"])
         df.insert(0, "Kernel_size_mm", float(kernel_size_mm))
         df.loc[len(df)] = [float(kernel_size_mm), "GI", None, None, None, None, round(GI_total, 3)]
+        df.loc[len(df)] = [float(kernel_size_mm), "Area_slice_sum_cm2", None, None, None, None, round(inner_area_slice_sum_mm2 / 100, 4)]
+        df.loc[len(df)] = [float(kernel_size_mm), "Area_mesh_cm2", None, None, None, None, round(mesh_area_mm2 / 100, 4)]
+        df.loc[len(df)] = [float(kernel_size_mm), "Area_correction_factor", None, None, None, None, round(float(acf), 4)]
+        df.loc[len(df)] = [float(kernel_size_mm), "Closing_area_corrected_cm2", None, None, None, None, round(closing_area_corrected_mm2 / 100, 4)]
         xlsx_path = os.path.join(out_dir, "STL_lGI.xlsx")
         df.to_excel(xlsx_path, index=False)
+        _highlight_correction_factor(xlsx_path, float(acf))
         print(f"[STL lGI] Saved Excel → {xlsx_path}")
     except Exception as ex:
         print(f"[STL lGI] WARN: could not save Excel: {ex}")

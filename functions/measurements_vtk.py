@@ -28,6 +28,7 @@ from helpers.helpers import (
     compactness_3D,
     compactness_2D,
     frustum_surface_area,
+    area_correction_factor,
     image_annotation_style,
     SULCUS_CLASS_COLORS,
     SULCUS_CLASSES,
@@ -352,7 +353,19 @@ def compute_vtk_allmarks(
     Area = sum_inner_mm * slice_thickness_eff
     GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
     comp = compactness_3D(Volume, Area)
-    
+
+    # Surface-area correction factor (slice-sum vs exact mesh.area). mesh.area
+    # is in model units, so scale it to physical unit² by the product of the two
+    # in-plane axis scales before comparing. Scales both inner and closing, so GI
+    # is unchanged; corrected absolute areas are reported for audit.
+    in_plane_scale = float(np.prod(mesh_dim_scaled) / mesh_dim_scaled[axis_index])
+    mesh_area_phys = float(mesh.area) * in_plane_scale
+    inner_area_slice_sum = sum_inner_mm * slice_thickness_eff
+    closing_area_slice_sum = sum_outer_mm * slice_thickness_eff
+    acf = area_correction_factor(
+        mesh_area_phys, inner_area_slice_sum, location="VTK allmarks")
+    closing_area_corrected = closing_area_slice_sum * acf
+
     mean_total = (sum(total_depth)/ len(total_depth))  if len(total_depth)>0 else None
     if sections_list:
         all_slices_mesh = pv.merge(sections_list)
@@ -433,6 +446,10 @@ def compute_vtk_allmarks(
             f"Mean sulci depth ({unit})": (
                 round(float(overall_mean), 4)
                 if overall_mean is not None else None),
+            f"Area_slice_sum ({unit}^2)": round(float(inner_area_slice_sum), 4),
+            f"Area_mesh ({unit}^2)": round(float(mesh_area_phys), 4),
+            "Area_correction_factor": round(float(acf), 4),
+            f"Closing_area_corrected ({unit}^2)": round(float(closing_area_corrected), 4),
         }
         sheet = ResultsSheet(
             sheet_name=os.path.basename(file_path) or "Results",
@@ -639,6 +656,18 @@ def compute_vtk_lGI(
     # ---- end with: plotter is fully and safely closed here ----
 
     GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
+
+    # Surface-area correction factor (slice-sum vs exact mesh.area). mesh.area is
+    # in model units → scale to physical unit² by the in-plane axis scales. Scales
+    # both inner and closing, so GI is unchanged; corrected areas are audited.
+    in_plane_scale = float(np.prod(mesh_dim_scaled) / mesh_dim_scaled[axis_index])
+    mesh_area_phys = float(mesh.area) * in_plane_scale
+    inner_area_slice_sum = sum_inner_mm * slice_thickness_eff
+    closing_area_slice_sum = sum_outer_mm * slice_thickness_eff
+    acf = area_correction_factor(
+        mesh_area_phys, inner_area_slice_sum, location="VTK lGI")
+    closing_area_corrected = closing_area_slice_sum * acf
+
     if sections_list:
         all_slices_mesh = pv.merge(sections_list)
 #        all_slices_mesh.active_scalars_name = "RGB"
@@ -648,14 +677,20 @@ def compute_vtk_lGI(
         all_slices_mesh = pv.PolyData()
     # Save per-slice + total to Excel
     try:
+        from helpers.results_excel_format import (
+            highlight_correction_factor_xlsx as _highlight_correction_factor,
+        )
         rows.append(["GI", None, None, None, None, round(GI_total, 2)])
+        rows.append(["Area_slice_sum", None, None, None, None, round(float(inner_area_slice_sum), 4)])
+        rows.append(["Area_mesh", None, None, None, None, round(float(mesh_area_phys), 4)])
+        rows.append(["Area_correction_factor", None, None, None, None, round(float(acf), 4)])
+        rows.append(["Closing_area_corrected", None, None, None, None, round(float(closing_area_corrected), 4)])
         df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", "Kernel_px", f"Inner_Perimeter_{unit}", f"Outer_Perimeter_{unit}", "Sulci_lGI"])
         df.insert(0, "Kernel_size_mm", float(kernel_size_mm))
-        
-       
-        
+
         xlsx_path = os.path.join(out_dir, f"Mesh_lGI_{Slice_direction}.xlsx")
         df.to_excel(xlsx_path, index=False)
+        _highlight_correction_factor(xlsx_path, float(acf))
         print(f"[VTK lGI] Saved Excel → {xlsx_path}")
     except Exception as ex:
         print(f"[VTK LGI] WARN: could not save Excel: {ex}")

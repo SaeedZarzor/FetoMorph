@@ -38,6 +38,14 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from constants import (
+    AREA_CORRECTION_FACTOR_WARN_LOW,
+    AREA_CORRECTION_FACTOR_WARN_HIGH,
+)
+
+# Totals key whose value cell is highlighted when out of the warn band.
+AREA_CORRECTION_FACTOR_KEY = "Area_correction_factor"
+
 
 RESULTS_COLUMNS: tuple[str, ...] = (
     "Section",
@@ -228,6 +236,38 @@ def read_results_sheet(
     return out
 
 
+def highlight_correction_factor_xlsx(
+    xlsx_path: str,
+    factor: float,
+    *,
+    label: str = AREA_CORRECTION_FACTOR_KEY,
+) -> None:
+    """Yellow-fill the value cell of an ``Area_correction_factor`` row.
+
+    For the raw ``df.to_excel`` outputs (STL/VTK lGI sheets) that don't go
+    through :func:`write_results_workbook`. No-op when *factor* sits inside the
+    warn band or the label/file can't be found. The value is taken as the last
+    cell of the matching row, matching those sheets' layout.
+    """
+    if not _is_real_number(factor):
+        return
+    if (AREA_CORRECTION_FACTOR_WARN_LOW
+            <= float(factor)
+            <= AREA_CORRECTION_FACTOR_WARN_HIGH):
+        return
+    try:
+        wb = load_workbook(xlsx_path)
+        ws = wb.active
+        for row_cells in ws.iter_rows():
+            if any(c.value == label for c in row_cells):
+                row_cells[-1].fill = _WARN_FILL
+                wb.save(xlsx_path)
+                return
+    except Exception as ex:
+        print(f"[Warning] highlight_correction_factor_xlsx — could not "
+              f"highlight {xlsx_path}: {ex}")
+
+
 # ---------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------
@@ -241,6 +281,7 @@ _LABEL_FONT = Font(bold=True)
 _TABLE_HEADER_FONT = Font(bold=True, color="FFFFFF")
 _TABLE_HEADER_FILL = PatternFill("solid", fgColor="3498DB")
 _FOOTER_FONT = Font(italic=True, color="555555")
+_WARN_FILL = PatternFill("solid", fgColor="FFFF99")
 _LINK_FONT = Font(color="0563C1", underline="single")
 _CENTER = Alignment(horizontal="center")
 
@@ -332,7 +373,14 @@ def _render_sheet(wb, ws, sheet: ResultsSheet, used_names: set[str],
         row += 1
         for key, value in totals_items:
             ws.cell(row=row, column=2, value=key).font = _LABEL_FONT
-            ws.cell(row=row, column=3, value=_to_cell(value))
+            value_cell = ws.cell(row=row, column=3, value=_to_cell(value))
+            # Visual warning: flag an out-of-band area correction factor so a
+            # reviewer can spot a suspect slice-sum vs mesh.area mismatch.
+            if key == AREA_CORRECTION_FACTOR_KEY and _is_real_number(value) and not (
+                    AREA_CORRECTION_FACTOR_WARN_LOW
+                    <= float(value)
+                    <= AREA_CORRECTION_FACTOR_WARN_HIGH):
+                value_cell.fill = _WARN_FILL
             row += 1
         row += 1
 
