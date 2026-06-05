@@ -14,6 +14,8 @@ from helpers.helpers import (
     image_annotation_style,
     compute_kernel_convex,
     compactness_2D,
+    mask_perimeter_mm,
+    split_inner_and_internal_contours,
     _add_scalebar_on_annotated,
     draw_hallmarks_values_on_image,
     SULCUS_CLASS_COLORS,
@@ -26,6 +28,10 @@ from helpers.slice_kind_classifier import classify_slice_kind, SliceKind
 from managers.visualization_settings import get_active as _get_viz
 from constants import (
     BINARY_THRESHOLD_DEFAULT,
+    DEFAULT_KERNEL_SIZE_MM,
+    DEFAULT_PERIMETER_METHOD,
+    DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
+    DEFAULT_CONTOUR_SIMPLIFY_EPSILON,
     DEFECT_FIXED_POINT,
     MIN_PIXEL_SIZE_FOR_DEPTH_LABELS,
     SULCUS_PRIMARY_MAX_FRACTION,
@@ -33,15 +39,42 @@ from constants import (
 )
 
 
+def _to_kernel_px(kernel_size_mm: float, pixel_size_mm: float) -> int:
+    px = max(3, int(round(float(kernel_size_mm) / max(float(pixel_size_mm), 1e-9))))
+    return px
+
+
+def _split_contours_for_mode(bw, cnt_threshold: float, pixel_size: float):
+    """Detect brain-boundary and internal-hole contours for Contour Accounting.
+
+    Uses ``RETR_CCOMP`` + :func:`split_inner_and_internal_contours` (the same helper
+    the mesh paths use) to return ``(inner_filtered, internal_filtered)``:
+    ``inner_filtered`` are the outer (brain-boundary) contours, ``internal_filtered``
+    are the holes inside them. ``cnt_threshold`` is in mm²; the helper filters in
+    px², so it is converted with ``pixel_size`` (mm/px).
+    """
+    contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours or hierarchy is None:
+        return [], []
+    px = float(pixel_size)
+    min_area_px = float(cnt_threshold) / (px ** 2) if px > 0 else float(cnt_threshold)
+    return split_inner_and_internal_contours(
+        contours, hierarchy, np.zeros_like(bw), bw.shape, min_area_px)
+
+
 def compute_image_allmarks(
     file_path: str,
     pixel_size: float = 0.01,
-    kernel_size: int = 5,
+    kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM,
     cnt_threshold: float = 20,
     unit: str = "mm",
     add_scalebar: bool | None = True,
     draw_hallmarks: bool = True,
-) -> tuple[float, float, float, float, float, list, dict, np.ndarray, SliceKind]:
+    perimeter_method: str = DEFAULT_PERIMETER_METHOD,
+    simplify_contours_for_perimeter: bool = DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
+    contour_simplify_epsilon: float = DEFAULT_CONTOUR_SIMPLIFY_EPSILON,
+    contour_mode: str = "outer",
+) -> tuple[float, float, float | None, float, float, float, list, dict, np.ndarray, SliceKind]:
     """Compute all hallmarks (area, perimeters, GI, sulci depths) from an image.
 
     Pipeline:
@@ -53,17 +86,23 @@ def compute_image_allmarks(
     Args:
         file_path: Path to a brain-slice image.
         pixel_size: Physical size of one pixel (mm/px).
-        kernel_size: Diameter of the elliptical kernel for morph close.
+        kernel_size_mm: Diameter of the elliptical kernel for morph close, in mm.
         cnt_threshold: Minimum contour area (pixels) to keep.
         unit: Label for output units.
         add_scalebar: If True, overlay a new scale bar on the annotated output.
         draw_hallmarks: If True, draw hallmark numeric values on the image.
 
+    ``contour_mode`` (Contour Accounting) adjusts the reported **area**
+    (``outer`` / ``subtract`` = brain minus holes / ``internal_only``) and, in
+    ``subtract`` mode, also returns the interior-hole boundary as
+    ``perimeter_internal``. GI and compactness stay on the brain boundary.
+
     Returns:
-        Tuple of ``(area, perimeter, perimeter_convex, GI, compactness,
-        depths, depth_sets, annotated_bgr, slice_kind)``.
+        Tuple of ``(area, perimeter, perimeter_internal, perimeter_convex, GI,
+        compactness, depths, depth_sets, annotated_bgr, slice_kind)``.
     """
     margin = 6
+    kernel_size_px = _to_kernel_px(kernel_size_mm, pixel_size)
 
     image = cv2.imread(file_path)
     if image is None:
@@ -72,10 +111,10 @@ def compute_image_allmarks(
     print(file_path + " is processing")
     im_bw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
     (thresh, im_bw) = cv2.threshold(im_bw, BINARY_THRESHOLD_DEFAULT, 255, 1)
-    contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Brain-boundary (inner) + hole (internal) contours for Contour Accounting.
+    inner_filtered, internal_filtered = _split_contours_for_mode(im_bw, cnt_threshold, pixel_size)
+    filtered_contours = inner_filtered  # sulci defects + GI operate on the brain boundary
 
-    filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > cnt_threshold]
-   
     annotated = image.copy()
     W, H = annotated.shape[:2]
     thickness, font_scale, radius_px = image_annotation_style(H, W, style="thin")
@@ -100,14 +139,42 @@ def compute_image_allmarks(
 
     if filtered_contours:
         cv2.drawContours(annotated, filtered_contours, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
-        area_sum = sum(cv2.contourArea(cnt) for cnt in filtered_contours)
-        perimeter_sum = sum(cv2.arcLength(cnt, True) for cnt in filtered_contours)
-    else:
-        area_sum = perimeter_sum = 0
-        
+    if internal_filtered and contour_mode != "outer":
+        cv2.drawContours(annotated, internal_filtered, -1, tuple(_get_viz().contour_internal_color_bgr), thickness)
+
+    # Area honours the Contour Accounting mode.
+    inner_area_px = sum(cv2.contourArea(cnt) for cnt in inner_filtered)
+    internal_area_px = sum(cv2.contourArea(cnt) for cnt in internal_filtered)
+    if contour_mode == "subtract":
+        area_sum = inner_area_px - internal_area_px
+    elif contour_mode == "internal_only":
+        area_sum = internal_area_px
+    else:  # "outer"
+        area_sum = inner_area_px
+
     area = area_sum * pixel_size**2
-    perimeter = perimeter_sum * pixel_size
-    
+    inner_mask_only = np.zeros_like(im_bw)
+    cv2.drawContours(inner_mask_only, filtered_contours, -1, 255, thickness=cv2.FILLED)
+    # Exterior perimeter (brain boundary). GI/compactness use this.
+    perimeter = mask_perimeter_mm(
+        inner_mask_only, pixel_size, pixel_size,
+        method=perimeter_method,
+        simplify=simplify_contours_for_perimeter,
+        epsilon=contour_simplify_epsilon,
+    )
+    # Interior (holes) perimeter — reported as a second value in subtract mode.
+    if contour_mode == "subtract" and internal_filtered:
+        internal_mask_only = np.zeros_like(im_bw)
+        cv2.drawContours(internal_mask_only, internal_filtered, -1, 255, thickness=cv2.FILLED)
+        perimeter_internal = mask_perimeter_mm(
+            internal_mask_only, pixel_size, pixel_size,
+            method=perimeter_method,
+            simplify=simplify_contours_for_perimeter,
+            epsilon=contour_simplify_epsilon,
+        )
+    else:
+        perimeter_internal = None
+
     if filtered_contours and len(filtered_contours[0]) > 0:
         x1, y1 = filtered_contours[0][0][0]
     else:
@@ -118,22 +185,28 @@ def compute_image_allmarks(
     # Rebuild the source mask from ONLY the kept inner contours so noise blobs
     # the inner filter rejected cannot produce spurious outer components after
     # morph-close.
-    inner_mask_only = np.zeros_like(im_bw)
-    cv2.drawContours(inner_mask_only, filtered_contours, -1, 255, thickness=cv2.FILLED)
-    closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
+    closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size_px))
     convex_Contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    filtered_conv_contours = [cnt_conv for cnt_conv in convex_Contours if cv2.contourArea(cnt_conv) > cnt_threshold]
+    filtered_conv_contours = [cnt_conv for cnt_conv in convex_Contours if cv2.contourArea(cnt_conv) * (pixel_size ** 2) > cnt_threshold]
 
     if filtered_conv_contours:
         annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, tuple(_get_viz().contour_outer_color_bgr), thickness)
-        perimeter_convex_sum= sum( cv2.arcLength(convex_cnt, True) for convex_cnt in filtered_conv_contours)
+        outer_mask_only = np.zeros_like(closed_mask)
+        cv2.drawContours(outer_mask_only, filtered_conv_contours, -1, 255, thickness=cv2.FILLED)
+        perimeter_convex = mask_perimeter_mm(
+            outer_mask_only, pixel_size, pixel_size,
+            method=perimeter_method,
+            simplify=simplify_contours_for_perimeter,
+            epsilon=contour_simplify_epsilon,
+        )
 
     else:
-        perimeter_convex_sum = 1  # fallback to avoid division by zero
+        perimeter_convex = None
 
-    perimeter_convex = perimeter_convex_sum * pixel_size
-    perimeter_Rate = perimeter / perimeter_convex  # GI ratio
-    comp = compactness_2D(area, perimeter) 
+    perimeter_Rate = (perimeter / perimeter_convex
+                      if perimeter_convex else None)  # GI ratio
+    comp = (compactness_2D(area, perimeter)
+            if perimeter_convex is not None else None)
 
     # --- Sulci depth via convexity defects ---
     # When use_percent_filter is True (full MRI slices), depths are split into
@@ -202,6 +275,7 @@ def compute_image_allmarks(
             font_scale=font_scale,
             area=area,
             perimeter=perimeter,
+            perimeter_internal=perimeter_internal,
             lgi=perimeter_Rate,
             compactness=comp,
             unit=unit,
@@ -209,7 +283,7 @@ def compute_image_allmarks(
             anchor_ratio=(0.02, 0.05),
         )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
-    return area, perimeter, perimeter_convex ,perimeter_Rate, comp, depth, depth_sets, annotated, slice_kind  # BGR ndarray
+    return area, perimeter, perimeter_internal, perimeter_convex ,perimeter_Rate, comp, depth, depth_sets, annotated, slice_kind  # BGR ndarray
 
 
 def compute_image_perimeter(
@@ -219,10 +293,19 @@ def compute_image_perimeter(
     unit: str = "mm",
     add_scalebar: bool | None = True,
     draw_hallmarks: bool = True,
-) -> tuple[float, np.ndarray, SliceKind]:
+    perimeter_method: str = DEFAULT_PERIMETER_METHOD,
+    simplify_contours_for_perimeter: bool = DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
+    contour_simplify_epsilon: float = DEFAULT_CONTOUR_SIMPLIFY_EPSILON,
+    contour_mode: str = "outer",
+) -> tuple[float, float | None, np.ndarray, SliceKind]:
     """
     Compute foreground perimeter from a 2D image by thresholding & contour filtering.
-    Returns ``(perimeter, annotated_bgr, slice_kind)``.
+    Returns ``(perimeter, perimeter_internal, annotated_bgr, slice_kind)``.
+
+    ``contour_mode`` (Contour Accounting) selects which boundaries are reported:
+    ``outer`` → exterior (brain boundary) only, ``perimeter_internal`` is ``None``;
+    ``subtract`` → exterior as ``perimeter`` **and** the interior (holes) boundary
+    as ``perimeter_internal``; ``internal_only`` → interior only (as ``perimeter``).
 
     No files are written here.
     """
@@ -237,18 +320,37 @@ def compute_image_perimeter(
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
 
-    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    filtered = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
+    inner_filtered, internal_filtered = _split_contours_for_mode(bw, cnt_threshold, pixel_size)
 
     annotated = image.copy()
     W, H = annotated.shape[:2]
     thickness, font_scale, _ = image_annotation_style(H, W, style="regular")
 
-    if filtered:
-        cv2.drawContours(annotated, filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
+    if inner_filtered and contour_mode != "internal_only":
+        cv2.drawContours(annotated, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
+    if internal_filtered and contour_mode != "outer":
+        cv2.drawContours(annotated, internal_filtered, -1, tuple(_get_viz().contour_internal_color_bgr), thickness)
 
-    perimeter_sum = sum(cv2.arcLength(cnt, True) for cnt in filtered)
-    perimeter = perimeter_sum * pixel_size
+    def _perim(cnts):
+        if not cnts:
+            return 0.0
+        m = np.zeros_like(bw)
+        cv2.drawContours(m, cnts, -1, 255, thickness=cv2.FILLED)
+        return mask_perimeter_mm(
+            m, pixel_size, pixel_size,
+            method=perimeter_method,
+            simplify=simplify_contours_for_perimeter,
+            epsilon=contour_simplify_epsilon,
+        )
+
+    ext_perim = _perim(inner_filtered)
+    int_perim = _perim(internal_filtered)
+    if contour_mode == "internal_only":
+        perimeter, perimeter_internal = int_perim, None
+    elif contour_mode == "subtract":
+        perimeter, perimeter_internal = ext_perim, int_perim
+    else:  # "outer"
+        perimeter, perimeter_internal = ext_perim, None
 
     if draw_hallmarks:
         annotated = draw_hallmarks_values_on_image(
@@ -256,13 +358,14 @@ def compute_image_perimeter(
             thickness=thickness,
             font_scale=font_scale,
             perimeter=perimeter,
+            perimeter_internal=perimeter_internal,
             lgi=None,
             unit=unit,
             box_position="topleft",
             anchor_ratio=(0.02, 0.05),
         )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
-    return perimeter, annotated, slice_kind  # BGR ndarray
+    return perimeter, perimeter_internal, annotated, slice_kind  # BGR ndarray
 
 
 def compute_image_area(
@@ -272,10 +375,15 @@ def compute_image_area(
     unit: str = "mm",
     add_scalebar: bool | None = True,
     draw_hallmarks: bool = True,
+    contour_mode: str = "outer",
 ) -> tuple[float, np.ndarray, SliceKind]:
     """
     Compute foreground area from a 2D image by thresholding & contour filtering.
     Returns ``(area, annotated_bgr, slice_kind)``.
+
+    ``contour_mode`` (Contour Accounting): ``outer`` = brain-boundary area,
+    ``subtract`` = brain area minus internal holes, ``internal_only`` = only the
+    internal-hole area.
 
     No files are written here.
     """
@@ -290,19 +398,28 @@ def compute_image_area(
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
 
-    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    filtered = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
+    inner_filtered, internal_filtered = _split_contours_for_mode(bw, cnt_threshold, pixel_size)
 
     annotated = image.copy()
     W, H = annotated.shape[:2]
     thickness, _, _ = image_annotation_style(H, W, style="regular")
 
-    if filtered:
-        cv2.drawContours(annotated, filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
+    if inner_filtered and contour_mode != "internal_only":
+        cv2.drawContours(annotated, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
+    if internal_filtered and contour_mode != "outer":
+        cv2.drawContours(annotated, internal_filtered, -1, tuple(_get_viz().contour_internal_color_bgr), thickness)
 
-    px_area_sum = float(sum(cv2.contourArea(c) for c in filtered))
+    inner_area_px = float(sum(cv2.contourArea(c) for c in inner_filtered))
+    internal_area_px = float(sum(cv2.contourArea(c) for c in internal_filtered))
+    if contour_mode == "subtract":
+        px_area_sum = inner_area_px - internal_area_px
+    elif contour_mode == "internal_only":
+        px_area_sum = internal_area_px
+    else:  # "outer"
+        px_area_sum = inner_area_px
     area_units2 = px_area_sum * (pixel_size ** 2)
 
+    filtered = inner_filtered
     if filtered and len(filtered[0]) > 0:
         x1, y1 = filtered[0][0][0]
     else:
@@ -325,11 +442,14 @@ def compute_image_area(
 def compute_image_lGI(
     file_path: str,
     pixel_size: float,
-    kernel_size: int = 5,
+    kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM,
     cnt_threshold: float = 20,
     unit: str = "mm",
     add_scalebar: bool | None = True,
     draw_hallmarks: bool = True,
+    perimeter_method: str = DEFAULT_PERIMETER_METHOD,
+    simplify_contours_for_perimeter: bool = DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
+    contour_simplify_epsilon: float = DEFAULT_CONTOUR_SIMPLIFY_EPSILON,
 )  -> tuple[float, float, float, np.ndarray, SliceKind]:
     """Compute the local Gyrification Index from a 2-D brain-slice image.
 
@@ -339,7 +459,7 @@ def compute_image_lGI(
     Args:
         file_path: Path to the image.
         pixel_size: mm per pixel.
-        kernel_size: Morph-close kernel diameter.
+        kernel_size_mm: Morph-close kernel diameter, in mm.
         cnt_threshold: Minimum contour area to keep (pixels).
         unit: Label for output units.
 
@@ -348,6 +468,7 @@ def compute_image_lGI(
         annotated_bgr, slice_kind)``.
     """
     margin =6
+    kernel_size_px = _to_kernel_px(kernel_size_mm, pixel_size)
 
     image = cv2.imread(file_path)
     if image is None:
@@ -360,7 +481,7 @@ def compute_image_lGI(
     (thresh, im_bw) = cv2.threshold(im_bw, BINARY_THRESHOLD_DEFAULT, 255, 1)
     contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > cnt_threshold]
+    filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) * (pixel_size ** 2) > cnt_threshold]
    
     annotated = image.copy()
     W, H = annotated.shape[:2]
@@ -368,7 +489,6 @@ def compute_image_lGI(
     
     if filtered_contours:
         cv2.drawContours(annotated, filtered_contours, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
-        perimeter = sum(cv2.arcLength(cnt, True) for cnt in filtered_contours)
     else:
         perimeter = 0
 
@@ -377,21 +497,33 @@ def compute_image_lGI(
     # after morph-close.
     inner_mask_only = np.zeros_like(im_bw)
     cv2.drawContours(inner_mask_only, filtered_contours, -1, 255, thickness=cv2.FILLED)
-    closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
+    perimeter_u = mask_perimeter_mm(
+        inner_mask_only, pixel_size, pixel_size,
+        method=perimeter_method,
+        simplify=simplify_contours_for_perimeter,
+        epsilon=contour_simplify_epsilon,
+    )
+    closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size_px))
     convex_Contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    filtered_conv_contours = [cnt_conv for cnt_conv in convex_Contours if cv2.contourArea(cnt_conv) > cnt_threshold]
+    filtered_conv_contours = [cnt_conv for cnt_conv in convex_Contours if cv2.contourArea(cnt_conv) * (pixel_size ** 2) > cnt_threshold]
     
     if filtered_conv_contours:
         annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, tuple(_get_viz().contour_outer_color_bgr), thickness)
-        perimeter_convex= sum( cv2.arcLength(convex_cnt, True) for convex_cnt in filtered_conv_contours)
+        outer_mask_only = np.zeros_like(closed_mask)
+        cv2.drawContours(outer_mask_only, filtered_conv_contours, -1, 255, thickness=cv2.FILLED)
+        perimeter_convex_u = mask_perimeter_mm(
+            outer_mask_only, pixel_size, pixel_size,
+            method=perimeter_method,
+            simplify=simplify_contours_for_perimeter,
+            epsilon=contour_simplify_epsilon,
+        )
     
     else:
-        perimeter_convex = 1
+        perimeter_convex_u = None
         
 
-    perimeter_Rate = perimeter / perimeter_convex
-    perimeter_u = perimeter * pixel_size
-    perimeter_convex_u = perimeter_convex * pixel_size
+    perimeter_Rate = (perimeter_u / perimeter_convex_u
+                      if perimeter_convex_u else None)
     
 
     if filtered_contours and len(filtered_contours[0]) > 0:
@@ -462,7 +594,7 @@ def compute_image_sulci_depth(
     (thresh, im_bw) = cv2.threshold(im_bw, BINARY_THRESHOLD_DEFAULT, 255, 1)
     contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > cnt_threshold]
+    filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) * (pixel_size ** 2) > cnt_threshold]
    
     annotated = image.copy()
     W, H = annotated.shape[:2]
@@ -549,7 +681,7 @@ def compute_image_sulci_depth(
     return depth, depth_sets, annotated, slice_kind  # BGR ndarray
 
 
-def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> tuple[float, np.ndarray, SliceKind]:
+def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0, pixel_size: float = 0.01) -> tuple[float, np.ndarray, SliceKind]:
     margin = 6
     image = cv2.imread(file_path)
     if image is None:
@@ -561,7 +693,7 @@ def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0) -> tuple
     _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
 
     contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    filtered = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
+    filtered = [c for c in contours if cv2.contourArea(c) * (pixel_size ** 2) > cnt_threshold]
 
     annotated = image.copy()
     W, H = annotated.shape[:2]
@@ -630,7 +762,7 @@ def compute_image_curved_length(
     _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
 
     contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    filtered = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
+    filtered = [c for c in contours if cv2.contourArea(c) * (pixel_size ** 2) > cnt_threshold]
 
     annotated = image.copy()
     W, H = annotated.shape[:2]

@@ -10,8 +10,12 @@ from deps import *
 from typing import TYPE_CHECKING
 from constants import (
     DEFAULT_PIXEL_SIZE, DEFAULT_CNT_THRESHOLD,
-    DEFAULT_KERNEL_SIZE, DEFAULT_SLICE_THICKNESS,
+    DEFAULT_KERNEL_SIZE_MM, DEFAULT_SLICE_THICKNESS,
     DEFAULT_SCALEBAR_MM,
+    DEFAULT_CAVITY_CORRECTION_ENABLED, DEFAULT_CAVITY_AREA_THRESHOLD_MM2,
+    DEFAULT_FILL_CROSS_SECTION,
+    DEFAULT_PERIMETER_METHOD, DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
+    DEFAULT_CONTOUR_SIMPLIFY_EPSILON,
 )
 from helpers.helpers import get_max_slice_thickness
 from widgets.contour_threshold import ContourThresholdDialog
@@ -20,6 +24,8 @@ from widgets.scalebar_set_scale import ScalebarSetScaleDialog
 from widgets.slice_thickness import SliceThicknessDialog
 from widgets.unit_scale import UnitScaleDialog
 from widgets.geometry_dialog import GeometryDialogWithAspect
+from widgets.cavity_options import CavityOptionsDialog
+from widgets.perimeter_options import PerimeterOptionsDialog
 
 if TYPE_CHECKING:
     from FetoMorph import MainWindow
@@ -41,13 +47,24 @@ class SettingsManager:
         self.image_scale_from_scalebar: dict[str, bool] = {}
         self.draw_hallmarks_on_image: bool = True
         self.cnt_threshold: float = DEFAULT_CNT_THRESHOLD
-        self.kernel_size: int = DEFAULT_KERNEL_SIZE
+        self.kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM
+        self.perimeter_method: str = DEFAULT_PERIMETER_METHOD
+        self.simplify_contours_for_perimeter: bool = DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER
+        self.contour_simplify_epsilon: float = DEFAULT_CONTOUR_SIMPLIFY_EPSILON
         # Contour-accounting mode for VTK area / volume / compactness:
         #   "outer"         — measure outer brain contour only (default)
         #   "subtract"      — outer minus area of internal contours (holes)
         #   "internal_only" — measure only the internal contour areas
         self.contour_mode: str = "outer"
         self.slice_thickness: float = DEFAULT_SLICE_THICKNESS
+        # Surface-connected cavity correction (3D volume / surface area). When on,
+        # cavities that open onto the outer surface have their area removed from
+        # the volume integral and their wall added to the surface area; enclosed
+        # voids are left as solid. Only cavities above the area threshold count.
+        self.cavity_correction_enabled: bool = DEFAULT_CAVITY_CORRECTION_ENABLED
+        self.cavity_area_threshold_mm2: float = DEFAULT_CAVITY_AREA_THRESHOLD_MM2
+        # Render thin surface-mesh section curves as filled solid faces (like VTK).
+        self.fill_cross_section: bool = DEFAULT_FILL_CROSS_SECTION
         self.mm_per_px_bar: float = 0
         self.bar_mm: float = DEFAULT_SCALEBAR_MM
         self.custom_label: str | None = None
@@ -58,6 +75,24 @@ class SettingsManager:
     # ------------------------------------------------------------------
     # Dialogs
     # ------------------------------------------------------------------
+
+    def kernel_size_px(self, pixel_size_mm: float | None = None) -> int:
+        """Return the current morphology kernel diameter in pixels."""
+        try:
+            px_mm = float(pixel_size_mm if pixel_size_mm is not None else self.pixel_size)
+        except (TypeError, ValueError):
+            px_mm = self.pixel_size_default
+        px_mm = max(px_mm, 1e-9)
+        return max(3, int(round(float(self.kernel_size_mm) / px_mm)))
+
+    @property
+    def kernel_size(self) -> int:
+        """Legacy pixel accessor for code that has not moved to mm yet."""
+        return self.kernel_size_px(self.pixel_size)
+
+    @kernel_size.setter
+    def kernel_size(self, value: float) -> None:
+        self.kernel_size_mm = float(value)
 
     def set_custom_label(self) -> None:
         """Prompt the user to enter a custom label string for the current file."""
@@ -148,6 +183,9 @@ class SettingsManager:
             self.physical_dim = (Lx, Ly, Lz)
             self.slice_direction = slice_dir
             self.units_length = unit
+
+            # Dimensions changed → keep slice thickness (and slice count) valid.
+            self.clamp_slice_thickness_to_mesh()
 
             print(f"[Geometry] from mesh={self.mw.current_path}")
             print(f"  bounds=({xmin}, {xmax}, {ymin}, {ymax}, {zmin}, {zmax})")
@@ -251,30 +289,108 @@ class SettingsManager:
             QMessageBox.critical(self.mw, "Set Scale Failed", f"{type(ex).__name__}: {ex}")
             return False
 
+    def mesh_shortest_dimension(self) -> float | None:
+        """Return the mesh's shortest physical dimension (mm).
+
+        Uses the user-set ``physical_dim`` when available (VTK meshes scaled to
+        real-world size) so the value tracks any dimension changes; otherwise
+        falls back to the raw mesh bounding box (STL / un-scaled VTK).
+        """
+        pdim = self.physical_dim
+        # physical_dim only applies to VTK meshes scaled to real-world size; for
+        # STL (and un-scaled VTK) use the raw mesh bounding box.
+        if getattr(self.mw, "is_vtk", False) and pdim and all(abs(float(v)) > 1e-9 for v in pdim):
+            return float(min(abs(float(v)) for v in pdim))
+        return get_max_slice_thickness(self.mw.current_path)
+
+    def clamp_slice_thickness_to_mesh(self) -> None:
+        """Clamp the stored slice thickness to the current mesh (≤ half shortest).
+
+        Call this whenever the mesh or its physical dimensions change so the
+        thickness — and therefore the slice count — stays valid for the new
+        geometry.
+        """
+        shortest = self.mesh_shortest_dimension()
+        if not shortest or shortest <= 0:
+            return
+        max_thickness = shortest / 2
+        if self.slice_thickness > max_thickness:
+            self.slice_thickness = max_thickness
+            unit = self.units_length or "mm"
+            print(f"[Slice Thickness] Clamped to {self.slice_thickness:.4g} {unit} "
+                  f"(max for shortest dim {shortest:.3g} {unit})")
+
     def set_slice_thickness_dialog(self) -> None:
         """Open a dialog to set the inter-slice distance for 3-D measurements."""
+        shortest = self.mesh_shortest_dimension()
+        if not shortest or shortest <= 0:
+            QMessageBox.information(
+                self.mw, "Slice thickness",
+                "Could not determine the mesh dimensions for this file.")
+            return
+        unit = self.units_length or "mm"
         dlg = SliceThicknessDialog(
             self.mw,
-            initial=self.slice_thickness,
-            maximum=(get_max_slice_thickness(self.mw.current_path) / 2),
+            initial=min(self.slice_thickness, shortest / 2),
+            maximum=(shortest / 2),
+            reference_length=shortest,
+            unit=unit,
         )
         if dlg.exec() == QDialog.Accepted:
             k = dlg.value()
             self.slice_thickness = k
-            print(f"[Slice Thickness] Set Slice Thickness to {k}")
+            print(f"[Slice Thickness] Set Slice Thickness to {k} {unit} "
+                  f"(≈ {dlg.number_of_slices()} slices over shortest dim {shortest:.3g} {unit})")
 
     def set_kernel_dialog(self) -> None:
-        """Open dialog to set morphology kernel size (odd)."""
-        dlg = KernelSizeDialog(self.mw, initial=self.kernel_size)
+        """Open dialog to set morphology kernel size in millimetres."""
+        dlg = KernelSizeDialog(self.mw, initial=self.kernel_size_mm)
         if dlg.exec() == QDialog.Accepted:
             k = dlg.value()
-            self.kernel_size = k
-            print(f"[Kernel] Set morphology kernel size to {k}")
+            self.kernel_size_mm = k
+            print(f"[Kernel] Set morphology kernel diameter to {k:g} mm")
 
     def set_cnt_threshold_dialog(self) -> None:
-        """Open a dialog to set the minimum contour area threshold in pixels."""
+        """Open a dialog to set the minimum contour area threshold in mm²."""
         dlg = ContourThresholdDialog(self.mw, initial=self.cnt_threshold)
         if dlg.exec() == QDialog.Accepted:
             val = dlg.value()
             self.cnt_threshold = max(0.0, float(val))
-            print(f"[Threshold] Contour area threshold set to {self.cnt_threshold:.0f} px")
+            print(f"[Threshold] Contour area threshold set to {self.cnt_threshold:.2f} mm²")
+
+    def set_cavity_options_dialog(self) -> None:
+        """Open a dialog to enable/disable the surface-connected cavity correction
+        and set its area threshold (both in one widget)."""
+        dlg = CavityOptionsDialog(
+            self.mw,
+            enabled=self.cavity_correction_enabled,
+            threshold_mm2=self.cavity_area_threshold_mm2,
+        )
+        if dlg.exec() == QDialog.Accepted:
+            self.cavity_correction_enabled = dlg.enabled()
+            self.cavity_area_threshold_mm2 = max(0.0, dlg.threshold())
+            print(f"[Cavity] correction "
+                  f"{'ON' if self.cavity_correction_enabled else 'OFF'}; "
+                  f"area threshold {self.cavity_area_threshold_mm2:.2f} mm²")
+
+    def set_perimeter_options_dialog(self) -> None:
+        """Open dialog for binary-mask perimeter measurement options."""
+        dlg = PerimeterOptionsDialog(
+            self.mw,
+            method=self.perimeter_method,
+            simplify=self.simplify_contours_for_perimeter,
+            epsilon=self.contour_simplify_epsilon,
+        )
+        if dlg.exec() == QDialog.Accepted:
+            method = dlg.method()
+            if method not in {"arc_length", "crofton"}:
+                method = DEFAULT_PERIMETER_METHOD
+            self.perimeter_method = method
+            self.simplify_contours_for_perimeter = dlg.simplify()
+            self.contour_simplify_epsilon = max(0.0, dlg.epsilon())
+            print(
+                "[Perimeter] method="
+                f"{self.perimeter_method}; simplify="
+                f"{'on' if self.simplify_contours_for_perimeter else 'off'}; "
+                f"epsilon={self.contour_simplify_epsilon:.2f} px"
+            )

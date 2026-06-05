@@ -144,8 +144,15 @@ class ViewManager:
         lo = mw.slice_slider.minimum()
         hi = mw.slice_slider.maximum()
         idx = mw.slice_slider.value()
-        pos_mm = mw.vtk_view.slice_index_to_mm(idx)
-        mw.slice_value_label.setText(f"{idx}/{hi}  ({pos_mm:.2f} mm)")
+        if self.slice_nav_mode == "png" and self.slice_nav_index_map:
+            # Show the real slice index (the slider position is just a list index).
+            actual = self._png_value_to_slice_index(idx)
+            last = self._png_value_to_slice_index(len(self.slice_nav_items) - 1)
+            pos_mm = mw.vtk_view.slice_index_to_mm(actual)
+            mw.slice_value_label.setText(f"{actual}/{last}  ({pos_mm:.2f} mm)")
+        else:
+            pos_mm = mw.vtk_view.slice_index_to_mm(idx)
+            mw.slice_value_label.setText(f"{idx}/{hi}  ({pos_mm:.2f} mm)")
 
     def set_zoom_controls_visible(self, visible: bool) -> None:
         """Show or hide image zoom controls in the navigation toolbar."""
@@ -154,6 +161,15 @@ class ViewManager:
     # ------------------------------------------------------------------
     # Slice slider handler
     # ------------------------------------------------------------------
+
+    def _png_value_to_slice_index(self, v: int) -> int:
+        """Map a png-mode slider value (a position in the PNG list) to the real
+        slice index via ``slice_nav_index_map``. Falls back to ``v`` if there is
+        no map entry (so non-png modes are unaffected)."""
+        m = self.slice_nav_index_map
+        if 0 <= v < len(m) and m[v] is not None:
+            return int(m[v])
+        return int(v)
 
     def on_slice_slider_changed(self, v: int) -> None:
         """Single handler for the slice slider (works for NIfTI, PNG, and VTK)."""
@@ -169,13 +185,15 @@ class ViewManager:
             self._update_slice_readout()
         elif self.slice_nav_mode == "vtk":
             mw._active_view = "vtk"
-            idx = max(0, min(v, len(self.slice_nav_items) - 1))
+            # v is the PNG-list position; the mesh sections are keyed by the real
+            # slice index (slice_idx scalar), so map through the index table.
+            slice_value = self._png_value_to_slice_index(v)
             self.show_widget(mw.vtk_view)
             mw.vtk_view.delete_slice_section()
             mw.vtk_view.show_slice_with_mesh(
                 mesh_file=mw.current_path,
                 slice_file=mw.current_output_3D_slices,
-                slice_value=idx,
+                slice_value=slice_value,
             )
             self._update_slice_readout()
         else:
@@ -226,7 +244,7 @@ class ViewManager:
                 mw.vtk_view.show_slice_with_mesh(
                     mesh_file=mw.current_path,
                     slice_file=mw.current_output_3D_slices,
-                    slice_value=mw.slice_slider.value(),
+                    slice_value=self._png_value_to_slice_index(mw.slice_slider.value()),
                 )
             elif text == "2D":
                 mw.vtk_view.delete_slice_section()
@@ -417,9 +435,13 @@ class ViewManager:
         mw.nav_tb.show()
         mw.slice_slider.setEnabled(True)
 
+        # The png slider browses the PNG LIST by position [0, len-1]. The actual
+        # slice index of each position lives in slice_nav_index_map (which may be
+        # non-zero-based and have gaps when slices were filtered) — consumers that
+        # need the real slice number map through _png_value_to_slice_index().
         mw.slice_slider.blockSignals(True)
-        mw.slice_slider.setMinimum(slice_indices[0])
-        mw.slice_slider.setMaximum(slice_indices[-1])
+        mw.slice_slider.setMinimum(0)
+        mw.slice_slider.setMaximum(len(self.slice_nav_items) - 1)
         mw.slice_slider.setSingleStep(1)
         mw.slice_slider.setPageStep(5)
         init = start_index if isinstance(start_index, int) else len(self.slice_nav_items) // 2

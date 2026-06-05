@@ -11,6 +11,7 @@ from helpers.helpers import (
     image_annotation_style,
     compute_kernel_convex,
     compactness_2D,
+    mask_perimeter_mm,
     SULCUS_CLASS_COLORS,
     SULCUS_CLASSES,
     classify_sulcus_depth,
@@ -25,17 +26,29 @@ from helpers.helpers import (
 from helpers.slice_kind_classifier import classify_slice_kind
 from constants import (
     BINARY_THRESHOLD_DEFAULT,
+    DEFAULT_KERNEL_SIZE_MM,
+    DEFAULT_PERIMETER_METHOD,
+    DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
+    DEFAULT_CONTOUR_SIMPLIFY_EPSILON,
     DEFECT_FIXED_POINT,
     SULCUS_TERTIARY_MIN_FRACTION,
     SULCUS_PRIMARY_MAX_FRACTION,
 )
 
+def _to_kernel_px(kernel_size_mm: float, pixel_size_mm: float) -> int:
+    px = max(3, int(round(float(kernel_size_mm) / max(float(pixel_size_mm), 1e-9))))
+    return px
+
+
 def process_on_images_batch(directory_path,
     out_dir,
     pixel_size: float = 0.01,
-    kernel_size: int = 5,
+    kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM,
     cnt_threshold: float = 20,
-    unit: str = "mm"):
+    unit: str = "mm",
+    perimeter_method: str = DEFAULT_PERIMETER_METHOD,
+    simplify_contours_for_perimeter: bool = DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
+    contour_simplify_epsilon: float = DEFAULT_CONTOUR_SIMPLIFY_EPSILON):
     """Run morphometric analysis on every image in a directory.
 
     For each image the function binarises it, finds external contours,
@@ -50,8 +63,7 @@ def process_on_images_batch(directory_path,
             created inside it for annotated PNGs.
         pixel_size: Physical size of one pixel in the chosen unit.
             Defaults to 0.01.
-        kernel_size: Size of the morphological closing kernel used when
-            computing the convex contour. Defaults to 5.
+        kernel_size_mm: Morphological closing kernel diameter in mm.
         cnt_threshold: Minimum contour area (in pixels) to keep a contour.
             May be increased automatically if the LGI ratio is below 1.
             Defaults to 20.
@@ -64,6 +76,7 @@ def process_on_images_batch(directory_path,
         *saved_pngs* is a list of file paths to the annotated PNG files.
     """
     
+    kernel_size_px = _to_kernel_px(kernel_size_mm, pixel_size)
     sheet1 = []
     valid_slices = []
     saved_pngs = []
@@ -75,6 +88,12 @@ def process_on_images_batch(directory_path,
     out_dir_Batch = os.path.join(out_dir, "image_Batch")
     os.makedirs(out_dir_Batch, exist_ok=True)
     print(f"[Process Batch] Temp output dir: {out_dir}")
+    print(
+        f"[Process Batch] Perimeter method={perimeter_method}; "
+        f"spacing={pixel_size:g} x {pixel_size:g} {unit}/px; "
+        f"simplify={'on' if simplify_contours_for_perimeter else 'off'} "
+        f"(epsilon={float(contour_simplify_epsilon):g} px)"
+    )
 
     margin = 6
 
@@ -116,7 +135,7 @@ def process_on_images_batch(directory_path,
         print(f"[Batch] {file_name}: slice_kind={slice_kind} (conf {slice_kind_conf:.2f}), "
               f"using {'percent' if use_percent_filter else 'fixed'} filter for sulci depth.")
 
-        kernel = compute_kernel_convex(kernel_size)
+        kernel = compute_kernel_convex(kernel_size_px)
 
         # Joint inner/outer filtering loop: both contour sets are filtered with
         # the SAME local_threshold every iteration, so when the retry bumps the
@@ -128,18 +147,18 @@ def process_on_images_batch(directory_path,
         steps = 0
         filtered_contours = []
         filtered_conv_contours = []
-        perimeter_convex_sum = 1.0
+        perimeter_convex_sum = None
         area = 0.0
         perimeter = 0.0
-        perimeter_convex = 0.0
-        perimeter_rate = 0.0
-        compactness = 0.0
+        perimeter_convex = None
+        perimeter_rate = None
+        compactness = None
         while True:
             steps += 1
             if steps > max_steps:
                 break  # safety
 
-            filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > local_threshold]
+            filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) * (pixel_size ** 2) > local_threshold]
 
             inner_mask_only = np.zeros_like(im_bw)
             cv2.drawContours(inner_mask_only, filtered_contours, -1, 255, thickness=cv2.FILLED)
@@ -147,24 +166,34 @@ def process_on_images_batch(directory_path,
             convex_Contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             filtered_conv_contours = [
                 cnt for cnt in convex_Contours
-                if cv2.contourArea(cnt) > local_threshold
+                if cv2.contourArea(cnt) * (pixel_size ** 2) > local_threshold
             ]
 
             area_sum = sum(cv2.contourArea(cnt) for cnt in filtered_contours) if filtered_contours else 0
-            perimeter_sum = sum(cv2.arcLength(cnt, True) for cnt in filtered_contours) if filtered_contours else 0
             area = area_sum * pixel_size**2
-            perimeter = perimeter_sum * pixel_size
+            perimeter = mask_perimeter_mm(
+                inner_mask_only, pixel_size, pixel_size,
+                method=perimeter_method,
+                simplify=simplify_contours_for_perimeter,
+                epsilon=contour_simplify_epsilon,
+            )
 
             if not filtered_conv_contours:
-                perimeter_convex_sum = 1.0  # avoid div-by-zero if needed later
+                perimeter_convex_sum = None
                 break
 
-            perimeter_convex_sum = sum(cv2.arcLength(cnt, True) for cnt in filtered_conv_contours)
-            perimeter_convex = perimeter_convex_sum * pixel_size
-            perimeter_rate = perimeter / perimeter_convex if perimeter_convex else float("inf")
+            outer_mask_only = np.zeros_like(closed_mask)
+            cv2.drawContours(outer_mask_only, filtered_conv_contours, -1, 255, thickness=cv2.FILLED)
+            perimeter_convex = mask_perimeter_mm(
+                outer_mask_only, pixel_size, pixel_size,
+                method=perimeter_method,
+                simplify=simplify_contours_for_perimeter,
+                epsilon=contour_simplify_epsilon,
+            )
+            perimeter_rate = perimeter / perimeter_convex if perimeter_convex else None
             compactness = compactness_2D(area, perimeter)
             if perimeter_rate < 1:
-                local_threshold += 500
+                local_threshold += 500 * (pixel_size ** 2)
                 continue  # retry with higher threshold (both inner and outer)
             break  # condition satisfied
 
@@ -231,7 +260,7 @@ def process_on_images_batch(directory_path,
             per_class_cells = [None] * len(sulcus_export_columns(unit))
             slice_class_data.append(None)
 
-        if perimeter_convex > 0:
+        if perimeter_convex is not None and perimeter_convex > 0:
             lgi_per_image.append(perimeter_rate)
         if compactness is not None:
             compactness_per_image.append(compactness)
@@ -243,7 +272,9 @@ def process_on_images_batch(directory_path,
             "area": area,
             "perimeter": perimeter,
             "perimeter_convex": perimeter_convex,
-            "lgi": perimeter_rate if perimeter_convex > 0 else None,
+            "lgi": (perimeter_rate
+                    if perimeter_convex is not None and perimeter_convex > 0
+                    else None),
             "compactness": compactness,
             "depth_sets": depth_sets if use_percent_filter else {},
             "png_path": new_path,
@@ -284,9 +315,18 @@ def process_on_images_batch(directory_path,
             })
 
         parameters = {
-            "Kernel size": int(kernel_size),
+            "Kernel size (mm)": float(kernel_size_mm),
+            "Kernel size (px)": int(kernel_size_px),
             "Pixel spacing": f"{pixel_size} {unit}/pixel",
-            "Filtered threshold": float(cnt_threshold),
+            "DEFAULT_PERIMETER_METHOD": DEFAULT_PERIMETER_METHOD,
+            "PERIMETER METHOD": perimeter_method,
+            "crofton_directions": 4,
+            "pixel_spacing_x": float(pixel_size),
+            "pixel_spacing_y": float(pixel_size),
+            "isotropic_spacing_used": perimeter_method == "crofton",
+            "contour_simplification_enabled": bool(simplify_contours_for_perimeter),
+            "contour_simplification_epsilon": float(contour_simplify_epsilon),
+            "Filtered threshold (mm²)": float(cnt_threshold),
             "Length unit": unit,
         }
         totals: dict = {}

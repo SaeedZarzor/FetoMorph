@@ -206,14 +206,15 @@ def _build_header_items(
     items.append(("kv", "OOR Beta (beta)", params.get("oor_beta")))
     items.append(("kv", "Apply Range Penalty", params.get("apply_penalty")))
     items.append(("kv", "Weighted Global", params.get("weighted_global")))
-    items.append(("kv", "Kernel Size", params.get("kernel_size")))
+    items.append(("kv", "Kernel Size (mm)", params.get("kernel_size_mm", params.get("kernel_size"))))
+    items.append(("kv", "Kernel Size (px)", params.get("kernel_size_px")))
     pxsize = params.get("pixel_size")
     pxunit = params.get("pixel_size_units") or ""
     pxstr = (f"{pxsize} {pxunit}/pixel".strip()
              if pxsize is not None else "")
     items.append(("kv", "Pixel Spacing", pxstr))
     items.append(("kv", "Length Unit", params.get("length_unit")))
-    items.append(("kv", "Filtered Threshold", params.get("filtered_threshold")))
+    items.append(("kv", "Filtered Threshold (mm²)", params.get("filtered_threshold")))
     items.append(("kv", "Contour Mode", params.get("contour_mode")))
     items.append(("blank",))
 

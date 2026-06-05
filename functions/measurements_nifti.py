@@ -19,8 +19,11 @@ from scipy.ndimage import binary_opening, binary_closing, label
 from nibabel.affines import apply_affine
 from helpers.helpers import (
     compactness_2D,
+    mask_perimeter_mm,
     compute_kernel_convex,
-    frustum_surface_area,
+    lateral_area_simpson,
+    volume_simpson,
+    total_surface_area_simpson,
     defect_mm_per_px_and_fixed,
     image_annotation_style,
     SULCUS_CLASS_COLORS,
@@ -34,7 +37,14 @@ from helpers.helpers import (
     pad_row,
     drop_empty_columns,
 )
-from constants import DEFAULT_KERNEL_SIZE_MM, DEFECT_FIXED_POINT, SULCUS_TERTIARY_MIN_FRACTION, SULCUS_PRIMARY_MAX_FRACTION
+from helpers.cavities import cavity_correction_nifti, CavityCorrection
+from constants import (
+    DEFAULT_KERNEL_SIZE_MM, DEFECT_FIXED_POINT,
+    SULCUS_TERTIARY_MIN_FRACTION, SULCUS_PRIMARY_MAX_FRACTION,
+    DEFAULT_CAVITY_CORRECTION_ENABLED, DEFAULT_CAVITY_AREA_THRESHOLD_MM2,
+    DEFAULT_PERIMETER_METHOD, DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
+    DEFAULT_CONTOUR_SIMPLIFY_EPSILON,
+)
 
 logger = logging.getLogger("fetomorph.nifti")
 
@@ -86,7 +96,12 @@ def compute_nifti_dims(brain_mask: np.ndarray, affine: np.ndarray) -> list[float
 
 
 
-def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: set[int], min_contour_area: float = 30, kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM):
+def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: set[int], min_contour_area: float = 30, kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM,
+    cavity_correction_enabled: bool = DEFAULT_CAVITY_CORRECTION_ENABLED,
+    cavity_area_threshold_mm2: float = DEFAULT_CAVITY_AREA_THRESHOLD_MM2,
+    perimeter_method: str = DEFAULT_PERIMETER_METHOD,
+    simplify_contours_for_perimeter: bool = DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
+    contour_simplify_epsilon: float = DEFAULT_CONTOUR_SIMPLIFY_EPSILON):
     """Compute all hallmarks (volume, area, GI, sulci depths) from a NIfTI segmentation.
 
     Iterates over coronal slices (axis 1), extracts inner/outer contours,
@@ -117,6 +132,12 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
     pixel_size_x, pixel_size_y, pixel_size_z = header.get_zooms()[:3] # (x, y, z) in mm
 
     print(f"[NIfTI All hallmarks] voxel size: {pixel_size_x:.4f} x {pixel_size_y:.4f} x {pixel_size_z:.4f} mm")
+    print(
+        f"[NIfTI All hallmarks] Perimeter method={perimeter_method}; "
+        f"in-plane spacing={pixel_size_x:.4f} x {pixel_size_z:.4f} mm/px; "
+        f"simplify={'on' if simplify_contours_for_perimeter else 'off'} "
+        f"(epsilon={float(contour_simplify_epsilon):g} px)"
+    )
 
 
     # Voxel face area in the coronal plane (X × Z) — used to convert
@@ -147,10 +168,25 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
 
 
 
+    # Surface-connected cavity classification (exact 3-D via binary_fill_holes).
+    # `filled` = tissue + enclosed voids (open cavities stay background); it is the
+    # corrected cross-section for the volume integral. Open-cavity wall perimeters
+    # are added to the surface lateral only (GI is untouched).
+    if cavity_correction_enabled:
+        cavity_corr, filled_mask = cavity_correction_nifti(
+            brain_mask > 0, list(brain_slices), axis=1,
+            pixel_size_x=float(pixel_size_x), pixel_size_z=float(pixel_size_z),
+            area_threshold_mm2=float(cavity_area_threshold_mm2))
+    else:
+        cavity_corr, filled_mask = CavityCorrection.empty(), None
+
     sheet1=[]
     sum_area = 0
     sum_inner,sum_outer = 0, 0
-    frustum_slices: list[tuple[float, float, float]] = []  # (h_mm, perimeter_mm, area_mm2)
+    # (slice position mm, inner perimeter mm) for the Simpson lateral integral,
+    # and (position mm, cross-section area mm²) for the Simpson volume integral.
+    lateral_samples: list[tuple[float, float]] = []
+    volume_samples: list[tuple[float, float]] = []
     valid_slices = []
     saved_pngs = []
     total_depth = []
@@ -173,26 +209,41 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                 
             # Inner contour
             inner_contours, _ = cv2.findContours(slice_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            filtered_contours = [cnt for cnt in inner_contours if cv2.contourArea(cnt) > min_contour_area]
-            cnt_mm = [cnt.astype(np.float32) * [pixel_size_x, pixel_size_z] for cnt in filtered_contours]
-            inner_perimeter = sum(cv2.arcLength(cnt, True) for cnt in cnt_mm)
-
+            filtered_contours = [cnt for cnt in inner_contours if cv2.contourArea(cnt) * pixel_area_mm2 > min_contour_area]
             # Outer contour: rebuild a mask from ONLY the kept inner contours
             # so noise rejected by the inner filter cannot produce spurious
             # outer components after morph-close.
             inner_mask_only = np.zeros_like(slice_mask)
             cv2.drawContours(inner_mask_only, filtered_contours, -1, 1, thickness=cv2.FILLED)
+            inner_perimeter = mask_perimeter_mm(
+                inner_mask_only, pixel_size_x, pixel_size_z,
+                method=perimeter_method,
+                simplify=simplify_contours_for_perimeter,
+                epsilon=contour_simplify_epsilon,
+            )
             closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size_px))
             outer_contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            filtered_outer_contours = [cnt for cnt in outer_contours if cv2.contourArea(cnt) > min_contour_area]
-            outer_cnt_mm = [cnt.astype(np.float32) * [pixel_size_x, pixel_size_z] for cnt in filtered_outer_contours]
-            outer_perimeter = sum(cv2.arcLength(cnt, True) for cnt in outer_cnt_mm)
+            filtered_outer_contours = [cnt for cnt in outer_contours if cv2.contourArea(cnt) * pixel_area_mm2 > min_contour_area]
+            outer_mask_only = np.zeros_like(closed_mask)
+            cv2.drawContours(outer_mask_only, filtered_outer_contours, -1, 1, thickness=cv2.FILLED)
+            outer_perimeter = mask_perimeter_mm(
+                outer_mask_only, pixel_size_x, pixel_size_z,
+                method=perimeter_method,
+                simplify=simplify_contours_for_perimeter,
+                epsilon=contour_simplify_epsilon,
+            )
                 
             # Save perimeters
             sum_inner += inner_perimeter
             sum_outer += outer_perimeter
-            # Frustum surface: slice position (mm) = idx × slice spacing.
-            frustum_slices.append((float(idx) * pixel_size_y, inner_perimeter, slice_area))
+            # Cavity correction: volume cross-section uses the filled mask (tissue
+            # + enclosed; open cavities removed); surface lateral gets the open
+            # cavity wall perimeter added. GI (inner/outer) is unchanged.
+            vol_area = (float(np.sum(filled_mask[:, idx, :]) * pixel_area_mm2)
+                        if filled_mask is not None else slice_area)
+            lateral_samples.append((float(idx) * pixel_size_y,
+                                    inner_perimeter + cavity_corr.perim_add(idx)))
+            volume_samples.append((float(idx) * pixel_size_y, vol_area))
             GI_slice = inner_perimeter / outer_perimeter if outer_perimeter > 0 else 0
                 
             # Create a grayscale image for visualization
@@ -202,7 +253,12 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
             thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
             cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)  # Red contours (original)
             cv2.drawContours(annotated, filtered_outer_contours, -1, (0, 255, 0), thickness)  # green
-            
+            # Yellow outline around surface-connected cavities (classified before
+            # the loop via binary_fill_holes); enclosed voids are left unmarked.
+            _cav_cnts = cavity_corr.surface_connected_by_idx.get(idx, [])
+            if _cav_cnts:
+                cv2.drawContours(annotated, _cav_cnts, -1, (0, 255, 255), thickness)  # yellow
+
             # Sulci classification: bin each kept defect by its depth as a
             # fraction of the brain's IS-extent (mm). All four sets are
             # flattened back into `depth` so the rest of the pipeline keeps
@@ -259,16 +315,25 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
 
 
 
-        # Volume integration: sum of slice areas (mm²) × slice spacing (mm) → mm³,
-        # then /1000 → cm³.
-        brain_volume = (sum_area * pixel_size_y)/1000
-        # Surface area: frustum-with-caps approximation (mm²), then /100 → cm².
-        # Legacy stack-of-slabs lateral area is kept in sa_meta for comparison.
-        sa_total_mm2, sa_meta = frustum_surface_area(
-            frustum_slices, legacy_slice_thickness=pixel_size_y)
-        for w in sa_meta["warnings"]:
-            print(f"[NIfTI All hallmarks] WARN: {w}")
-        Area = (sa_total_mm2 / 100) if sa_total_mm2 is not None else 0.0
+        # Volume = ∫ slice area dh via Simpson's rule (mm³ → /1000 cm³).
+        # The voxel-sum volume (Σ area × spacing) is kept only for verification.
+        brain_volume = volume_simpson(volume_samples) / 1000
+        _voxel_volume_cm3 = (sum_area * pixel_size_y) / 1000
+        print(f"[NIfTI All hallmarks] Volume: Simpson={brain_volume:.3f} cm³ "
+              f"(verify voxel-sum={_voxel_volume_cm3:.3f} cm³)")
+        # Surface area = Simpson lateral (∫ inner perimeter dh) + top & bottom
+        # caps (mm² → /100 cm²).
+        _total_area_mm2, _lat_mm2, _caps_mm2 = total_surface_area_simpson(
+            lateral_samples, volume_samples)
+        Area = _total_area_mm2 / 100
+        print(f"[NIfTI All hallmarks] Surface area: Simpson lateral+caps={Area:.3f} cm² "
+              f"(lateral={_lat_mm2 / 100:.3f}, caps={_caps_mm2 / 100:.3f} cm²)")
+        if cavity_correction_enabled:
+            print(f"[NIfTI All hallmarks] Cavity correction: "
+                  f"{cavity_corr.n_surface_connected} surface-connected, "
+                  f"{cavity_corr.n_enclosed} enclosed; "
+                  f"area removed={cavity_corr.total_cavity_area_mm2 / 100:.3f} cm², "
+                  f"wall added={cavity_corr.total_wall_perim_mm / 10:.3f} cm")
         GI_total = sum_inner / sum_outer if sum_outer > 0 else 0
         # Snapshot mm-unit depths for the per-mm Excel summary row before
         # the in-place cm conversion below.
@@ -323,27 +388,20 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                 "Pixel spacing": (
                     f"{float(pixel_size_x):.4f} × {float(pixel_size_z):.4f} mm "
                     "(in-plane)"),
+                "DEFAULT_PERIMETER_METHOD": DEFAULT_PERIMETER_METHOD,
+                "PERIMETER METHOD": perimeter_method,
+                "crofton_directions": 4,
+                "pixel_spacing_x": float(pixel_size_x),
+                "pixel_spacing_y": float(pixel_size_z),
+                "isotropic_spacing_used": perimeter_method == "crofton",
+                "contour_simplification_enabled": bool(simplify_contours_for_perimeter),
+                "contour_simplification_epsilon": float(contour_simplify_epsilon),
                 "Slice thickness": float(pixel_size_y),
-                "Filtered threshold": float(min_contour_area),
-                "surface_area_method": sa_meta["surface_area_method"],
-                "surface_area_frustum_total (cm^2)": (
-                    round(sa_meta["surface_area_frustum_total"] / 100, 4)
-                    if sa_meta["surface_area_frustum_total"] is not None else None),
-                "surface_area_frustum_lateral (cm^2)": (
-                    round(sa_meta["surface_area_frustum_lateral"] / 100, 4)
-                    if sa_meta["surface_area_frustum_lateral"] is not None else None),
-                "surface_area_caps (cm^2)": (
-                    round(sa_meta["surface_area_caps"] / 100, 4)
-                    if sa_meta["surface_area_caps"] is not None else None),
-                "top_cap_area (cm^2)": (
-                    round(sa_meta["top_cap_area"] / 100, 4)
-                    if sa_meta["top_cap_area"] is not None else None),
-                "bottom_cap_area (cm^2)": (
-                    round(sa_meta["bottom_cap_area"] / 100, 4)
-                    if sa_meta["bottom_cap_area"] is not None else None),
-                "number_of_valid_slices": int(sa_meta["number_of_valid_slices"]),
-                "slice_spacing_mode": sa_meta["slice_spacing_mode"],
+                "Filtered threshold (mm²)": float(min_contour_area),
+                "cavity_correction": "on" if cavity_correction_enabled else "off",
             }
+            if cavity_correction_enabled:
+                parameters["cavity_area_threshold_mm2"] = float(cavity_area_threshold_mm2)
             totals = {
                 "Volume (cm^3)": round(float(brain_volume), 2),
                 "Surface Area (cm^2)": round(float(Area), 2),
@@ -353,6 +411,13 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                                            if overall_mean is not None
                                            else None),
             }
+            if cavity_correction_enabled:
+                totals.update({
+                    "n_surface_connected_cavities": int(cavity_corr.n_surface_connected),
+                    "n_enclosed_cavities": int(cavity_corr.n_enclosed),
+                    "surface_connected_cavity_area_cm2": round(cavity_corr.total_cavity_area_mm2 / 100, 4),
+                    "cavity_wall_surface_cm2": round(cavity_corr.total_wall_perim_mm * float(pixel_size_y) / 100, 4),
+                })
             sheet = ResultsSheet(
                 sheet_name=os.path.basename(file_path) or "Results",
                 file_name=os.path.basename(file_path),
@@ -385,7 +450,9 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
 
 
 
-def compute_nifti_volume(parent, file_path: str, out_dir: str, valid_labels: set[int]):
+def compute_nifti_volume(parent, file_path: str, out_dir: str, valid_labels: set[int],
+    cavity_correction_enabled: bool = DEFAULT_CAVITY_CORRECTION_ENABLED,
+    cavity_area_threshold_mm2: float = DEFAULT_CAVITY_AREA_THRESHOLD_MM2):
     """Compute brain volume (cm³) from a NIfTI segmentation by integrating slice areas.
 
     Args:
@@ -447,10 +514,21 @@ def compute_nifti_volume(parent, file_path: str, out_dir: str, valid_labels: set
     os.makedirs(out_dir_slices, exist_ok=True)
     print(f"[NIfTI Volume] Temp output dir: {out_dir}")
 
+    # Surface-connected cavity classification (exact 3-D via binary_fill_holes).
+    # `filled_mask` = tissue + enclosed voids (open cavities stay background); it
+    # is the corrected cross-section for the volume integral.
+    if cavity_correction_enabled:
+        cavity_corr, filled_mask = cavity_correction_nifti(
+            brain_mask > 0, list(brain_slices), axis=1,
+            pixel_size_x=float(pixel_size_x), pixel_size_z=float(pixel_size_z),
+            area_threshold_mm2=float(cavity_area_threshold_mm2))
+    else:
+        cavity_corr, filled_mask = CavityCorrection.empty(), None
 
     sheet1=[]
 
     sum_area = 0
+    volume_samples: list[tuple[float, float]] = []  # (position mm, cross-section area mm²)
     valid_slices = []
     saved_pngs = []
 
@@ -466,26 +544,51 @@ def compute_nifti_volume(parent, file_path: str, out_dir: str, valid_labels: set
 #                continue  # Skip this slice
 #            else:
             valid_slices.append(idx)
-                
-            slice_area = float(np.sum(slice_mask) * pixel_area_mm2)
+
+            # Holes-filled cross-section (enclosed voids solid, open cavities
+            # excluded) for the volume integral.
+            slice_area = (float(np.sum(filled_mask[:, idx, :]) * pixel_area_mm2)
+                          if filled_mask is not None
+                          else float(np.sum(slice_mask) * pixel_area_mm2))
             sum_area += slice_area
-                
+            volume_samples.append((float(idx) * pixel_size_y, slice_area))
+
             annotated = np.stack([slice_mask * 255] * 3, axis=-1)  # Convert binary mask to RGB
             annotated = annotated.reshape((annotated.shape[0], annotated.shape[1], 3))
+            # Yellow-outline surface-connected cavities on the saved slice.
+            _cav_cnts = cavity_corr.surface_connected_by_idx.get(idx, [])
+            if _cav_cnts:
+                h_img, w_img = annotated.shape[:2]
+                _ct, _, _ = image_annotation_style(h_img, w_img, style="regular")
+                cv2.drawContours(annotated, _cav_cnts, -1, (0, 255, 255), _ct)
 
-                
             sheet1.append([idx, slice_area])
-                    
+
             slice_path = os.path.join(out_dir_slices, f"brain_slice_{idx:03d}.png")
             cv2.imwrite(slice_path, annotated)
             saved_pngs.append(slice_path)
 
 
 
-        brain_volume = (sum_area * pixel_size_y)/1000
+        # Volume = ∫ slice area dh via Simpson's rule (mm³ → cm³); voxel-sum kept
+        # only for verification.
+        brain_volume = volume_simpson(volume_samples) / 1000
+        _voxel_volume_cm3 = (sum_area * pixel_size_y) / 1000
+        print(f"[NIfTI Volume] Simpson={brain_volume:.3f} cm³ "
+              f"(verify voxel-sum={_voxel_volume_cm3:.3f} cm³)")
+        if cavity_correction_enabled:
+            print(f"[NIfTI Volume] Cavity correction: "
+                  f"{cavity_corr.n_surface_connected} surface-connected, "
+                  f"{cavity_corr.n_enclosed} enclosed; "
+                  f"area removed={cavity_corr.total_cavity_area_mm2 / 100:.3f} cm²")
 
 
         sheet1.append(["Volume cm^3",round(brain_volume,2)])
+        sheet1.append(["cavity_correction", "on" if cavity_correction_enabled else "off"])
+        if cavity_correction_enabled:
+            sheet1.append(["n_surface_connected_cavities", cavity_corr.n_surface_connected])
+            sheet1.append(["n_enclosed_cavities", cavity_corr.n_enclosed])
+            sheet1.append(["cavity_area_removed_cm2", round(float(cavity_corr.total_cavity_area_mm2 / 100), 4)])
 
         df = pd.DataFrame(sheet1, columns=["Slice", "Inner_area_mm^2", ])
         xlsx_path = os.path.join(out_dir, "Brain_Volume.xlsx")
@@ -510,7 +613,12 @@ def compute_nifti_volume(parent, file_path: str, out_dir: str, valid_labels: set
 
 
 
-def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30,):
+def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30,
+    perimeter_method: str = DEFAULT_PERIMETER_METHOD,
+    simplify_contours_for_perimeter: bool = DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
+    contour_simplify_epsilon: float = DEFAULT_CONTOUR_SIMPLIFY_EPSILON,
+    cavity_correction_enabled: bool = DEFAULT_CAVITY_CORRECTION_ENABLED,
+    cavity_area_threshold_mm2: float = DEFAULT_CAVITY_AREA_THRESHOLD_MM2):
     """Compute brain surface area (cm²) from a NIfTI segmentation.
 
     Sums inner-contour perimeters across coronal slices and multiplies
@@ -538,6 +646,12 @@ def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[
     pixel_size_x, pixel_size_y, pixel_size_z = voxel_size[:3]
 
     print(f"[NIfTI Area] voxel size: {pixel_size_x:.4f} x {pixel_size_y:.4f} x {pixel_size_z:.4f} mm")
+    print(
+        f"[NIfTI Area] Perimeter method={perimeter_method}; "
+        f"in-plane spacing={pixel_size_x:.4f} x {pixel_size_z:.4f} mm/px; "
+        f"simplify={'on' if simplify_contours_for_perimeter else 'off'} "
+        f"(epsilon={float(contour_simplify_epsilon):g} px)"
+    )
 
 
     pixel_area_mm2 = pixel_size_x* pixel_size_z
@@ -570,7 +684,17 @@ def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[
     out_dir_slices = os.path.join(out_dir, "brain_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
     print(f"[NIfTI Area] Temp output dir: {out_dir}")
-    
+
+    # Surface-connected cavity classification (exact 3-D). Open-cavity wall
+    # perimeters are added to the lateral surface (enclosed voids stay solid).
+    if cavity_correction_enabled:
+        cavity_corr, _filled_mask = cavity_correction_nifti(
+            brain_mask > 0, list(brain_slices), axis=1,
+            pixel_size_x=float(pixel_size_x), pixel_size_z=float(pixel_size_z),
+            area_threshold_mm2=float(cavity_area_threshold_mm2))
+    else:
+        cavity_corr, _filled_mask = CavityCorrection.empty(), None
+
     sheet1=[]
 
     sum_inner = 0
@@ -590,38 +714,66 @@ def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[
 #            else:
             valid_slices.append(idx)
 
-                
+
             # Inner contour
             inner_contours, _ = cv2.findContours(slice_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            filtered_contours = [cnt for cnt in inner_contours if cv2.contourArea(cnt) > min_contour_area]
-            cont_mm = [cnt.astype(np.float32) * [pixel_size_x, pixel_size_z] for cnt in filtered_contours]
-            inner_perimeter = sum(cv2.arcLength(cnt, True) for cnt in cont_mm)
-                
+            filtered_contours = [cnt for cnt in inner_contours if cv2.contourArea(cnt) * pixel_area_mm2 > min_contour_area]
+            inner_mask_only = np.zeros_like(slice_mask)
+            cv2.drawContours(inner_mask_only, filtered_contours, -1, 1, thickness=cv2.FILLED)
+            inner_perimeter = mask_perimeter_mm(
+                inner_mask_only, pixel_size_x, pixel_size_z,
+                method=perimeter_method,
+                simplify=simplify_contours_for_perimeter,
+                epsilon=contour_simplify_epsilon,
+            )
+            # Add the open-cavity wall perimeter to the surface lateral.
+            inner_perimeter += cavity_corr.perim_add(idx)
 
-                
+
             # Save perimeters
             sum_inner += inner_perimeter
-                
+
             # Create a grayscale image for visualization
             annotated = np.stack([slice_mask * 255] * 3, axis=-1)  # Convert binary mask to RGB
             annotated = annotated.reshape((annotated.shape[0], annotated.shape[1], 3))
             h_img, w_img = annotated.shape[:2]
             thickness, _, _ = image_annotation_style(h_img, w_img, style="regular")
             cv2.drawContours(annotated, filtered_contours, -1, (0, 0, 255), thickness)  # Red contours (original)
-                            
+            # Yellow-outline surface-connected cavities.
+            _cav_cnts = cavity_corr.surface_connected_by_idx.get(idx, [])
+            if _cav_cnts:
+                cv2.drawContours(annotated, _cav_cnts, -1, (0, 255, 255), thickness)
+
             sheet1.append([idx, inner_perimeter])
-                    
+
             slice_path = os.path.join(out_dir_slices, f"brain_slice_{idx:03d}.png")
             cv2.imwrite(slice_path, annotated)
             saved_pngs.append(slice_path)
 
 
         Area = sum_inner * pixel_size_y/ 100
+        if cavity_correction_enabled:
+            print(f"[NIfTI Area] Cavity correction: "
+                  f"{cavity_corr.n_surface_connected} surface-connected, "
+                  f"{cavity_corr.n_enclosed} enclosed; "
+                  f"wall perim added={cavity_corr.total_wall_perim_mm / 10:.3f} cm")
 
 
         sheet1.append(["Surface Area cm^2",round(Area,2)])
+        sheet1.append(["cavity_correction", "on" if cavity_correction_enabled else "off"])
+        if cavity_correction_enabled:
+            sheet1.append(["n_surface_connected_cavities", cavity_corr.n_surface_connected])
+            sheet1.append(["n_enclosed_cavities", cavity_corr.n_enclosed])
+            sheet1.append(["cavity_wall_perim_added_cm", round(float(cavity_corr.total_wall_perim_mm / 10), 4)])
 
         df = pd.DataFrame(sheet1, columns=["Slice", "Inner_Perimeter_mm"])
+        df.insert(0, "PERIMETER METHOD", perimeter_method)
+        df.insert(1, "DEFAULT_PERIMETER_METHOD", DEFAULT_PERIMETER_METHOD)
+        df.insert(2, "pixel_spacing_x", float(pixel_size_x))
+        df.insert(3, "pixel_spacing_y", float(pixel_size_z))
+        df.insert(4, "isotropic_spacing_used", perimeter_method == "crofton")
+        df.insert(5, "contour_simplification_enabled", bool(simplify_contours_for_perimeter))
+        df.insert(6, "contour_simplification_epsilon", float(contour_simplify_epsilon))
         xlsx_path = os.path.join(out_dir, "Brain_Surface_Area.xlsx")
         df.to_excel(xlsx_path, index=False)
             
@@ -643,7 +795,10 @@ def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[
     
     
 
-def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30, kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM):
+def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30, kernel_size_mm: float = DEFAULT_KERNEL_SIZE_MM,
+    perimeter_method: str = DEFAULT_PERIMETER_METHOD,
+    simplify_contours_for_perimeter: bool = DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
+    contour_simplify_epsilon: float = DEFAULT_CONTOUR_SIMPLIFY_EPSILON):
     """Compute the gyrification index (GI) from a NIfTI segmentation.
 
     GI = total inner perimeter / total outer perimeter across all coronal
@@ -674,6 +829,12 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
     kernel_size_px = _to_kernel_px(kernel_size_mm, max(pixel_size_x, pixel_size_z))
 
     print(f"[NIfTI lGI] voxel size: {pixel_size_x:.4f} x {pixel_size_y:.4f} x {pixel_size_z:.4f} mm")
+    print(
+        f"[NIfTI lGI] Perimeter method={perimeter_method}; "
+        f"in-plane spacing={pixel_size_x:.4f} x {pixel_size_z:.4f} mm/px; "
+        f"simplify={'on' if simplify_contours_for_perimeter else 'off'} "
+        f"(epsilon={float(contour_simplify_epsilon):g} px)"
+    )
 
 
     pixel_area_mm2 = pixel_size_x* pixel_size_z
@@ -732,20 +893,29 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
                 
             # Inner contour
             inner_contours, _ = cv2.findContours(slice_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            filtered_contours = [cnt for cnt in inner_contours if cv2.contourArea(cnt) > min_contour_area]
-            cnt_mm = [cnt.astype(np.float32) * [pixel_size_x, pixel_size_z] for cnt in filtered_contours]
-            inner_perimeter = sum(cv2.arcLength(cnt, True) for cnt in cnt_mm)
-
+            filtered_contours = [cnt for cnt in inner_contours if cv2.contourArea(cnt) * pixel_area_mm2 > min_contour_area]
             # Outer contour: rebuild a mask from ONLY the kept inner contours
             # so noise rejected by the inner filter cannot produce spurious
             # outer components after morph-close.
             inner_mask_only = np.zeros_like(slice_mask)
             cv2.drawContours(inner_mask_only, filtered_contours, -1, 1, thickness=cv2.FILLED)
+            inner_perimeter = mask_perimeter_mm(
+                inner_mask_only, pixel_size_x, pixel_size_z,
+                method=perimeter_method,
+                simplify=simplify_contours_for_perimeter,
+                epsilon=contour_simplify_epsilon,
+            )
             closed_mask = cv2.morphologyEx(inner_mask_only, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size_px))
             outer_contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            filtered_outer_contours = [cnt for cnt in outer_contours if cv2.contourArea(cnt) > min_contour_area]
-            outer_cnt_mm = [cnt.astype(np.float32) * [pixel_size_x, pixel_size_z] for cnt in filtered_outer_contours]
-            outer_perimeter = sum(cv2.arcLength(cnt, True) for cnt in outer_cnt_mm)
+            filtered_outer_contours = [cnt for cnt in outer_contours if cv2.contourArea(cnt) * pixel_area_mm2 > min_contour_area]
+            outer_mask_only = np.zeros_like(closed_mask)
+            cv2.drawContours(outer_mask_only, filtered_outer_contours, -1, 1, thickness=cv2.FILLED)
+            outer_perimeter = mask_perimeter_mm(
+                outer_mask_only, pixel_size_x, pixel_size_z,
+                method=perimeter_method,
+                simplify=simplify_contours_for_perimeter,
+                epsilon=contour_simplify_epsilon,
+            )
                 
             # Save perimeters
             sum_inner += inner_perimeter
@@ -797,6 +967,10 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
 
         df = pd.DataFrame(sheet1, columns=["Slice", "Kernel_px", "Inner_Perimeter_mm", "Outer_Perimeter_mm", "GI"])
         df.insert(0, "Kernel_size_mm", float(kernel_size_mm))
+        df.insert(1, "PERIMETER METHOD", perimeter_method)
+        df.insert(2, "DEFAULT_PERIMETER_METHOD", DEFAULT_PERIMETER_METHOD)
+        df.insert(3, "contour_simplification_enabled", bool(simplify_contours_for_perimeter))
+        df.insert(4, "contour_simplification_epsilon", float(contour_simplify_epsilon))
         xlsx_path = os.path.join(out_dir, "Brain_lGI.xlsx")
         df.to_excel(xlsx_path, index=False)
             
@@ -904,7 +1078,7 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
 
             # Inner contour
             inner_contours, _ = cv2.findContours(slice_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            filtered_contours = [cnt for cnt in inner_contours if cv2.contourArea(cnt) > min_contour_area]
+            filtered_contours = [cnt for cnt in inner_contours if cv2.contourArea(cnt) * pixel_area_mm2 > min_contour_area]
             cnt_mm = [cnt.astype(np.float32) * [pixel_size_x, pixel_size_z] for cnt in filtered_contours]
                 
             # Create a grayscale image for visualization

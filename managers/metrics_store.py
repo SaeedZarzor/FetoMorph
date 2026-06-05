@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from deps import *
 from typing import TYPE_CHECKING
+from constants import DEFAULT_PERIMETER_METHOD
 
 if TYPE_CHECKING:
     from FetoMorph import MainWindow
@@ -90,10 +91,12 @@ class MetricsStore:
         *,
         pixel_size: float | None = None,
         pixel_size_units: str | None = None,
-        kernel_size: float | None = None,
+        kernel_size_mm: float | None = None,
+        kernel_size_px: int | None = None,
         unit: str | None = None,
         slice_thickness: float | None = None,
         contour_mode: str | None = None,
+        perimeter_method: str | None = None,
         new_on_param_change: bool = False,
     ):
         """Ensure a metrics row exists for a given (path, annotation) pair.
@@ -125,11 +128,13 @@ class MetricsStore:
             or (new_on_param_change and any([
                 differs("PixelSize", pixel_size),
                 differs("PixelSizeUnits", pixel_size_units),
-                differs("KernelSize", kernel_size),
+                differs("KernelSizeMm", kernel_size_mm),
+                differs("KernelSizePx", kernel_size_px),
                 differs("SliceThickness", slice_thickness),
                 differs("LengthUnit", unit),
                 differs("SliceDirection", direction),
                 differs("ContourMode", contour_mode),
+                differs("PerimeterMethod", perimeter_method),
             ]))
         )
 
@@ -144,7 +149,11 @@ class MetricsStore:
                 "Area": None,
                 "PixelSize": pixel_size if pixel_size is not None else (last.get("PixelSize") if last else None),
                 "PixelSizeUnits": pixel_size_units if pixel_size_units is not None else (last.get("PixelSizeUnits") if last else None),
-                "KernelSize": kernel_size if kernel_size is not None else (last.get("KernelSize") if last else None),
+                "KernelSizeMm": kernel_size_mm if kernel_size_mm is not None else (last.get("KernelSizeMm") if last else None),
+                "KernelSizePx": kernel_size_px if kernel_size_px is not None else (last.get("KernelSizePx") if last else None),
+                "KernelSize": kernel_size_mm if kernel_size_mm is not None else (last.get("KernelSize") if last else None),
+                "DefaultPerimeterMethod": DEFAULT_PERIMETER_METHOD,
+                "PerimeterMethod": perimeter_method if perimeter_method is not None else (last.get("PerimeterMethod") if last else None),
                 "LengthUnit": unit if unit is not None else (last.get("LengthUnit") if last else None),
                 "SliceThickness": slice_thickness if slice_thickness is not None else (last.get("SliceThickness") if last else None),
                 "ContourMode": (
@@ -185,8 +194,14 @@ class MetricsStore:
             last["PixelSize"] = pixel_size
         if pixel_size_units is not None:
             last["PixelSizeUnits"] = pixel_size_units
-        if kernel_size is not None:
-            last["KernelSize"] = kernel_size
+        if kernel_size_mm is not None:
+            last["KernelSizeMm"] = kernel_size_mm
+            last["KernelSize"] = kernel_size_mm
+        if kernel_size_px is not None:
+            last["KernelSizePx"] = kernel_size_px
+        last["DefaultPerimeterMethod"] = DEFAULT_PERIMETER_METHOD
+        if perimeter_method is not None:
+            last["PerimeterMethod"] = perimeter_method
         if unit is not None:
             last["LengthUnit"] = unit
         if slice_thickness is not None:
@@ -206,20 +221,26 @@ class MetricsStore:
 
         psize = vals.pop("pixel_size", None)
         punit = vals.pop("pixel_size_units", None)
-        ksize = vals.pop("kernel_size", None)
+        ksize_mm = vals.pop("kernel_size_mm", vals.pop("kernel_size", None))
+        ksize_px = vals.pop("kernel_size_px", None)
         thicsl = vals.pop("slice_thickness", None)
         direction = vals.pop("direction", None)
         uni = vals.pop("unit", None)
         cmode = vals.pop("contour_mode", None)
+        pmethod = vals.pop("perimeter_method", None)
+        if pmethod is None and kind in {"image", "nifti"}:
+            pmethod = getattr(getattr(self.mw, "settings", None), "perimeter_method", None)
         row = self.ensure_metric_row(
             path, kind, label, annotation,
             source, direction,
             pixel_size=psize,
             pixel_size_units=punit,
-            kernel_size=ksize,
+            kernel_size_mm=ksize_mm,
+            kernel_size_px=ksize_px,
             unit=uni,
             slice_thickness=thicsl,
             contour_mode=cmode,
+            perimeter_method=pmethod,
             new_on_param_change=True,
         )
 
@@ -271,6 +292,7 @@ class MetricsStore:
             "area": "Area",
             "volume": "Volume",
             "perimeter": "Perimeter",
+            "perimeter_internal": "Perimeter_internal",
             "perimeter_convex": "Perimeter_convex",
             "lgi": "LGI",
             "compactness": "Compactness",
@@ -289,8 +311,8 @@ class MetricsStore:
         """Return the ordered list of column header strings."""
         return [
             "File", "Kind", "Label", "Annotation", "Source", "SliceDirection",
-            "PixelSize", "PixelSizeUnits", "KernelSize", "LengthUnit", "SliceThickness",
-            "ContourMode", "Length(PA)", "Width(LR)", "Height(IS)", "SliceKind",
+            "PixelSize", "PixelSizeUnits", "KernelSizeMm", "KernelSizePx", "KernelSize", "LengthUnit", "SliceThickness",
+            "DefaultPerimeterMethod", "PerimeterMethod", "ContourMode", "Length(PA)", "Width(LR)", "Height(IS)", "SliceKind",
             "Area", "Volume", "Perimeter", "Perimeter_convex",
             "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
             "TertiarySulciCount", "UnclassifiedSulciCount",
@@ -430,7 +452,10 @@ class MetricsStore:
         # of the same file. Each becomes a per-row column so the values
         # used for each measurement are visible inline.
         extra_columns = (
-            "Kernel size",
+            "Kernel size (mm)",
+            "Kernel size (px)",
+            "DEFAULT_PERIMETER_METHOD",
+            "PERIMETER METHOD",
             "Pixel spacing",
             "Slice thickness",
             "Contour mode",
@@ -462,7 +487,10 @@ class MetricsStore:
                            or r.get("Label") or f"Row {i}")
                 row_dict = {
                     "Section": section,
-                    "Kernel size": r.get("KernelSize"),
+                    "Kernel size (mm)": r.get("KernelSizeMm", r.get("KernelSize")),
+                    "Kernel size (px)": r.get("KernelSizePx"),
+                    "DEFAULT_PERIMETER_METHOD": r.get("DefaultPerimeterMethod", DEFAULT_PERIMETER_METHOD),
+                    "PERIMETER METHOD": r.get("PerimeterMethod"),
                     "Pixel spacing": _pixel_spacing(r),
                     "Slice thickness": r.get("SliceThickness"),
                     "Contour mode": r.get("ContourMode"),

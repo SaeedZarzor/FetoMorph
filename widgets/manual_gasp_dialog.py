@@ -38,7 +38,7 @@ class ManualGASPDialog(QDialog):
         *,
         default_axis: str = "coronal",
         default_unit: str = "mm",
-        default_kernel_size: int | None = 25,
+        default_kernel_size: float | None = 5.0,
         default_pixel_size: float | None = None,
         default_project_name: str = "",
     ):
@@ -103,11 +103,11 @@ class ManualGASPDialog(QDialog):
 
         self.kernel_edit = QLineEdit(self)
         if default_kernel_size is not None:
-            self.kernel_edit.setText(str(int(default_kernel_size)))
-        kv = QIntValidator(self)
-        kv.setBottom(1)
+            self.kernel_edit.setText(f"{float(default_kernel_size):g}")
+        kv = QDoubleValidator(self)
+        kv.setBottom(0.5)
         self.kernel_edit.setValidator(kv)
-        meta_form.addRow("Kernel size:", self.kernel_edit)
+        meta_form.addRow("Kernel size (mm):", self.kernel_edit)
 
         self.pxsize_edit = QLineEdit(self)
         if default_pixel_size is not None:
@@ -161,7 +161,7 @@ class ManualGASPDialog(QDialog):
         t = self.kernel_edit.text().strip()
         if t:
             try:
-                kernel = int(t)
+                kernel = float(t)
             except ValueError:
                 pass
         pxsize = None

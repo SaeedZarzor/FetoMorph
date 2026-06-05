@@ -134,6 +134,17 @@ Compute morphometric hallmarks from brain slice images:
 
 The processing pipeline uses binary thresholding, OpenCV contour detection, morphological closing with a configurable elliptical kernel, and convexity defect analysis.
 
+Perimeter measurement defaults to OpenCV `cv2.arcLength`, a polygonal contour
+length that preserves the legacy behavior. For NIfTI and 2D binary image masks,
+`Adjustments -> Perimeter Method...` can opt into a 4-direction Crofton
+perimeter estimator. Crofton measures the filled binary mask after local
+2D isotropic resampling, reducing curvature and pixel-grid bias for noisy
+rasterized boundaries. It can under-estimate straight axis-aligned edges, so
+the same method is applied to both LGI perimeter legs; the GI ratio is usually
+similar, while absolute surface area and compactness benefit most. STL/VTK
+workflows keep `arcLength` because their dominant error comes from rendered
+screenshot resolution.
+
 ### 3D Volumetric Measurements (NIfTI)
 
 Load NIfTI segmentation volumes and compute:

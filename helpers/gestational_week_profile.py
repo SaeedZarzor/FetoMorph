@@ -29,7 +29,7 @@ class WeekProfile:
     axis: str
     slice_rows_analyzed: int
     pixel_size_units: str
-    kernel_size: int
+    kernel_size_mm: float
     # core metric summary
     area: MetricStats
     perimeter: MetricStats
@@ -70,7 +70,7 @@ class GestationalWeekProfile:
 
     Construct with the path to a CSV in the wide format: one row per
     (week, axis) pair, columns ``week, axis, slice_rows_analyzed,
-    pixel_size_units, kernel_size`` followed by ``{metric}_n``,
+    pixel_size_units, kernel_size_mm`` followed by ``{metric}_n``,
     ``{metric}_mean``, ``{metric}_std``, ``{metric}_min``, ``{metric}_max``
     for every metric listed on :class:`WeekProfile`.
     """
@@ -117,12 +117,17 @@ class GestationalWeekProfile:
                 )
                 for name in _METRIC_FIELDS
             }
+            kernel_size_mm = (
+                _clean(row["kernel_size_mm"])
+                if "kernel_size_mm" in row.index
+                else _clean(row.get("kernel_size"))
+            )
             profile = WeekProfile(
                 week=int(row["week"]),
                 axis=str(row["axis"]),
                 slice_rows_analyzed=int(row["slice_rows_analyzed"]),
                 pixel_size_units=str(row["pixel_size_units"]),
-                kernel_size=int(row["kernel_size"]),
+                kernel_size_mm=float(kernel_size_mm) if kernel_size_mm is not None else 0.0,
                 **metric_stats,
             )
             profiles[(profile.week, profile.axis.lower())] = profile

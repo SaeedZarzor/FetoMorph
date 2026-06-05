@@ -120,18 +120,18 @@ class MeasurementDispatcher:
             # Call measurement function
             depth_sets = None
             if mode == "allmarks":
-                area, perimeter, perimeter_convex, lGI, compactness, depth, depth_sets, annotated_bgr, slice_kind = compute_image_allmarks(
+                area, perimeter, perimeter_internal, perimeter_convex, lGI, compactness, depth, depth_sets, annotated_bgr, slice_kind = compute_image_allmarks(
                     img_path, pixel_size=pixel_size, kernel_size_mm=self.mw.settings.kernel_size_mm,
                     cnt_threshold=self.mw.cnt_threshold, unit=u, add_scalebar=False,
-                    draw_hallmarks=self.mw.draw_hallmarks_on_image)
+                    draw_hallmarks=self.mw.draw_hallmarks_on_image, contour_mode=self.mw.contour_mode)
             elif mode == "perimeter":
-                perimeter, annotated_bgr, slice_kind = compute_image_perimeter(
+                perimeter, perimeter_internal, annotated_bgr, slice_kind = compute_image_perimeter(
                     img_path, pixel_size=pixel_size, cnt_threshold=self.mw.cnt_threshold, unit=u, add_scalebar=False,
-                    draw_hallmarks=self.mw.draw_hallmarks_on_image)
+                    draw_hallmarks=self.mw.draw_hallmarks_on_image, contour_mode=self.mw.contour_mode)
             elif mode == "area":
                 area, annotated_bgr, slice_kind = compute_image_area(
                     img_path, pixel_size=pixel_size, cnt_threshold=self.mw.cnt_threshold, unit=u, add_scalebar=False,
-                    draw_hallmarks=self.mw.draw_hallmarks_on_image)
+                    draw_hallmarks=self.mw.draw_hallmarks_on_image, contour_mode=self.mw.contour_mode)
             elif mode == "lGI":
                 lGI, perimeter, perimeter_convex, annotated_bgr, slice_kind = compute_image_lGI(
                     img_path, pixel_size=pixel_size, kernel_size_mm=self.mw.settings.kernel_size_mm,
@@ -172,6 +172,7 @@ class MeasurementDispatcher:
             if mode == "allmarks":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
                     kernel_size_mm=self.mw.settings.kernel_size_mm, kernel_size_px=self.mw.settings.kernel_size_px(pixel_size), area=area, perimeter=perimeter,
+                    perimeter_internal=perimeter_internal, contour_mode=self.mw.contour_mode,
                     perimeter_convex=perimeter_convex, lgi=lGI, compactness=compactness,
                     sulci_depth=depth, sulci_depth_sets=depth_sets, slice_kind=slice_kind)
                 print(f"[Planar VTK allmarks] area={area:.2f} {u}^2, perimeter={perimeter:.2f} {u}, GI={_fmt_optional(lGI)}")
@@ -179,11 +180,13 @@ class MeasurementDispatcher:
 
             elif mode == "perimeter":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
-                    perimeter=perimeter, slice_kind=slice_kind)
-                print(f"[Planar VTK perimeter] perimeter={perimeter:.2f} {u}")
+                    perimeter=perimeter, perimeter_internal=perimeter_internal,
+                    contour_mode=self.mw.contour_mode, slice_kind=slice_kind)
+                print(f"[Planar VTK perimeter] perimeter={perimeter:.2f} {u}"
+                      + (f", interior={perimeter_internal:.2f} {u}" if perimeter_internal is not None else ""))
             elif mode == "area":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
-                    area=area, slice_kind=slice_kind)
+                    area=area, contour_mode=self.mw.contour_mode, slice_kind=slice_kind)
                 print(f"[Planar VTK area] area={area:.2f} {u}^2")
             elif mode == "lGI":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
@@ -221,12 +224,13 @@ class MeasurementDispatcher:
 
                 print(f"[All hallmarks] Measuring: {self.mw.current_path}")
                 print(f"[All hallmarks] Measuring with pixel size = {px_size} {u}/pixel")
+                print(f"[All hallmarks] Perimeter method = {self.mw.settings.perimeter_method}")
 
                 image_path = self.mw.current_path
                 if self.mw.last_annotated_path is not None:
                     image_path = self.mw.last_annotated_path
                     
-                area, perimeter, perimeter_convex, lGI, compactness, depth, depth_sets, annotated_bgr, slice_kind = compute_image_allmarks(
+                area, perimeter, perimeter_internal, perimeter_convex, lGI, compactness, depth, depth_sets, annotated_bgr, slice_kind = compute_image_allmarks(
                     image_path,
                     pixel_size=px_size,
                     kernel_size_mm=self.mw.settings.kernel_size_mm,
@@ -234,6 +238,10 @@ class MeasurementDispatcher:
                     unit = u,
                     add_scalebar=not bool(self.mw.image_scale_from_scalebar.get(self.mw.current_path, False)),
                     draw_hallmarks=self.mw.draw_hallmarks_on_image,
+                    perimeter_method=self.mw.settings.perimeter_method,
+                    simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
+                    contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
+                    contour_mode=self.mw.contour_mode,
                 )
                 
                 print(f"[All hallmarks] Results:")
@@ -269,6 +277,8 @@ class MeasurementDispatcher:
                     kernel_size_px=self.mw.settings.kernel_size_px(px_size),
                     area=area,
                     perimeter=perimeter,
+                    perimeter_internal=perimeter_internal,
+                    contour_mode=self.mw.contour_mode,
                     perimeter_convex = perimeter_convex,
                     lgi=lGI,
                     compactness=compactness,
@@ -293,7 +303,11 @@ class MeasurementDispatcher:
                 
                 labels = self.mw.nifti_selected_regions if self.mw.nifti_selected_regions else self.mw.labels_available
                 dims, area, volume, gi, depth, saved_pngs, valid_slices = compute_nifti_allmarks(self, file_path=nif_path,
-                out_dir=out_dir, valid_labels=labels, min_contour_area=self.mw.cnt_threshold, kernel_size_mm=self.mw.settings.kernel_size_mm)
+                out_dir=out_dir, valid_labels=labels, min_contour_area=self.mw.cnt_threshold, kernel_size_mm=self.mw.settings.kernel_size_mm,
+                cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2,
+                perimeter_method=self.mw.settings.perimeter_method,
+                simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
+                contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon)
             
                 if area is None:
                     return
@@ -340,8 +354,13 @@ class MeasurementDispatcher:
 
                 self.mw.current_output_dir = out_dir
                 source_label, dims, area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_stl_allmarks(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
-                kernel_size_mm=self.mw.settings.kernel_size_mm, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
-            
+                kernel_size_mm=self.mw.settings.kernel_size_mm, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction,
+                cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2,
+                perimeter_method=self.mw.settings.perimeter_method,
+                simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
+                contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
+                fill_cross_section=self.mw.settings.fill_cross_section)
+
                 if source_label == "not_brain":
                     QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
                     return
@@ -405,7 +424,11 @@ class MeasurementDispatcher:
                 u = self.mw.units_length
                 area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_vtk_allmarks(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
                     kernel_size_mm=self.mw.settings.kernel_size_mm, Slice_direction=self.mw.slice_direction, Physical_dim=self.mw.physical_dim, unit=u, slice_thickness=self.mw.slice_thickness,
-                    contour_mode=self.mw.contour_mode)
+                    cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2,
+                    perimeter_method=self.mw.settings.perimeter_method,
+                    simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
+                    contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
+                    fill_cross_section=self.mw.settings.fill_cross_section)
 
                 if area is None:
                     return
@@ -475,7 +498,8 @@ class MeasurementDispatcher:
                 self.mw.current_output_dir = out_dir
                 labels = self.mw.nifti_selected_regions if self.mw.nifti_selected_regions else self.mw.labels_available
 
-                dims, volume,saved_pngs, valid_slices = compute_nifti_volume(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels)
+                dims, volume,saved_pngs, valid_slices = compute_nifti_volume(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels,
+                    cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
             
                 if volume is None:
                     return
@@ -507,7 +531,9 @@ class MeasurementDispatcher:
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.mw.current_output_dir = out_dir
-                source_label, dims,volume, saved_pngs, valid_slices = compute_stl_volume(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
+                source_label, dims,volume, saved_pngs, valid_slices = compute_stl_volume(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction,
+                fill_cross_section=self.mw.settings.fill_cross_section,
+                cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
             
                 if source_label == "not_brain":
                     QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
@@ -558,7 +584,8 @@ class MeasurementDispatcher:
                 u = self.mw.units_length
                 volume, saved_pngs, valid_slices = compute_vtk_volume(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
                     Slice_direction = self.mw.slice_direction, Physical_dim= self.mw.physical_dim, unit = u, slice_thickness=self.mw.slice_thickness,
-                    contour_mode=self.mw.contour_mode)
+                    fill_cross_section=self.mw.settings.fill_cross_section,
+                    cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
 
                 if volume is None:
                     return
@@ -603,20 +630,26 @@ class MeasurementDispatcher:
 
                 print(f"[Perimeter] Measuring: {self.mw.current_path}")
                 print(f"[Perimeter] Measuring with pixel size = {px_size} {u}/pixel")
+                print(f"[Perimeter] Method = {self.mw.settings.perimeter_method}")
 
                 image_path = self.mw.current_path
                 if self.mw.last_annotated_path is not None:
                     image_path = self.mw.last_annotated_path
                 
-                perimeter, annotated_bgr, slice_kind = compute_image_perimeter(
+                perimeter, perimeter_internal, annotated_bgr, slice_kind = compute_image_perimeter(
                     image_path,
                     pixel_size = px_size,
                     cnt_threshold = self.mw.cnt_threshold,
                     unit = u,
                     add_scalebar=not bool(self.mw.image_scale_from_scalebar.get(self.mw.current_path, False)),
                     draw_hallmarks=self.mw.draw_hallmarks_on_image,
+                    perimeter_method=self.mw.settings.perimeter_method,
+                    simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
+                    contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
+                    contour_mode=self.mw.contour_mode,
                 )
-                print(f"Annotated perimeter = {perimeter:.2f} {u}.")
+                print(f"Annotated perimeter = {perimeter:.2f} {u}."
+                      + (f" Interior = {perimeter_internal:.2f} {u}." if perimeter_internal is not None else ""))
                 
                 label_text = self.mw.get_label_for_cropped_path(image_path)
                 if label_text:
@@ -635,6 +668,8 @@ class MeasurementDispatcher:
                     unit= self.mw.units_length,
                     pixel_size = self.mw.pixel_size,
                     perimeter=perimeter,
+                    perimeter_internal=perimeter_internal,
+                    contour_mode=self.mw.contour_mode,
                     slice_kind=slice_kind)
 
             except Exception as ex:
@@ -693,9 +728,8 @@ class MeasurementDispatcher:
                         comp, saved_pngs, valid_slices = compute_compactness_vtk(self, file_path=self.mw.current_path,
                         out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
                         Slice_direction=self.mw.slice_direction, Physical_dim=self.mw.physical_dim,
-                        unit=self.mw.units_length, slice_thickness=self.mw.slice_thickness,
-                        contour_mode=self.mw.contour_mode)
-                        contour_mode_used = str(self.mw.contour_mode)
+                        unit=self.mw.units_length, slice_thickness=self.mw.slice_thickness)
+                        contour_mode_used = None  # VTK uses the cavity correction, not a manual mode
 
                     if comp is None:
                         return
@@ -745,7 +779,7 @@ class MeasurementDispatcher:
                     perimeter = float(perimeter)
                     compactness_2D_value = compactness_2D(area, perimeter)
                 else:
-                    compactness_2D_value, annotated_bgr, slice_kind = compute_compactness_2D(image_path, cnt_threshold=self.mw.cnt_threshold)
+                    compactness_2D_value, annotated_bgr, slice_kind = compute_compactness_2D(image_path, cnt_threshold=self.mw.cnt_threshold, pixel_size=self.mw.pixel_size)
                     pm = ViewManager.np_bgr_to_qpixmap(annotated_bgr)
                     self.mw.image_label.setImage(pm)
                     self.mw.image_label.remove_last_annotation()
@@ -867,6 +901,7 @@ class MeasurementDispatcher:
                 u, px_size = result
 
                 print(f"[lGI] Measuring: {self.mw.current_path}")
+                print(f"[lGI] Perimeter method = {self.mw.settings.perimeter_method}")
 
                 image_path = self.mw.current_path
                 if self.mw.last_annotated_path is not None:
@@ -879,6 +914,9 @@ class MeasurementDispatcher:
                     unit = u,
                     add_scalebar=not bool(self.mw.image_scale_from_scalebar.get(self.mw.current_path, False)),
                     draw_hallmarks=self.mw.draw_hallmarks_on_image,
+                    perimeter_method=self.mw.settings.perimeter_method,
+                    simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
+                    contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
                 )
                 print(f"lGI = {_fmt_optional(lGI)}.")
 
@@ -929,7 +967,13 @@ class MeasurementDispatcher:
                     self.mw.current_output_dir = out_dir
                     labels = self.mw.nifti_selected_regions if self.mw.nifti_selected_regions else self.mw.labels_available
 
-                    lGI, saved_pngs, valid_slices = compute_nifti_lGI(self, file_path=nif_path, out_dir=out_dir, valid_labels=labels, min_contour_area=self.mw.cnt_threshold, kernel_size_mm=self.mw.settings.kernel_size_mm)
+                    lGI, saved_pngs, valid_slices = compute_nifti_lGI(
+                        self, file_path=nif_path, out_dir=out_dir,
+                        valid_labels=labels, min_contour_area=self.mw.cnt_threshold,
+                        kernel_size_mm=self.mw.settings.kernel_size_mm,
+                        perimeter_method=self.mw.settings.perimeter_method,
+                        simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
+                        contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon)
                 
                     if lGI is None:
                         return
@@ -975,6 +1019,9 @@ class MeasurementDispatcher:
                         slice_thickness=self.mw.slice_thickness,
                         build_solid=False,   # keep False for stability
                         Slice_direction=self.mw.slice_direction,
+                        perimeter_method=self.mw.settings.perimeter_method,
+                        simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
+                        contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
                     )
                                         
                 
@@ -1017,8 +1064,11 @@ class MeasurementDispatcher:
                 
                 self.mw.current_output_dir = out_dir
                 source_label, dims, gi, saved_pngs, valid_slices = compute_stl_lGI(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
-                kernel_size_mm=self.mw.settings.kernel_size_mm, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
-            
+                kernel_size_mm=self.mw.settings.kernel_size_mm, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction,
+                perimeter_method=self.mw.settings.perimeter_method,
+                simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
+                contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon)
+
                 if source_label == "not_brain":
                     QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
                     return
@@ -1066,8 +1116,11 @@ class MeasurementDispatcher:
 
                 u = self.mw.units_length
                 gi, saved_pngs, valid_slices = compute_vtk_lGI(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
-                    kernel_size_mm=self.mw.settings.kernel_size_mm, Slice_direction=self.mw.slice_direction, Physical_dim=self.mw.physical_dim, unit=u, slice_thickness=self.mw.slice_thickness)
-            
+                    kernel_size_mm=self.mw.settings.kernel_size_mm, Slice_direction=self.mw.slice_direction, Physical_dim=self.mw.physical_dim, unit=u, slice_thickness=self.mw.slice_thickness,
+                    perimeter_method=self.mw.settings.perimeter_method,
+                    simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
+                    contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon)
+
                 if gi is None:
                     return
        
@@ -1305,6 +1358,7 @@ class MeasurementDispatcher:
                     unit = u,
                     add_scalebar=not bool(self.mw.image_scale_from_scalebar.get(self.mw.current_path, False)),
                     draw_hallmarks=self.mw.draw_hallmarks_on_image,
+                    contour_mode=self.mw.contour_mode,
                 )
                 
                 label_text = self.mw.get_label_for_cropped_path(image_path)
@@ -1326,8 +1380,9 @@ class MeasurementDispatcher:
                 pixel_size = self.mw.pixel_size,
                 unit = self.mw.units_length,
                 area=area,
+                contour_mode=self.mw.contour_mode,
                 slice_kind=slice_kind)
-                
+
             except Exception as ex:
                 print(f"[Area] ERROR : {ex}")
                 QMessageBox.critical(self.mw, "[Area] Failed", f"{type(ex).__name__}: {ex}")
@@ -1345,7 +1400,14 @@ class MeasurementDispatcher:
                 self.mw.current_output_dir = out_dir
                 labels = self.mw.nifti_selected_regions if self.mw.nifti_selected_regions else self.mw.labels_available
 
-                dims, area,saved_pngs, valid_slices = compute_nifti_area(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.mw.cnt_threshold,)
+                dims, area,saved_pngs, valid_slices = compute_nifti_area(
+                    self, file_path=nif_path, out_dir=out_dir,
+                    valid_labels=labels, min_contour_area=self.mw.cnt_threshold,
+                    perimeter_method=self.mw.settings.perimeter_method,
+                    simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
+                    contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
+                    cavity_correction_enabled=self.mw.settings.cavity_correction_enabled,
+                    cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
             
                 if area == 0:
                     QMessageBox.information(self.mw, "NIfTI Area", "All slices were filtered out (too small).")
@@ -1379,7 +1441,10 @@ class MeasurementDispatcher:
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.mw.current_output_dir = out_dir
-                source_label, dims,area, saved_pngs, valid_slices = compute_stl_area(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
+                source_label, dims,area, saved_pngs, valid_slices = compute_stl_area(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction,
+                perimeter_method=self.mw.settings.perimeter_method, simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter, contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
+                fill_cross_section=self.mw.settings.fill_cross_section,
+                cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
             
                 if source_label == "not_brain":
                     QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
@@ -1427,7 +1492,10 @@ class MeasurementDispatcher:
                     self.mw.settings.load_mesh_and_ask_geometry()
 
                 u = self.mw.units_length
-                area, saved_pngs, valid_slices = compute_vtk_area(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, Slice_direction = self.mw.slice_direction, Physical_dim= self.mw.physical_dim, unit = u, slice_thickness=self.mw.slice_thickness)
+                area, saved_pngs, valid_slices = compute_vtk_area(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, Slice_direction = self.mw.slice_direction, Physical_dim= self.mw.physical_dim, unit = u, slice_thickness=self.mw.slice_thickness,
+                perimeter_method=self.mw.settings.perimeter_method, simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter, contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
+                fill_cross_section=self.mw.settings.fill_cross_section,
+                cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
             
                 if area is None:
                     return
@@ -1529,7 +1597,10 @@ class MeasurementDispatcher:
                     raise ValueError(f"Could not read image: {img_path}")
 
             valid_slices, saved_pngs = process_on_images_batch(dir_path, out_dir, pixel_size=px_size, kernel_size_mm=self.mw.settings.kernel_size_mm,
-                cnt_threshold = self.mw.cnt_threshold, unit = u)
+                cnt_threshold=self.mw.cnt_threshold, unit=u,
+                perimeter_method=self.mw.settings.perimeter_method,
+                simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
+                contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon)
                 
             self.mw.view.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
 
@@ -1553,7 +1624,7 @@ class MeasurementDispatcher:
                 os.makedirs(out_dir, exist_ok=True)
                 self.mw.current_output_dir = out_dir
 
-                mask, edge_pixels, curvature_values,curvature_values_s  = compute_curvature_profile(path =self.mw.current_path, min_area = self.mw.cnt_threshold)
+                mask, edge_pixels, curvature_values,curvature_values_s  = compute_curvature_profile(path =self.mw.current_path, min_area = self.mw.cnt_threshold, pixel_size = self.mw.pixel_size)
                 
                 print(f"[Curvature] Analysis completed for image {self.mw.current_path}")
                 # Convert BGR ndarray → QPixmap and show (no disk write)
@@ -2247,7 +2318,19 @@ class MeasurementDispatcher:
                 "slices generated. Run 'All hallmarks' on the mesh first.")
             return
 
-        slice_idx = int(mw.slice_slider.value())
+        # The png slider value is the PNG-list position; the real slice index
+        # (the Excel "Section") comes from the index map, and the PNG is that same
+        # position. This stays correct when slices were filtered (gaps / offset).
+        view = getattr(mw, "view", None)
+        items = list(getattr(view, "slice_nav_items", []) or [])
+        idx_map = list(getattr(view, "slice_nav_index_map", []) or [])
+        list_idx = int(mw.slice_slider.value())
+        if 0 <= list_idx < len(idx_map) and idx_map[list_idx] is not None:
+            slice_idx = int(idx_map[list_idx])
+        else:
+            slice_idx = list_idx
+        png_path = items[list_idx] if 0 <= list_idx < len(items) else None
+
         measured = self._load_mesh_per_slice_measured(slice_idx)
         if not measured:
             QMessageBox.warning(
@@ -2258,20 +2341,6 @@ class MeasurementDispatcher:
         axis_map = {"X": "sagittal", "Y": "coronal", "Z": "axial"}
         direction = (getattr(mw, "slice_direction", None) or "Y").upper()
         axis = axis_map.get(direction, "coronal")
-
-        png_path = None
-        view = getattr(mw, "view", None)
-        items = list(getattr(view, "slice_nav_items", []) or [])
-        idx_map = list(getattr(view, "slice_nav_index_map", []) or [])
-        if idx_map:
-            for i, si in enumerate(idx_map):
-                if si == slice_idx and i < len(items):
-                    png_path = items[i]
-                    break
-        if png_path is None and items:
-            ix = slice_idx - int(mw.slice_slider.minimum())
-            if 0 <= ix < len(items):
-                png_path = items[ix]
 
         base_name = (
             os.path.splitext(os.path.basename(mw.current_path))[0]

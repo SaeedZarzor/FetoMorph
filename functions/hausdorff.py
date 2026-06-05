@@ -96,7 +96,7 @@ def convert_image(
     
     # Find contours
     contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_contour_area]
+    filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) * (pixel_spacing ** 2) > min_contour_area]
     
     annotated = image.copy()
     W, H = annotated.shape[:2]

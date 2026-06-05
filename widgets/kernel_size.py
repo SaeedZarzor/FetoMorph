@@ -1,43 +1,35 @@
-"""Morphological kernel size dialog widget.
-
-Provides a slider-and-spinbox dialog that constrains the user to odd
-kernel sizes, which is required by most OpenCV morphology operations.
-"""
+"""Morphological kernel size dialog widget."""
 
 from deps import *
 
 class KernelSizeDialog(QDialog):
-    """Dialog for picking an odd kernel size for morphological operations.
+    """Dialog for picking a morphology kernel diameter in millimetres."""
 
-    The slider and spin box are kept in sync and automatically snap to
-    the nearest valid odd integer within the specified range.
-    """
-
-    def __init__(self, parent=None, initial: int = 5, minimum: int = 1, maximum: int = 201):
+    def __init__(self, parent=None, initial: float = 5.0, minimum: float = 0.5, maximum: float = 25.0):
         """Initialise the kernel size dialog.
 
         Args:
             parent: Parent widget.
-            initial: Starting kernel size (will be forced odd).
-            minimum: Smallest allowed kernel size.
-            maximum: Largest allowed kernel size.
+            initial: Starting kernel diameter in millimetres.
+            minimum: Smallest allowed diameter in millimetres.
+            maximum: Largest allowed diameter in millimetres.
         """
         super().__init__(parent)
-        self.setWindowTitle("Morphology Kernel Size")
+        self.setWindowTitle("Morphology kernel diameter (mm)")
         self.setModal(True)
 
-        # enforce sane bounds and odd default
-        initial = max(minimum, min(maximum, initial))
-        if initial % 2 == 0:
-            initial += 1 if initial < maximum else -1
+        minimum = float(minimum)
+        maximum = float(maximum)
+        initial = max(minimum, min(maximum, float(initial)))
 
         form = QFormLayout(self)
 
+        self._scale = 2  # 0.5 mm steps
         self.slider = QSlider(Qt.Horizontal, self)
-        self.slider.setRange(minimum, maximum)
-        self.slider.setSingleStep(2)
+        self.slider.setRange(int(round(minimum * self._scale)), int(round(maximum * self._scale)))
+        self.slider.setSingleStep(1)
         self.slider.setPageStep(2)
-        self.slider.setValue(initial)
+        self.slider.setValue(int(round(initial * self._scale)))
         self.slider.setTickPosition(QSlider.TicksBelow)
         self.slider.setMinimumWidth(280)
         self.slider.setTickInterval(2)
@@ -49,31 +41,27 @@ class KernelSizeDialog(QDialog):
         """)
 
 
-        self.spin = QSpinBox(self)
+        self.spin = QDoubleSpinBox(self)
         self.spin.setRange(minimum, maximum)
-        self.spin.setSingleStep(2)
+        self.spin.setSingleStep(0.5)
+        self.spin.setDecimals(1)
+        self.spin.setSuffix(" mm")
         self.spin.setValue(initial)
 
-        # keep in sync and force odd values
-        def _ensure_odd(v: int) -> int:
-            if v % 2 == 0:
-                v = v + 1 if v < maximum else v - 1
-            return max(minimum, min(maximum, v))
-
         def _from_slider(v: int):
-            v = _ensure_odd(v)
-            if self.spin.value() != v:
-                self.spin.blockSignals(True); self.spin.setValue(v); self.spin.blockSignals(False)
+            mm = v / self._scale
+            if abs(self.spin.value() - mm) > 1e-9:
+                self.spin.blockSignals(True); self.spin.setValue(mm); self.spin.blockSignals(False)
 
-        def _from_spin(v: int):
-            v = _ensure_odd(v)
-            if self.slider.value() != v:
-                self.slider.blockSignals(True); self.slider.setValue(v); self.slider.blockSignals(False)
+        def _from_spin(v: float):
+            slider_v = int(round(float(v) * self._scale))
+            if self.slider.value() != slider_v:
+                self.slider.blockSignals(True); self.slider.setValue(slider_v); self.slider.blockSignals(False)
 
         self.slider.valueChanged.connect(_from_slider)
         self.spin.valueChanged.connect(_from_spin)
 
-        form.addRow("Kernel size (odd):", self.slider)
+        form.addRow("Kernel diameter:", self.slider)
         form.addRow("Value:", self.spin)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
@@ -81,8 +69,6 @@ class KernelSizeDialog(QDialog):
         btns.rejected.connect(self.reject)
         form.addRow(btns)
 
-    def value(self) -> int:
-        """Return the selected odd kernel size."""
-        v = int(self.spin.value())
-        return v if v % 2 == 1 else max(1, v - 1)
-
+    def value(self) -> float:
+        """Return the selected kernel diameter in millimetres."""
+        return float(self.spin.value())

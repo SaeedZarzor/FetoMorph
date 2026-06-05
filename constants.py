@@ -19,18 +19,24 @@ RED_CHANNEL_MIN = 150   # R channel must exceed this to be considered "red"
 GREEN_CHANNEL_MAX = 50  # G channel must stay below this
 
 # ---------------------------------------------------------------------------
-# Surface-area correction factor (slice-sum vs exact mesh.area)
+# Surface-connected cavity correction (3D volume / surface area)
 # ---------------------------------------------------------------------------
-# The slice-sum surface area underestimates PyVista's exact mesh.area. The
-# correction factor = mesh.area / slice_sum_area scales the slice-sum surface
-# measures so absolute areas match the true mesh while keeping GI (a same-
-# surface ratio) internally consistent. A factor outside [MIN, MAX] is a red
-# flag (geometry/units problem) — we warn but never raise. A factor outside the
-# tighter [WARN_LOW, WARN_HIGH] band is highlighted in the Excel for reviewers.
-AREA_CORRECTION_FACTOR_MIN = 0.80
-AREA_CORRECTION_FACTOR_MAX = 1.20
-AREA_CORRECTION_FACTOR_WARN_LOW = 0.95
-AREA_CORRECTION_FACTOR_WARN_HIGH = 1.05
+# When a sliced 3D geometry has a hole/cavity that opens onto the outer surface
+# (a surface-connected void), its area is subtracted from the cross-section
+# before volume integration, and its wall perimeter is added to the 3D surface
+# area. Fully-enclosed internal voids are left untouched (treated as solid).
+# A cavity is only considered when its physical area exceeds the threshold.
+DEFAULT_CAVITY_CORRECTION_ENABLED = True
+DEFAULT_CAVITY_AREA_THRESHOLD_MM2 = 0.0
+
+# Surface meshes (e.g. FreeSurfer pial) slice to a thin boundary curve, so the
+# brain interior reads as background and the cross-section renders hollow. When
+# enabled, the slice contour is triangulated into a filled face at render time
+# (vtkStripper + vtkContourTriangulator) so the cross-section is drawn as a solid
+# colored region against the background — the same way a sliced volumetric VTK
+# dataset already appears. Concavities (sulci) are followed and genuine enclosed
+# voids are preserved, so the outer boundary (hence GI/perimeter) is unchanged.
+DEFAULT_FILL_CROSS_SECTION = True
 
 # ---------------------------------------------------------------------------
 # Convexity-defect fixed-point divisor
@@ -71,9 +77,12 @@ DEFAULT_NIFTI_REGIONS = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 900
 DEFAULT_PIXEL_SIZE = 0.01        # mm/px fallback when user has not calibrated
-DEFAULT_CNT_THRESHOLD = 100      # contour detection threshold (0-255)
+DEFAULT_CNT_THRESHOLD = 1.0      # min contour area to keep, in mm² (physical, like the cavity threshold)
 DEFAULT_KERNEL_SIZE_MM = 5.0     # morphological kernel diameter in mm
 DEFAULT_KERNEL_SIZE = max(3, int(round(DEFAULT_KERNEL_SIZE_MM)))  # legacy pixel fallback
+DEFAULT_PERIMETER_METHOD = "crofton"  # "arc_length" or "crofton"
+DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER = False
+DEFAULT_CONTOUR_SIMPLIFY_EPSILON = 0.5
 DEFAULT_SLICE_THICKNESS = 0.5    # mm between slices
 DEFAULT_SCALEBAR_MM = 25         # default scale-bar length in mm
 CONSOLE_MAX_BLOCKS = 10000       # max lines in the output console

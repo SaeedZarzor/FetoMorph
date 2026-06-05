@@ -38,14 +38,6 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from constants import (
-    AREA_CORRECTION_FACTOR_WARN_LOW,
-    AREA_CORRECTION_FACTOR_WARN_HIGH,
-)
-
-# Totals key whose value cell is highlighted when out of the warn band.
-AREA_CORRECTION_FACTOR_KEY = "Area_correction_factor"
-
 
 RESULTS_COLUMNS: tuple[str, ...] = (
     "Section",
@@ -90,6 +82,9 @@ class ResultsSheet:
     parameters: dict[str, Any] = field(default_factory=dict)
     rows: list[dict[str, Any]] = field(default_factory=list)
     totals: dict[str, Any] | None = None
+    # Optional explanatory note written one cell to the right of a totals
+    # value, keyed by the same totals key.
+    totals_notes: dict[str, Any] = field(default_factory=dict)
     embed_section_images: bool = True
     image_max_width: int = 900
     # Extra column headers inserted into the Mean results table between
@@ -119,6 +114,18 @@ def subtype_mean(direct_mean: Any, v_values: Iterable[Any]) -> float | None:
     if not floats:
         return None
     return sum(floats) / len(floats)
+
+
+def gi_3d_note(gi_3d: Any) -> str:
+    """One-line explanation for the 3-D area-based GI (convex-hull) cell."""
+    if not _is_real_number(gi_3d):
+        return ""
+    g = float(gi_3d)
+    return (
+        f"3-D gyrification = exact mesh surface ÷ convex-hull surface "
+        f"= {g:.2f}. ≈1 for a smooth/convex surface; larger means more folding "
+        f"(FreeSurfer-style 3-D GI proxy). Independent of the 2-D perimeter GI."
+    )
 
 
 def write_results_workbook(
@@ -236,38 +243,6 @@ def read_results_sheet(
     return out
 
 
-def highlight_correction_factor_xlsx(
-    xlsx_path: str,
-    factor: float,
-    *,
-    label: str = AREA_CORRECTION_FACTOR_KEY,
-) -> None:
-    """Yellow-fill the value cell of an ``Area_correction_factor`` row.
-
-    For the raw ``df.to_excel`` outputs (STL/VTK lGI sheets) that don't go
-    through :func:`write_results_workbook`. No-op when *factor* sits inside the
-    warn band or the label/file can't be found. The value is taken as the last
-    cell of the matching row, matching those sheets' layout.
-    """
-    if not _is_real_number(factor):
-        return
-    if (AREA_CORRECTION_FACTOR_WARN_LOW
-            <= float(factor)
-            <= AREA_CORRECTION_FACTOR_WARN_HIGH):
-        return
-    try:
-        wb = load_workbook(xlsx_path)
-        ws = wb.active
-        for row_cells in ws.iter_rows():
-            if any(c.value == label for c in row_cells):
-                row_cells[-1].fill = _WARN_FILL
-                wb.save(xlsx_path)
-                return
-    except Exception as ex:
-        print(f"[Warning] highlight_correction_factor_xlsx — could not "
-              f"highlight {xlsx_path}: {ex}")
-
-
 # ---------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------
@@ -281,11 +256,42 @@ _LABEL_FONT = Font(bold=True)
 _TABLE_HEADER_FONT = Font(bold=True, color="FFFFFF")
 _TABLE_HEADER_FILL = PatternFill("solid", fgColor="3498DB")
 _FOOTER_FONT = Font(italic=True, color="555555")
-_WARN_FILL = PatternFill("solid", fgColor="FFFF99")
 _LINK_FONT = Font(color="0563C1", underline="single")
 _CENTER = Alignment(horizontal="center")
 
 SECTION_LINK_KEY = "_section_link"
+
+
+# One-line explanation rendered in the cell next to each totals value. Matched
+# by substring against the totals key (which carries units), most-specific first
+# so e.g. "GI_3D" wins over "GI".
+_TOTAL_NOTES = (
+    ("GI_3D", "3-D gyrification index = exact mesh surface ÷ convex-hull (smooth envelope) surface."),
+    ("Convex_hull_area", "Surface area of the mesh's convex hull (the smooth outer envelope)."),
+    ("Total_to_lateral_surface_ratio", "Exact mesh surface ÷ lateral estimate (diagnostic; ≈1 is ideal)."),
+    ("Area_lateral_surface", "Lateral surface = ∫ inner perimeter dh (Simpson), no end caps."),
+    ("Surface_area_caps", "Top + bottom end-face areas, added to the lateral surface."),
+    ("surface_connected_cavity_area", "Area of surface-connected (open) cavities removed from the volume."),
+    ("n_surface_connected_cavities", "Open cavities corrected: area removed from volume, walls added to surface."),
+    ("n_enclosed_cavities", "Fully-enclosed voids left as solid (not corrected)."),
+    ("cavity_area_threshold", "Minimum cavity area considered by the cavity correction."),
+    ("cavity_correction", "Whether the surface-connected cavity correction was applied."),
+    ("Surface Area", "Total 3-D surface area = lateral (∫ perimeter dh) + top & bottom caps."),
+    ("Volume", "Tissue volume = ∫ cross-section area dh (Simpson integration over slices)."),
+    ("Compactness", "3-D compactness / sphericity = 36π·V² ÷ S³ (1 = a perfect sphere)."),
+    ("Total sulci count", "Number of detected sulci (convexity defects passing the depth filter)."),
+    ("Mean sulci depth", "Mean depth across all detected sulci."),
+    ("GI", "Gyrification index = Σ inner (cortical) perimeter ÷ Σ outer (closing) perimeter."),
+)
+
+
+def _default_total_note(key) -> str:
+    """Return a one-line explanation for a totals key (matched by substring)."""
+    k = str(key)
+    for sub, note in _TOTAL_NOTES:
+        if sub in k:
+            return note
+    return ""
 
 
 def _render_sheet(wb, ws, sheet: ResultsSheet, used_names: set[str],
@@ -319,9 +325,43 @@ def _render_sheet(wb, ws, sheet: ResultsSheet, used_names: set[str],
         ws.cell(row=3, column=col + 1, value=value)
         col += 2
 
-    # Results table comes first, then the Parameters block beneath it
-    # (per layout preference) — see the Parameters section below the Totals.
+    # Parameters and Totals are placed at the TOP (before the per-section table)
+    # so the run settings and the summary numbers read first.
     row = 5
+
+    # Parameters block
+    params = _sorted_parameters(sheet.parameters)
+    if sheet.drop_empty_columns:
+        params = [(k, v) for (k, v) in params if _is_populated(v)]
+    elif not params:
+        params = [(k, None) for k in PARAMETER_KEYS]
+    if params:
+        _write_section(ws, row, last_col, PARAMETERS_HEADER)
+        row += 1
+        for key, value in params:
+            ws.cell(row=row, column=2, value=key).font = _LABEL_FONT
+            ws.cell(row=row, column=3, value=_to_cell(value))
+            row += 1
+        row += 1  # blank line
+
+    # Totals block — each total carries a one-line explanation in the next cell.
+    totals_items = list(sheet.totals.items()) if sheet.totals else []
+    if sheet.drop_empty_columns:
+        totals_items = [(k, v) for k, v in totals_items if _is_populated(v)]
+    if totals_items:
+        _write_section(ws, row, last_col, TOTALS_HEADER)
+        row += 1
+        notes = sheet.totals_notes or {}
+        for key, value in totals_items:
+            ws.cell(row=row, column=2, value=key).font = _LABEL_FONT
+            ws.cell(row=row, column=3, value=_to_cell(value))
+            note = notes.get(key) or _default_total_note(key)
+            if note:
+                nc = ws.cell(row=row, column=4, value=str(note))
+                nc.font = _FOOTER_FONT
+                nc.alignment = Alignment(horizontal="left")
+            row += 1
+        row += 1
 
     # Mean results header
     _write_section(ws, row, last_col, RESULTS_HEADER)
@@ -363,42 +403,6 @@ def _render_sheet(wb, ws, sheet: ResultsSheet, used_names: set[str],
                 )
         row += 1
     row += 1  # blank line
-
-    # Totals
-    totals_items = list(sheet.totals.items()) if sheet.totals else []
-    if sheet.drop_empty_columns:
-        totals_items = [(k, v) for k, v in totals_items if _is_populated(v)]
-    if totals_items:
-        _write_section(ws, row, last_col, TOTALS_HEADER)
-        row += 1
-        for key, value in totals_items:
-            ws.cell(row=row, column=2, value=key).font = _LABEL_FONT
-            value_cell = ws.cell(row=row, column=3, value=_to_cell(value))
-            # Visual warning: flag an out-of-band area correction factor so a
-            # reviewer can spot a suspect slice-sum vs mesh.area mismatch.
-            if key == AREA_CORRECTION_FACTOR_KEY and _is_real_number(value) and not (
-                    AREA_CORRECTION_FACTOR_WARN_LOW
-                    <= float(value)
-                    <= AREA_CORRECTION_FACTOR_WARN_HIGH):
-                value_cell.fill = _WARN_FILL
-            row += 1
-        row += 1
-
-    # Parameters block — placed after the results so the metric columns
-    # read first, with the run parameters listed beneath them.
-    params = _sorted_parameters(sheet.parameters)
-    if sheet.drop_empty_columns:
-        params = [(k, v) for (k, v) in params if _is_populated(v)]
-    elif not params:
-        params = [(k, None) for k in PARAMETER_KEYS]
-    if params:
-        _write_section(ws, row, last_col, PARAMETERS_HEADER)
-        row += 1
-        for key, value in params:
-            ws.cell(row=row, column=2, value=key).font = _LABEL_FONT
-            ws.cell(row=row, column=3, value=_to_cell(value))
-            row += 1
-        row += 1  # blank line
 
     # Footer
     cell = ws.cell(row=row, column=2, value=FOOTER)

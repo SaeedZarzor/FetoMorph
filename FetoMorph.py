@@ -210,6 +210,7 @@ class MainWindow(QMainWindow):
     image_scale_from_scalebar = _settings_prop("image_scale_from_scalebar")
     draw_hallmarks_on_image   = _settings_prop("draw_hallmarks_on_image")
     cnt_threshold      = _settings_prop("cnt_threshold")
+    kernel_size_mm     = _settings_prop("kernel_size_mm")
     kernel_size        = _settings_prop("kernel_size")
     contour_mode               = _settings_prop("contour_mode")
     slice_thickness    = _settings_prop("slice_thickness")
@@ -382,6 +383,7 @@ class MainWindow(QMainWindow):
         self.act_set_scale = QAction("Set Scale From Scalebar…", self);self.act_set_scale.triggered.connect(self.settings.set_scale_from_scalebar);
         Adjustments_menu.addAction(self.act_set_scale)
         self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.settings.set_kernel_dialog); Adjustments_menu.addAction(self.act_kernel_size)
+        self.act_perimeter_options = QAction("Perimeter Method…", self); self.act_perimeter_options.triggered.connect(self.settings.set_perimeter_options_dialog); Adjustments_menu.addAction(self.act_perimeter_options)
         self.act_slice_thickness = QAction("Set Slice Thickness…", self); self.act_slice_thickness.triggered.connect(self.settings.set_slice_thickness_dialog); Adjustments_menu.addAction(self.act_slice_thickness); self.act_slice_thickness.setToolTip("Set the distance between slices")
         self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.settings.set_cnt_threshold_dialog); Adjustments_menu.addAction(self.act_cnt_threshold)
         self.act_gasp_options = QAction("GASP Options", self); self.act_gasp_options.triggered.connect(self._open_gasp_options); Adjustments_menu.addAction(self.act_gasp_options)
@@ -425,6 +427,15 @@ class MainWindow(QMainWindow):
             if mode:
                 self.contour_mode = mode
         self.contour_mode_group.triggered.connect(_on_contour_mode_changed)
+
+        # Surface-connected cavity correction (volume / surface area) — enable
+        # toggle + area threshold combined in one dialog.
+        self.act_cavity_options = QAction("Surface-Connected Cavities…", self)
+        self.act_cavity_options.setToolTip(
+            "Enable/disable the surface-connected cavity correction and set its area threshold.")
+        self.act_cavity_options.triggered.connect(self.settings.set_cavity_options_dialog)
+        Adjustments_menu.addAction(self.act_cavity_options)
+
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Adjustments_menu.addAction(self.act_annotate_square)
         self.act_choose_regions = QAction("ROI selection…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Adjustments_menu.addAction(self.act_choose_regions)
         self.act_set_physical_dim = QAction("Mesh dimensions…", self);self.act_set_physical_dim.setToolTip("Define the physical dimensions of the VTK mesh."); self.act_set_physical_dim.triggered.connect(self.settings.load_mesh_and_ask_geometry);Adjustments_menu.addAction(self.act_set_physical_dim)
@@ -469,6 +480,7 @@ class MainWindow(QMainWindow):
             self.act_set_image_scale,
             self.act_set_scale,
             self.act_kernel_size,
+            self.act_perimeter_options,
             self.act_cnt_threshold,
             self.act_set_custom_label,
             self.act_meas_allmarks,
@@ -493,7 +505,7 @@ class MainWindow(QMainWindow):
         vtk_output = QtVTKOutputWindow(self._qt_console); vtkOutputWindow.SetInstance(vtk_output)
         print("Application started. Progress output will appear here.")
 
-        self.all_actions = {self.act_show_results, self.act_Reset, self.act_close, self.act_quit, self.act_imp_img, self.act_imp_vtk, self.act_imp_stl, self.act_imp_nii, self.act_save, self.act_save_data, self.act_export_metrics, self.act_meas_allmarks, self.act_meas_perimeter, self.act_meas_area, self.act_meas_volumes, self.act_meas_lgi, self.act_meas_sulci, self.act_meas_curvature, self.act_meas_compactness, self.act_hausdorf, self.act_set_custom_label,  self.act_set_image_scale, self.act_set_scale,  self.act_kernel_size, self.act_slice_thickness,  self.act_cnt_threshold, self.act_contour_outer, self.act_contour_subtract, self.act_contour_internal_only, self.act_annotate_square, self.act_choose_regions, self.act_optimization, self.act_nitfi2png, self.act_niftiextractor, self.act_pial_to_stl, self.act_pial_merge, self.act_img_batch, self.act_set_physical_dim}
+        self.all_actions = {self.act_show_results, self.act_Reset, self.act_close, self.act_quit, self.act_imp_img, self.act_imp_vtk, self.act_imp_stl, self.act_imp_nii, self.act_save, self.act_save_data, self.act_export_metrics, self.act_meas_allmarks, self.act_meas_perimeter, self.act_meas_area, self.act_meas_volumes, self.act_meas_lgi, self.act_meas_sulci, self.act_meas_curvature, self.act_meas_compactness, self.act_hausdorf, self.act_set_custom_label,  self.act_set_image_scale, self.act_set_scale,  self.act_kernel_size, self.act_perimeter_options, self.act_slice_thickness,  self.act_cnt_threshold, self.act_contour_outer, self.act_contour_subtract, self.act_contour_internal_only, self.act_cavity_options, self.act_annotate_square, self.act_choose_regions, self.act_optimization, self.act_nitfi2png, self.act_niftiextractor, self.act_pial_to_stl, self.act_pial_merge, self.act_img_batch, self.act_set_physical_dim}
         self._update_process_actions()
     
 
@@ -557,6 +569,7 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Adjustments", self.act_set_image_scale)
         self.ribbon.add_action("Adjustments", self.act_set_scale)
         self.ribbon.add_action("Adjustments", self.act_kernel_size)
+        self.ribbon.add_action("Adjustments", self.act_perimeter_options)
         self.ribbon.add_action("Adjustments", self.act_slice_thickness)
         self.ribbon.add_action("Adjustments", self.act_cnt_threshold)
         self.ribbon.add_action("Adjustments", self.act_annotate_square)
@@ -785,6 +798,7 @@ class MainWindow(QMainWindow):
                 self.act_show_results,
                 self.act_Reset,
                 self.act_kernel_size,
+                self.act_perimeter_options,
                 self.act_cnt_threshold,
                 self.act_set_custom_label,
                 self.act_set_image_scale,
@@ -835,6 +849,7 @@ class MainWindow(QMainWindow):
             self.view_mode.setEnabled(False)
             self.act_set_image_scale.setEnabled(False)
             self.act_set_scale.setEnabled(False)
+            self.act_perimeter_options.setEnabled(False)
             self.nav_tb.hide()
             self.view.set_zoom_controls_visible(False)
 
@@ -861,6 +876,7 @@ class MainWindow(QMainWindow):
             self.view_mode.setEnabled(True)
             self.act_set_image_scale.setEnabled(False)
             self.act_set_scale.setEnabled(False)
+            self.act_perimeter_options.setEnabled(True)
             self.nav_tb.show()
             self.view.set_zoom_controls_visible(False)
             for w in (self.orient_combo, self.view_mode, self.slice_caption, self.slice_slider, self.slice_value_label):
@@ -888,6 +904,7 @@ class MainWindow(QMainWindow):
             self.view_mode.setEnabled(False)
             self.act_set_image_scale.setEnabled(True)
             self.act_set_scale.setEnabled(True)
+            self.act_perimeter_options.setEnabled(True)
             self.nav_tb.show()
             for w in (self.orient_combo, self.view_mode, self.slice_caption, self.slice_slider, self.slice_value_label):
                 w.setVisible(False)
@@ -1251,7 +1268,7 @@ class MainWindow(QMainWindow):
         Used during batch processing and Hausdorff workflows so the user
         can adjust the image before confirming with Shift+Alt+E.
         """
-        allow = { self.act_annotate_square, self.act_cnt_threshold, self.act_set_scale, self.act_set_image_scale, self.act_set_custom_label, self.act_kernel_size}
+        allow = { self.act_annotate_square, self.act_cnt_threshold, self.act_set_scale, self.act_set_image_scale, self.act_set_custom_label, self.act_kernel_size, self.act_perimeter_options}
 
         for a in self.all_actions:
             if a in allow:

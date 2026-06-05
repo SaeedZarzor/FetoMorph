@@ -279,6 +279,7 @@ def draw_hallmarks_values_on_image(
     *,
     area: float | None = None,
     perimeter: float | None = None,
+    perimeter_internal: float | None = None,
     curve: float | None = None,
     lgi: float | None = None,
     compactness: float | None = None,
@@ -317,7 +318,10 @@ def draw_hallmarks_values_on_image(
     if area is not None:
         lines.append(f"Area: {area:.2f} {unit}^2")
     if perimeter is not None:
-        lines.append(f"Perimeter: {perimeter:.2f} {unit}")
+        label = "Perimeter (ext)" if perimeter_internal is not None else "Perimeter"
+        lines.append(f"{label}: {perimeter:.2f} {unit}")
+    if perimeter_internal is not None:
+        lines.append(f"Perimeter (int): {perimeter_internal:.2f} {unit}")
     if curve is not None:
         lines.append(f"Curve: {curve:.2f} {unit}")
     if lgi is not None:
@@ -464,6 +468,44 @@ def contours_exclude(contours: list, excluded_space: np.ndarray, image_shape: tu
         if np.count_nonzero(cv2.bitwise_and(mask, excluded_space)) == 0:
             filtered.append(cnt)
     return filtered
+
+def fill_section_polydata(section):
+    """Return a filled (capped) cross-section to render as a solid colored face.
+
+    ``mesh.slice()`` of a surface mesh (e.g. FreeSurfer pial) returns the
+    boundary CURVE (line cells), which renders as a thin outline so the slice
+    interior reads as background — the cross-section looks hollow. This
+    triangulates the closed contour into filled polygons (``vtkStripper`` +
+    ``vtkContourTriangulator``, even-odd rule) so the section renders as a solid
+    silhouette the same way a sliced volumetric VTK dataset already does:
+    concavities (sulci) are followed and genuine holes (enclosed voids) are
+    preserved. If the section is already polygonal (a sliced volume) or
+    triangulation fails/empties, the input is returned unchanged.
+    """
+    if section is None or getattr(section, "n_points", 0) == 0:
+        return section
+    try:
+        if section.n_faces_strict > 0:
+            return section  # already a filled face (e.g. sliced volume)
+    except Exception:
+        pass
+    try:
+        import vtk
+        from pyvista import wrap
+        strip = vtk.vtkStripper()
+        strip.SetInputData(section)
+        strip.Update()
+        tri = vtk.vtkContourTriangulator()
+        tri.SetInputData(strip.GetOutput())
+        tri.Update()
+        filled = wrap(tri.GetOutput())
+        if filled is None or filled.n_cells == 0:
+            return section
+        return filled
+    except Exception as ex:
+        logger.warning("section fill failed; rendering outline: %s", ex)
+        return section
+
 
 def split_inner_and_internal_contours(
     contours, hierarchy, excluded_space, image_shape, min_area,
@@ -866,6 +908,75 @@ def compactness_2D(area: float, perimeter: float) -> float:
         return 0
     return (4 * 3.141592653589793 * area) / (perimeter ** 2)
 
+
+def mask_perimeter_mm(
+    mask,
+    pixel_size_x,
+    pixel_size_y,
+    *,
+    method="arc_length",
+    simplify=False,
+    epsilon=0.5,
+):
+    """Perimeter (mm) of the boundary of a binary tissue mask.
+
+    ``method="arc_length"`` sums OpenCV contour lengths after scaling contour
+    coordinates by the x/y pixel spacing. ``method="crofton"`` fills holes,
+    resamples this 2-D mask to isotropic spacing, and runs scikit-image's
+    4-direction Crofton estimator. If scikit-image is unavailable, Crofton
+    falls back to the arc-length path.
+    """
+    arr = np.asarray(mask)
+    if arr.ndim != 2 or arr.size == 0:
+        return 0.0
+
+    px_x = float(pixel_size_x)
+    px_y = float(pixel_size_y)
+    if not (np.isfinite(px_x) and np.isfinite(px_y) and px_x > 0 and px_y > 0):
+        raise ValueError("pixel_size_x and pixel_size_y must be positive finite values")
+
+    method = str(method or "arc_length").lower()
+    binary = (arr > 0).astype(np.uint8)
+
+    def _arc_length(mask_u8) -> float:
+        contours, _hierarchy = cv2.findContours(
+            mask_u8.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+        total = 0.0
+        for cnt in contours:
+            work = cnt
+            if simplify and float(epsilon) > 0 and len(work) >= 3:
+                work = cv2.approxPolyDP(work, float(epsilon), True)
+            cnt_mm = work.astype(np.float32) * np.array([px_x, px_y], dtype=np.float32)
+            total += float(cv2.arcLength(cnt_mm, True))
+        return total
+
+    if method == "arc_length":
+        return _arc_length(binary)
+    if method != "crofton":
+        raise ValueError(f"Unsupported perimeter method: {method!r}")
+
+    try:
+        from scipy.ndimage import binary_fill_holes, zoom
+        from skimage.measure import perimeter_crofton
+    except Exception as ex:
+        logger.warning("Crofton perimeter unavailable; falling back to arc_length: %s", ex)
+        return _arc_length(binary)
+
+    filled = binary_fill_holes(binary.astype(bool))
+    if not np.any(filled):
+        return 0.0
+
+    iso_px = min(px_x, px_y)
+    scale_y = px_y / iso_px
+    scale_x = px_x / iso_px
+    iso_mask = zoom(
+        filled.astype(np.uint8),
+        zoom=(scale_y, scale_x),
+        order=0,
+        mode="nearest",
+    ).astype(bool)
+    return float(perimeter_crofton(iso_mask, directions=4) * iso_px)
+
 def compactness_3D(volume: float, surface_area: float) -> float:
     if surface_area == 0:
         return 0
@@ -876,141 +987,122 @@ def compactness_3D(volume: float, surface_area: float) -> float:
     return comp
 
 
-def area_correction_factor(mesh_area_mm2: float, slice_sum_area_mm2: float,
-                           *, location: str) -> float:
-    """Return ``mesh_area / slice_sum_area`` with sanity guards.
+def _simpson_axis_integral(samples) -> float:
+    """``∫ y(h) dh`` over ``(position, value)`` samples via Simpson's rule.
 
-    The slice-sum surface area underestimates the exact ``mesh.area``; this
-    ratio scales the slice-sum surface measures back onto the true mesh scale.
-    A non-positive slice sum yields a neutral ``1.0`` factor; an out-of-range
-    factor is warned about but never raised, per the measurement contract.
+    Sorts by position, merges duplicate positions (mean value), and returns
+    ``0.0`` with fewer than two usable samples. A higher-order (≈ O(Δh⁴))
+    quadrature than the ``Σ value × Δh`` rectangle sum; integrating the value
+    directly means per-slice noise cannot inflate it (no frustum-style slant).
+    """
+    pts = [(float(h), float(v)) for (h, v) in samples
+           if h is not None and v is not None
+           and np.isfinite(h) and np.isfinite(v) and v >= 0]
+    if len(pts) < 2:
+        return 0.0
+    pts.sort(key=lambda t: t[0])
+    h = np.array([t[0] for t in pts], dtype=float)
+    v = np.array([t[1] for t in pts], dtype=float)
+    # Merge duplicate positions (mean value) so x is strictly increasing.
+    uh, inv = np.unique(h, return_inverse=True)
+    if uh.size < 2:
+        return 0.0
+    if uh.size != h.size:
+        sums = np.zeros(uh.size)
+        cnts = np.zeros(uh.size)
+        np.add.at(sums, inv, v)
+        np.add.at(cnts, inv, 1)
+        v = sums / cnts
+        h = uh
+    try:
+        from scipy.integrate import simpson
+    except ImportError:  # SciPy < 1.6
+        from scipy.integrate import simps as simpson
+    return float(abs(simpson(v, x=h)))
+
+
+def lateral_area_simpson(samples) -> float:
+    """Lateral surface area = ``∫ perimeter(h) dh`` via Simpson's rule.
+
+    ``samples`` is an iterable of ``(position, perimeter)`` in a consistent unit
+    (result in that unit²). See :func:`_simpson_axis_integral`.
+    """
+    return _simpson_axis_integral(samples)
+
+
+def volume_simpson(samples) -> float:
+    """Volume = ``∫ cross_section_area(h) dh`` via Simpson's rule.
+
+    ``samples`` is an iterable of ``(position, cross_section_area)`` in a
+    consistent unit (result in that unit³). See :func:`_simpson_axis_integral`.
+    """
+    return _simpson_axis_integral(samples)
+
+
+def total_surface_area_simpson(perimeter_samples, area_samples):
+    """Total surface area = Simpson lateral ``∫ perimeter dh`` + end caps.
+
+    The end caps are the cross-section areas at the first and last slice
+    positions (the top + bottom faces of the stack). A single valid slice yields
+    ``2 × area`` (a flat disk's two faces) and zero lateral.
 
     Args:
-        mesh_area_mm2: Exact surface area from PyVista (mm²).
-        slice_sum_area_mm2: Slice-sum inner surface area (mm²).
-        location: Caller tag for the ``[Warning] <location> — <msg>`` log.
+        perimeter_samples: iterable of ``(position, perimeter)``.
+        area_samples: iterable of ``(position, cross_section_area)``.
 
     Returns:
-        The (possibly out-of-range) correction factor.
+        ``(total, lateral, caps)`` in the samples' unit².
     """
-    from constants import (
-        AREA_CORRECTION_FACTOR_MIN,
-        AREA_CORRECTION_FACTOR_MAX,
-    )
-    if slice_sum_area_mm2 > 0:
-        factor = float(mesh_area_mm2) / float(slice_sum_area_mm2)
+    lateral = lateral_area_simpson(perimeter_samples)
+    pts = [(float(h), float(a)) for (h, a) in area_samples
+           if h is not None and a is not None
+           and np.isfinite(h) and np.isfinite(a) and a >= 0]
+    if not pts:
+        caps = 0.0
     else:
-        factor = 1.0
-        print(f"[Warning] {location} — slice-sum area is non-positive "
-              f"({slice_sum_area_mm2}); using neutral correction factor 1.0.")
-        return factor
-    if not (AREA_CORRECTION_FACTOR_MIN <= factor <= AREA_CORRECTION_FACTOR_MAX):
-        print(f"[Warning] {location} — area correction factor {factor:.4f} is "
-              f"outside [{AREA_CORRECTION_FACTOR_MIN}, {AREA_CORRECTION_FACTOR_MAX}]; "
-              f"continuing with the computed factor (check geometry/units).")
-    return factor
+        pts.sort(key=lambda t: t[0])
+        caps = 2.0 * pts[0][1] if len(pts) == 1 else (pts[0][1] + pts[-1][1])
+    return lateral + caps, lateral, caps
 
 
-SURFACE_AREA_METHOD = "frustum_with_caps"
+def area_based_gi_3d(mesh, scale=None):
+    """3-D area-based gyrification index = total mesh surface area ÷ convex-hull
+    surface area, both measured on the same (optionally scaled) geometry.
 
-
-def frustum_surface_area(slices, *, legacy_slice_thickness: float | None = None):
-    """Estimate an outer surface area from a stack of cross-sections.
-
-    Models the solid between consecutive slices as a conical frustum: each
-    lateral band is ``((P_i + P_{i+1})/2) × slant`` where the slant height
-    ``√(Δh² + (r_{i+1}-r_i)²)`` uses equivalent radii ``r = √(A/π)`` to correct
-    for the slope of the outer envelope between slices. Top and bottom cap
-    areas (the first and last cross-sections) are added.
+    The convex hull is the smooth convex envelope of the mesh. For a closed,
+    roughly star-convex surface (like a brain) the ratio is ≥ 1 — ≈ 1 when
+    unfolded and larger when gyrified (a FreeSurfer-style 3-D GI proxy).
+    Independent of the 2-D perimeter ``GI``. NOTE: for handle/hole topologies
+    (e.g. a torus) the hull area can exceed the mesh area, giving a ratio < 1.
 
     Args:
-        slices: Iterable of ``(h_i, P_i, A_i)`` — slice position, perimeter,
-            and cross-sectional area. Positions/perimeters/areas must share a
-            consistent unit (e.g. mm, mm, mm²). Only slices with ``A>0``,
-            ``P>0`` and a finite position are used.
-        legacy_slice_thickness: If given, also report the old stack-of-slabs
-            lateral area ``Σ P_i × thickness`` under ``surface_area_lateral_old``.
+        mesh: A PyVista mesh exposing ``points`` and ``extract_surface()``.
+        scale: Optional per-axis ``(3,)`` physical scale (model → mm) applied to
+            the points before measuring. Pass ``None`` for STL (already mm).
 
     Returns:
-        ``(S_total, metadata)`` where ``S_total`` is in the same area unit as
-        ``A`` (``None`` if no valid slices). ``metadata`` carries the spec keys
-        plus a ``warnings`` list.
+        ``(gi_3d, total_area, hull_area)``; any element may be ``None`` on
+        failure (degenerate geometry, SciPy missing, etc.).
     """
-    meta = {
-        "surface_area_method": SURFACE_AREA_METHOD,
-        "number_of_valid_slices": 0,
-        "surface_area_frustum_lateral": None,
-        "surface_area_caps": None,
-        "surface_area_frustum_total": None,
-        "surface_area_lateral_old": None,
-        "top_cap_area": None,
-        "bottom_cap_area": None,
-        "slice_spacing_mode": None,
-        "warnings": [],
-    }
-
-    valid = []
-    for item in slices:
-        h, P, A = item
-        if h is None or P is None or A is None:
-            continue
-        if not (np.isfinite(h) and np.isfinite(P) and np.isfinite(A)):
-            continue
-        if A > 0 and P > 0:
-            valid.append((float(h), float(P), float(A)))
-
-    meta["number_of_valid_slices"] = len(valid)
-    if not valid:
-        meta["warnings"].append(
-            "No valid slices (area>0, perimeter>0, finite position); surface area undefined.")
-        return None, meta
-
-    valid.sort(key=lambda t: t[0])
-    hs = [t[0] for t in valid]
-    Ps = [t[1] for t in valid]
-    As = [t[2] for t in valid]
-    rs = [float(np.sqrt(A / np.pi)) for A in As]
-
-    if legacy_slice_thickness is not None:
-        meta["surface_area_lateral_old"] = sum(Ps) * float(legacy_slice_thickness)
-
-    meta["top_cap_area"] = As[0]
-    meta["bottom_cap_area"] = As[-1]
-
-    if len(valid) == 1:
-        total = 2.0 * As[0]
-        meta.update({
-            "surface_area_frustum_lateral": 0.0,
-            "surface_area_caps": total,
-            "surface_area_frustum_total": total,
-            "slice_spacing_mode": "single_slice",
-        })
-        meta["warnings"].append(
-            "Only one valid slice was available; frustum lateral surface could not be "
-            "computed. Returned 2×A_first as the surface area.")
-        return total, meta
-
-    dhs = [hs[i + 1] - hs[i] for i in range(len(hs) - 1)]
-    if not all(d > 0 for d in dhs):
-        meta["warnings"].append(
-            "Slice positions are not strictly increasing after sorting; spacing may be degenerate.")
-    dh0 = dhs[0]
-    uniform = all(abs(d - dh0) <= 1e-6 * max(abs(dh0), 1.0) for d in dhs)
-    meta["slice_spacing_mode"] = "uniform" if uniform else "nonuniform"
-
-    lateral = 0.0
-    for i in range(len(valid) - 1):
-        dh = hs[i + 1] - hs[i]
-        slant = float(np.sqrt(dh * dh + (rs[i + 1] - rs[i]) ** 2))
-        lateral += ((Ps[i] + Ps[i + 1]) / 2.0) * slant
-
-    caps = As[0] + As[-1]
-    total = lateral + caps
-    meta.update({
-        "surface_area_frustum_lateral": lateral,
-        "surface_area_caps": caps,
-        "surface_area_frustum_total": total,
-    })
-    if total <= 0:
-        meta["warnings"].append("Computed total surface area ≤ 0.")
-    return total, meta
+    try:
+        from scipy.spatial import ConvexHull
+    except Exception as ex:  # pragma: no cover - SciPy is a hard dep elsewhere
+        print(f"[Warning] area_based_gi_3d — SciPy unavailable: {ex}")
+        return None, None, None
+    try:
+        scaled = mesh
+        if scale is not None:
+            scaled = mesh.copy(deep=True)
+            scaled.points = np.asarray(scaled.points, dtype=float) * np.asarray(scale, dtype=float)
+        surf = scaled.extract_surface().triangulate()
+        total_area = float(surf.area)
+        pts = np.asarray(scaled.points, dtype=float)
+        if total_area <= 0 or pts.ndim != 2 or pts.shape[0] < 4:
+            return None, (total_area if total_area > 0 else None), None
+        hull_area = float(ConvexHull(pts).area)
+        if hull_area <= 0:
+            return None, total_area, None
+        return total_area / hull_area, total_area, hull_area
+    except Exception as ex:
+        print(f"[Warning] area_based_gi_3d — {ex}")
+        return None, None, None
