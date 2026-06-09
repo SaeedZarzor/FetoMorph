@@ -221,7 +221,10 @@ def build_sulcus_value_table(df: pd.DataFrame, unit: str) -> pd.DataFrame:
                         "value": float(value),
                     }
                 )
-    return pd.DataFrame(rows)
+    # Always return the expected schema, even when empty (e.g. cropped slices,
+    # which are all "unclassified" and carry no per-class sulcus columns), so
+    # downstream lookups on "sulcus_class" never raise KeyError.
+    return pd.DataFrame(rows, columns=["slice_file", "sulcus_class", "value"])
 
 
 def metric_summary(df: pd.DataFrame, metrics: Iterable[str]) -> pd.DataFrame:
@@ -373,6 +376,7 @@ def plot_grouped_count_boxplot(rounded_df: pd.DataFrame) -> io.BytesIO | None:
         ("Primary_count_rounded", "primary"),
         ("Secondary_count_rounded", "secondary"),
         ("Tertiary_count_rounded", "tertiary"),
+        ("Unclassified_count_rounded", "unclassified"),
     )
     for column_name, label in count_columns:
         if column_name not in rounded_df.columns:
@@ -516,7 +520,8 @@ def analyze_workbook(path: Path, sheet_name: str) -> None:
     core_summary_df = metric_summary(df, CORE_METRICS)
     count_summary_df = count_summary(rounded_counts_df)
     sulcus_values_df = build_sulcus_value_table(df, depth_unit)
-    sulcus_summary_df = per_class_sulcus_summary(sulcus_values_df)
+    has_sulcus_values = not sulcus_values_df.empty
+    sulcus_summary_df = per_class_sulcus_summary(sulcus_values_df) if has_sulcus_values else None
 
     wb, ws = replace_analysis_sheet(path, sheet_name)
 
@@ -551,6 +556,12 @@ def analyze_workbook(path: Path, sheet_name: str) -> None:
         "When a sulcus class count exceeds 3, approximate raw sulcus values are "
         "reconstructed from count + min/max/mean for summary stats and boxplots."
     )
+    if not has_sulcus_values:
+        note_text += (
+            " This workbook has no per-class sulcus columns (cropped slices are all "
+            "unclassified), so the per-class sulcus value summary and plots were skipped. "
+            "Sulci_count and depth columns remain in the source workbook."
+        )
     if MATPLOTLIB_IMPORT_ERROR is not None:
         note_text += (
             " Embedded plot images were skipped because matplotlib could not be imported "
@@ -587,8 +598,9 @@ def analyze_workbook(path: Path, sheet_name: str) -> None:
     max_data_col = max(max_data_col, used_col)
     next_row, used_col = write_dataframe(ws, next_row, 1, "Rounded Sulcus Count Summary", count_summary_df)
     max_data_col = max(max_data_col, used_col)
-    next_row, used_col = write_dataframe(ws, next_row, 1, "Sulcus Value Summary", sulcus_summary_df)
-    max_data_col = max(max_data_col, used_col)
+    if has_sulcus_values:
+        next_row, used_col = write_dataframe(ws, next_row, 1, "Sulcus Value Summary", sulcus_summary_df)
+        max_data_col = max(max_data_col, used_col)
 
     # ── Plot anchors: placed 2 columns right of the widest table ─────────────
     # Each plot group is ~9 columns wide at default column width (~64 px each).
@@ -610,26 +622,27 @@ def analyze_workbook(path: Path, sheet_name: str) -> None:
             _col_anchor(plot_col_1, 2 + i * PLOT_ROW_STEP),
         )
 
-    sulcus_classes_ordered = ["primary", "secondary", "tertiary", "unclassified"]
-    for i, class_name in enumerate(sulcus_classes_ordered):
-        class_values = sulcus_values_df.loc[sulcus_values_df["sulcus_class"] == class_name, "value"]
+    if has_sulcus_values:
+        sulcus_classes_ordered = ["primary", "secondary", "tertiary", "unclassified"]
+        for i, class_name in enumerate(sulcus_classes_ordered):
+            class_values = sulcus_values_df.loc[sulcus_values_df["sulcus_class"] == class_name, "value"]
+            add_image(
+                ws,
+                plot_boxplot(
+                    class_values,
+                    f"{class_name.capitalize()} sulcus values distribution",
+                    f"depth ({depth_unit})",
+                ),
+                _col_anchor(plot_col_2, 2 + i * PLOT_ROW_STEP),
+            )
+
         add_image(
             ws,
-            plot_boxplot(
-                class_values,
-                f"{class_name.capitalize()} sulcus values distribution",
-                f"depth ({depth_unit})",
-            ),
-            _col_anchor(plot_col_2, 2 + i * PLOT_ROW_STEP),
+            plot_grouped_sulcus_boxplot(sulcus_values_df, f"depth ({depth_unit})"),
+            _col_anchor(plot_col_3, 2),
+            width=620,
+            height=360,
         )
-
-    add_image(
-        ws,
-        plot_grouped_sulcus_boxplot(sulcus_values_df, f"depth ({depth_unit})"),
-        _col_anchor(plot_col_3, 2),
-        width=620,
-        height=360,
-    )
     add_image(
         ws,
         plot_grouped_count_boxplot(rounded_counts_df),

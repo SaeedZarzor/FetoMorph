@@ -1,0 +1,15 @@
+{
+  "input_root": "Examples/cropped_slices",
+  "output_root": "measurements",
+  "section_label": "cropped_slices",
+  "weeks": [24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38],
+  "axes": ["axial", "coronal"],
+  "pixel_size": 0.47619047619047616,
+  "scalebar_measured_pixels": 42.0,
+  "scalebar_real_world_length": 20.0,
+  "kernel_size": 9,
+  "cnt_threshold": 500,
+  "unit": "mm",
+  "auto_scalebar": true,
+  "single_pass_metrics": true
+}
