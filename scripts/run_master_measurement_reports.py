@@ -397,6 +397,60 @@ def add_scalebar_metadata(
     wb.save(xlsx_path)
 
 
+def add_total_depth_column(xlsx_path: Path, unit: str) -> int:
+    """Insert ``total_depth_<unit>`` as count * mean_depth for each data row."""
+    wb = load_workbook(xlsx_path)
+    ws = wb.active
+
+    headers: dict[str, int] = {}
+    for col in range(1, ws.max_column + 1):
+        value = ws.cell(row=1, column=col).value
+        if isinstance(value, str):
+            headers[value.strip()] = col
+
+    count_col = headers.get("Sulci_count")
+    mean_col = headers.get(f"mean_depth_{unit}")
+    total_name = f"total_depth_{unit}"
+    if count_col is None or mean_col is None:
+        logging.warning(
+            "Skipping total-depth insertion for %s: missing Sulci_count or %s",
+            xlsx_path.name,
+            total_name,
+        )
+        return 0
+
+    total_col = headers.get(total_name)
+    if total_col is None:
+        insert_at = mean_col
+        ws.insert_cols(insert_at)
+        ws.cell(row=1, column=insert_at, value=total_name)
+        total_col = insert_at
+        if mean_col >= insert_at:
+            mean_col += 1
+
+    updated = 0
+    for row_idx in range(2, ws.max_row + 1):
+        first_cell = ws.cell(row=row_idx, column=1).value
+        if first_cell in (None, "") or is_metadata_row(first_cell):
+            continue
+        count_value = ws.cell(row=row_idx, column=count_col).value
+        mean_value = ws.cell(row=row_idx, column=mean_col).value
+        if count_value in (None, "") or mean_value in (None, ""):
+            ws.cell(row=row_idx, column=total_col, value=None)
+            continue
+        try:
+            total_value = float(count_value) * float(mean_value)
+        except (TypeError, ValueError):
+            ws.cell(row=row_idx, column=total_col, value=None)
+            continue
+        cell = ws.cell(row=row_idx, column=total_col, value=total_value)
+        cell.number_format = "0.000000"
+        updated += 1
+
+    wb.save(xlsx_path)
+    return updated
+
+
 def run_folder(
     input_dir: Path,
     output_dir: Path,
@@ -455,6 +509,8 @@ def run_folder(
         real_world_length=scalebar_real_world_length,
         unit=unit,
     )
+    n_total = add_total_depth_column(final_xlsx, unit)
+    logging.info("Added/updated total-depth values in %d data row(s) in %s", n_total, final_xlsx.name)
 
     # Recompute the core metrics single-pass BEFORE the summary table is built,
     # so the appended means reflect the corrected (retry-free) values.

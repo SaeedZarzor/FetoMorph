@@ -174,9 +174,9 @@ Get-ChildItem .\measurements -Directory | ForEach-Object {
 
 Post-process cropped reports:
 
-All sulci in cropped slices are classified as `unclassified` (fixed-mm depth rule). Because the pipeline writes no values for the per-class sulcus cells, those columns are dropped from the workbook entirely, so cropped reports have no `Primary_*`/`Secondary_*`/`Tertiary_*`/`Unclassified_*` columns — only `Sulci_count` and the `min/max/mean_depth` columns.
+All sulci in cropped slices are classified as `unclassified` (fixed-mm depth rule). Because the pipeline writes no values for the per-class sulcus cells, those columns are dropped from the workbook entirely, so cropped reports have no `Primary_*`/`Secondary_*`/`Tertiary_*`/`Unclassified_*` columns — only `Sulci_count` and the `min/max/total/mean_depth` columns.
 
-`analyze_master_measurement_reports.py` handles this gracefully: it still writes the core-metric summary (`area`, `perimeter`, `LGI`, `Compactness`), the rounded `Sulci_count` tables, the core-metric boxplots, and the count boxplot, but **skips the per-class Sulcus Value Summary table and the per-class/grouped sulcus-value plots** (and records why in the Analysis sheet's `Note`). It does not error on the missing columns.
+`analyze_master_measurement_reports.py` handles this gracefully: it still writes the core-metric summary (`area`, `perimeter`, `LGI`, `Compactness`), the rounded `Sulci_count` tables, the depth-metric summary (`min/max/total/mean_depth`), the core/depth boxplots, and the count boxplot, but **skips the per-class Sulcus Value Summary table and the per-class/grouped sulcus-value plots** (and records why in the Analysis sheet's `Note`). It does not error on the missing columns.
 
 The `--report-glob` flag scopes discovery to the `cropped_slices` subfolders only, so full-slice workbooks are not affected.
 

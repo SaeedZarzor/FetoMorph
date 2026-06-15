@@ -30,6 +30,7 @@ else:
 SULCUS_CLASSES = ("Primary", "Secondary", "Tertiary", "Unclassified")
 CORE_METRICS = ("area", "perimeter", "LGI", "Compactness")
 COUNT_METRICS = ("Sulci_count", "Primary_count", "Secondary_count", "Tertiary_count", "Unclassified_count")
+DEPTH_METRIC_PREFIXES = ("min_depth_", "max_depth_", "total_depth_", "mean_depth_")
 METADATA_LABELS = {
     "PixelSize:",
     "PixelSizeUnits:",
@@ -149,9 +150,13 @@ def infer_depth_unit(df: pd.DataFrame) -> str:
         if not isinstance(col, str):
             continue
         match = re.search(r"_([A-Za-z]+)$", col)
-        if match and col.startswith(("min_depth_", "mean_depth_", "Primary_v1_", "Secondary_v1_")):
+        if match and col.startswith((*DEPTH_METRIC_PREFIXES, "Primary_v1_", "Secondary_v1_")):
             return match.group(1)
     return "mm"
+
+
+def depth_metric_columns(df: pd.DataFrame, unit: str) -> list[str]:
+    return [f"{prefix}{unit}" for prefix in DEPTH_METRIC_PREFIXES if f"{prefix}{unit}" in df.columns]
 
 
 def round_count_series(series: pd.Series) -> pd.Series:
@@ -271,6 +276,10 @@ def count_summary(rounded_df: pd.DataFrame) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+def depth_summary(df: pd.DataFrame, unit: str) -> pd.DataFrame:
+    return metric_summary(df, depth_metric_columns(df, unit))
 
 
 def per_class_sulcus_summary(sulcus_values_df: pd.DataFrame) -> pd.DataFrame:
@@ -451,6 +460,20 @@ def _autofit_columns(ws) -> None:
         ws.column_dimensions[get_column_letter(col_idx)].width = min(width + 3, 50)
 
 
+def _set_wrapped_row_height(ws, row: int, columns: Iterable[int], base_height: int = 18) -> None:
+    max_lines = 1
+    for col in columns:
+        cell = ws.cell(row=row, column=col)
+        if cell.value is None:
+            continue
+        text = str(cell.value)
+        width = ws.column_dimensions[get_column_letter(col)].width or 10
+        approx_chars = max(12, int(width * 1.15))
+        wrapped_lines = sum(max(1, math.ceil(len(part) / approx_chars)) for part in text.splitlines() or [""])
+        max_lines = max(max_lines, wrapped_lines)
+    ws.row_dimensions[row].height = base_height * max_lines
+
+
 def write_dataframe(ws, start_row: int, start_col: int, title: str, df: pd.DataFrame) -> tuple[int, int]:
     """Returns (next_free_row, rightmost_column_used)."""
     num_cols = max(len(df.columns), 1)
@@ -519,6 +542,7 @@ def analyze_workbook(path: Path, sheet_name: str) -> None:
     rounded_counts_df = rounded_counts_table(df)
     core_summary_df = metric_summary(df, CORE_METRICS)
     count_summary_df = count_summary(rounded_counts_df)
+    depth_summary_df = depth_summary(df, depth_unit)
     sulcus_values_df = build_sulcus_value_table(df, depth_unit)
     has_sulcus_values = not sulcus_values_df.empty
     sulcus_summary_df = per_class_sulcus_summary(sulcus_values_df) if has_sulcus_values else None
@@ -552,21 +576,18 @@ def analyze_workbook(path: Path, sheet_name: str) -> None:
         ("Axis", axis),
         ("Slice rows analyzed", len(df)),
     ]
-    note_text = (
-        "When a sulcus class count exceeds 3, approximate raw sulcus values are "
-        "reconstructed from count + min/max/mean for summary stats and boxplots."
-    )
+    note_parts = [
+        "Per-class sulcus plots may use values reconstructed from count + min/max/mean."
+    ]
     if not has_sulcus_values:
-        note_text += (
-            " This workbook has no per-class sulcus columns (cropped slices are all "
-            "unclassified), so the per-class sulcus value summary and plots were skipped. "
-            "Sulci_count and depth columns remain in the source workbook."
+        note_parts.append(
+            "Per-class sulcus tables/plots were skipped because this cropped-slice workbook has no per-class sulcus columns."
         )
     if MATPLOTLIB_IMPORT_ERROR is not None:
-        note_text += (
-            " Embedded plot images were skipped because matplotlib could not be imported "
-            f"in this environment: {MATPLOTLIB_IMPORT_ERROR}"
+        note_parts.append(
+            "Embedded plot images were skipped because matplotlib was unavailable in this environment."
         )
+    note_text = " ".join(note_parts)
 
     for idx, (label, value) in enumerate(card_rows, start=2):
         lbl = ws.cell(row=idx, column=1, value=label)
@@ -587,7 +608,6 @@ def analyze_workbook(path: Path, sheet_name: str) -> None:
     note_value.font = CARD_VALUE_FONT
     note_value.border = CELL_BORDER
     note_value.alignment = Alignment(wrap_text=True)
-    ws.row_dimensions[6].height = 42
 
     # ── Data tables ──────────────────────────────────────────────────────────
     next_row = 8
@@ -597,6 +617,8 @@ def analyze_workbook(path: Path, sheet_name: str) -> None:
     next_row, used_col = write_dataframe(ws, next_row, 1, "Rounded Sulcus Counts Per Slice", rounded_counts_df)
     max_data_col = max(max_data_col, used_col)
     next_row, used_col = write_dataframe(ws, next_row, 1, "Rounded Sulcus Count Summary", count_summary_df)
+    max_data_col = max(max_data_col, used_col)
+    next_row, used_col = write_dataframe(ws, next_row, 1, "Depth Metric Summary", depth_summary_df)
     max_data_col = max(max_data_col, used_col)
     if has_sulcus_values:
         next_row, used_col = write_dataframe(ws, next_row, 1, "Sulcus Value Summary", sulcus_summary_df)
@@ -620,6 +642,13 @@ def analyze_workbook(path: Path, sheet_name: str) -> None:
             ws,
             plot_boxplot(df[metric], f"{metric} distribution", metric),
             _col_anchor(plot_col_1, 2 + i * PLOT_ROW_STEP),
+        )
+
+    for i, metric in enumerate(depth_metric_columns(df, depth_unit)):
+        add_image(
+            ws,
+            plot_boxplot(df[metric], f"{metric} distribution", metric),
+            _col_anchor(plot_col_1, 2 + (len(core_metric_plots) + i) * PLOT_ROW_STEP),
         )
 
     if has_sulcus_values:
@@ -652,6 +681,7 @@ def analyze_workbook(path: Path, sheet_name: str) -> None:
     )
 
     _autofit_columns(ws)
+    _set_wrapped_row_height(ws, 6, [1, 2])
     wb.save(path)
 
 
