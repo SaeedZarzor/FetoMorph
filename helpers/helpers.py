@@ -21,6 +21,19 @@ from constants import (
 logger = logging.getLogger(__name__)
 
 
+def threshold_binary(gray, fixed_value=None, *, invert: bool = False):
+    """Binarise ``gray`` to a 0/255 mask using Otsu's method.
+
+    The cut is chosen automatically per image via ``cv2.THRESH_OTSU``, so
+    ``fixed_value`` is ignored (kept only for call-site compatibility).
+    ``invert=True`` selects ``THRESH_BINARY_INV`` (dark foreground on a light
+    background).
+    """
+    base = cv2.THRESH_BINARY_INV if invert else cv2.THRESH_BINARY
+    _, bw = cv2.threshold(gray, 0, 255, base + cv2.THRESH_OTSU)
+    return bw
+
+
 def _get_viz():
     """Lazy import to break the helpers ↔ managers circular dependency at load time."""
     from managers.visualization_settings import get_active
@@ -410,7 +423,7 @@ def compute_kernel_convex(kernel_size: int) -> np.ndarray:
     """Create an elliptical morphological structuring element.
 
     Used by the GI (gyrification index) pipeline to morphologically close
-    sulci before computing the "outer" (convex) perimeter.
+    sulci before computing the "closed-envelope" (convex) perimeter.
 
     Args:
         kernel_size: Diameter of the ellipse in pixels.

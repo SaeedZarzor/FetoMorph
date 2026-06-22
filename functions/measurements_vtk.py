@@ -19,6 +19,7 @@ from helpers.helpers import (
     compute_kernel_convex,
     contours_exclude,
     split_inner_and_internal_contours,
+    threshold_binary,
     mask_perimeter_mm,
     fill_section_polydata,
     calc_scale_with_metadata,
@@ -290,7 +291,7 @@ def compute_vtk_allmarks(
         thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         # Use BINARY_THRESHOLD_VTK (150) for black-background VTK renders.
-        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
+        bw = threshold_binary(gray, BINARY_THRESHOLD_VTK, invert=False)
         contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -368,7 +369,7 @@ def compute_vtk_allmarks(
                                     bgr = cv2.circle(bgr, far, radius_px, marker_color, -1)
 
         depth = flatten_depth_sets(depth_sets)
-        print(f"[VTK allmarks] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")
+        print(f"[VTK All Hallmarks] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
         if use_percent_filter:
@@ -454,10 +455,8 @@ def compute_vtk_allmarks(
     Volume = volume_simpson(volume_samples)
     Area, inner_area_slice_sum, caps_area = total_surface_area_simpson(
         lateral_samples, volume_samples)
-    print(f"[VTK All Hallmarks] Volume: Simpson={Volume:.3f} {unit}³ "
-          f"(verify mesh.volume={_mesh_volume_phys:.3f} {unit}³); "
-          f"Surface: Simpson lateral+caps={Area:.3f} {unit}² "
-          f"(verify mesh.area={mesh_area_phys:.3f} {unit}²)")
+    print(f"[VTK All Hallmarks] Volume={Volume:.3f} {unit}³")
+    print(f"[VTK All Hallmarks] Surface area: lateral+caps={Area:.3f} {unit}²")
     if cavity_correction_enabled:
         print(f"[VTK All Hallmarks] Cavity correction: "
               f"{cavity_corr.n_surface_connected} surface-connected, "
@@ -499,10 +498,10 @@ def compute_vtk_allmarks(
             d = dsets if isinstance(dsets, dict) else {}
             results_rows.append({
                 "Section": idx,
-                "Kernel_px": int(kernel_px),
-                "cube_len_mm": cal_meta.get("cube_len_mm"),
-                "detected_cube_size_px": cal_meta.get("detected_cube_size_px"),
-                "computed_mm_per_px": cal_meta.get("computed_mm_per_px"),
+                "Kernel px": int(kernel_px),
+                "Cube length (mm)": cal_meta.get("cube_len_mm"),
+                "Detected cube size (px)": cal_meta.get("detected_cube_size_px"),
+                "Computed mm per px": cal_meta.get("computed_mm_per_px"),
                 "Area": area_u,
                 "Perimeter": inner_perim_u,
                 "LGI": lgi,
@@ -533,32 +532,32 @@ def compute_vtk_allmarks(
             "Filtered threshold (mm²)": float(min_contour_area),
             "Slice direction": Slice_direction,
             "Length unit": unit,
-            "PERIMETER METHOD": perimeter_method,
-            "contour_simplification_enabled": bool(simplify_contours_for_perimeter),
-            "contour_simplification_epsilon": float(contour_simplify_epsilon),
-            "cavity_correction": "on" if cavity_correction_enabled else "off",
+            "Perimeter method": perimeter_method,
+            "Contour simplification enabled": bool(simplify_contours_for_perimeter),
+            "Contour simplification epsilon": float(contour_simplify_epsilon),
+            "Cavity correction": "on" if cavity_correction_enabled else "off",
         }
         if cavity_correction_enabled:
-            parameters["cavity_area_threshold_mm2"] = float(cavity_area_threshold_mm2)
+            parameters["Cavity area threshold (mm²)"] = float(cavity_area_threshold_mm2)
         totals = {
             f"Volume ({unit}^3)": round(float(Volume), 4),
             f"Surface Area ({unit}^2)": round(float(Area), 4),
+            f"Area lateral surface ({unit}^2)": round(float(inner_area_slice_sum), 4),
+            f"Surface area caps ({unit}^2)": round(float(caps_area), 4),
             "GI": round(float(GI_total), 4),
-            "GI_3D (convex hull)": (round(float(gi_3d), 4) if gi_3d is not None else None),
-            f"Convex_hull_area ({unit}^2)": (round(float(hull_area_phys), 4) if hull_area_phys else None),
+            "GI 3D (convex hull)": (round(float(gi_3d), 4) if gi_3d is not None else None),
+            f"Convex hull area ({unit}^2)": (round(float(hull_area_phys), 4) if hull_area_phys else None),
             "Compactness": round(float(comp), 4),
             "Total sulci count": int(overall_n),
             f"Mean sulci depth ({unit})": (
                 round(float(overall_mean), 4)
                 if overall_mean is not None else None),
-            f"Area_lateral_surface ({unit}^2)": round(float(inner_area_slice_sum), 4),
-            f"Surface_area_caps ({unit}^2)": round(float(caps_area), 4),
         }
         if cavity_correction_enabled:
             totals.update({
-                "n_surface_connected_cavities": int(cavity_corr.n_surface_connected),
-                "n_enclosed_cavities": int(cavity_corr.n_enclosed),
-                f"surface_connected_cavity_area ({unit}^2)": round(float(cavity_corr.total_cavity_area_mm2), 4),
+                "Number of surface-connected cavities": int(cavity_corr.n_surface_connected),
+                "Number of enclosed cavities": int(cavity_corr.n_enclosed),
+                f"Surface connected cavity area ({unit}^2)": round(float(cavity_corr.total_cavity_area_mm2), 4),
             })
         sheet = ResultsSheet(
             sheet_name=os.path.basename(file_path) or "Results",
@@ -567,14 +566,14 @@ def compute_vtk_allmarks(
             parameters=parameters,
             rows=results_rows,
             extra_columns=(
-                "Kernel_px",
-                "cube_len_mm",
-                "detected_cube_size_px",
-                "computed_mm_per_px",
+                "Kernel px",
+                "Cube length (mm)",
+                "Detected cube size (px)",
+                "Computed mm per px",
             ),
             totals=totals,
             totals_notes={
-                "GI_3D (convex hull)": gi_3d_note(gi_3d),
+                "GI 3D (convex hull)": gi_3d_note(gi_3d),
             },
             drop_empty_columns=True,
         )
@@ -670,7 +669,7 @@ def compute_vtk_lGI(
     sum_inner_mm = 0.0
     sum_outer_mm = 0.0
     axis_scale = float(mesh_dim_scaled[axis_index])
-    lateral_samples: list[tuple[float, float]] = []  # (physical position, inner perimeter)
+    lateral_samples: list[tuple[float, float]] = []  # (physical position, exterior perimeter)
 
     # --- Use a context manager so the plotter is *guaranteed* to be closed safely
     p = pv.Plotter(off_screen=True, window_size=VTK_RENDER_WINDOW_SIZE)
@@ -723,7 +722,7 @@ def compute_vtk_lGI(
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         # Binary for contours
-        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
+        bw = threshold_binary(gray, BINARY_THRESHOLD_VTK, invert=False)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -771,7 +770,7 @@ def compute_vtk_lGI(
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
         valid_slices.append(idx)
-        rows.append([idx, len(inner_filtered), kernel_size_px, inner_perim_mm, outer_perim_mm, GI_slice])
+        rows.append([idx, len(inner_filtered), kernel_size_px, inner_perim_mm, outer_perim_mm, GI_slice, scale_meta])
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
         plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         sections_list.append(section)
@@ -781,7 +780,7 @@ def compute_vtk_lGI(
 
     GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
 
-    # Lateral surface area = ∫ inner perimeter dh via Simpson's rule.
+    # Lateral surface area = ∫ exterior perimeter dh via Simpson's rule.
     inner_area_slice_sum = lateral_area_simpson(lateral_samples)
     # 3-D area-based GI = exact mesh surface ÷ convex-hull surface (scaled mesh).
     gi_3d, _gi3d_area, hull_area_phys = area_based_gi_3d(mesh, scale=mesh_dim_scaled)
@@ -793,20 +792,41 @@ def compute_vtk_lGI(
         all_slices_mesh.save(slice_mesh_path)
     else:
         all_slices_mesh = pv.PolyData()
-    # Save per-slice + total to Excel
+    # Save per-slice + total to Excel (spec layout, like All-hallmarks).
     try:
-        rows.append(["GI", None, None, None, None, round(GI_total, 2)])
-        rows.append(["GI_3D_convexhull", None, None, None, None, (round(float(gi_3d), 4) if gi_3d is not None else None)])
-        rows.append([f"Convex_hull_area_{unit}2", None, None, None, None, (round(float(hull_area_phys), 4) if hull_area_phys else None)])
-        rows.append(["Area_lateral_surface", None, None, None, None, round(float(inner_area_slice_sum), 4)])
-        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", "Kernel_px", f"Inner_Perimeter_{unit}", f"Outer_Perimeter_{unit}", "Sulci_lGI"])
-        df.insert(0, "Kernel_size_mm", float(kernel_size_mm))
-
+        from helpers.results_excel_format import (
+            build_measurement_sheet, write_results_workbook, gi_3d_note)
+        results_rows = [{
+            "Section": r[0], "Contours": r[1], "Kernel px": r[2],
+            "Cube length (mm)": r[-1].get("cube_len_mm"),
+            "Detected cube size (px)": r[-1].get("detected_cube_size_px"),
+            "Computed mm per px": r[-1].get("computed_mm_per_px"),
+            "Perimeter": r[3], "Closed-envelope perimeter": r[4], "LGI": r[5],
+        } for r in rows]
+        parameters = {
+            "Kernel size (mm)": float(kernel_size_mm),
+            "Slice thickness": float(slice_thickness),
+            "Slice direction": Slice_direction,
+            "Filtered threshold (mm²)": float(min_contour_area),
+            "Length unit": unit,
+        }
+        totals = {
+            "GI": round(float(GI_total), 4),
+            "GI 3D (convex hull)": (round(float(gi_3d), 4) if gi_3d is not None else None),
+            f"Convex hull area ({unit}^2)": (round(float(hull_area_phys), 4) if hull_area_phys else None),
+            f"Area lateral surface ({unit}^2)": round(float(inner_area_slice_sum), 4),
+        }
+        sheet = build_measurement_sheet(
+            file_path, "LGI", results_rows, parameters, totals,
+            extra_columns=("Contours", "Kernel px", "Cube length (mm)",
+                           "Detected cube size (px)", "Computed mm per px",
+                           "Closed-envelope perimeter"),
+            totals_notes={"GI 3D (convex hull)": gi_3d_note(gi_3d)})
         xlsx_path = os.path.join(out_dir, f"Mesh_lGI_{Slice_direction}.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
         print(f"[VTK lGI] Saved Excel → {xlsx_path}")
     except Exception as ex:
-        print(f"[VTK LGI] WARN: could not save Excel: {ex}")
+        print(f"[VTK lGI] WARN: could not save Excel: {ex}")
 
 
     # Always return a 3-tuple
@@ -949,7 +969,7 @@ def compute_vtk_volume(
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         # Binary for contours
-        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
+        bw = threshold_binary(gray, BINARY_THRESHOLD_VTK, invert=False)
         contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -983,7 +1003,7 @@ def compute_vtk_volume(
         saved_pngs.append(slice_path)
         slice_png_by_idx[idx] = (slice_path, thickness)
         valid_slices.append(idx)
-        rows.append([idx, len(inner_filtered) ,area_perim_mm])
+        rows.append([idx, len(inner_filtered), area_perim_mm, scale_meta])
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
         plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         sections_list.append(section)
@@ -1017,8 +1037,7 @@ def compute_vtk_volume(
     # mesh.volume kept only for verification.
     _mesh_area_phys, _mesh_volume_phys = _mesh_area_volume_physical(mesh, mesh_dim_scaled)
     Volume = volume_simpson(volume_samples)
-    print(f"[VTK Volume] Simpson={Volume:.3f} {unit}³ "
-          f"(verify mesh.volume={_mesh_volume_phys:.3f} {unit}³)")
+    print(f"[VTK Volume] Volume={Volume:.3f} {unit}³")
     if cavity_correction_enabled:
         print(f"[VTK Volume] Cavity correction: "
               f"{cavity_corr.n_surface_connected} surface-connected, "
@@ -1032,21 +1051,39 @@ def compute_vtk_volume(
     else:
         all_slices_mesh = pv.PolyData()
 
-    # Save per-slice + total to Excel
+    # Save per-slice + total to Excel (spec layout, like All-hallmarks).
     try:
-        
-        rows.append([f"Volume {unit}^3",Volume])
-        rows.append(["cavity_correction", "on" if cavity_correction_enabled else "off"])
+        from helpers.results_excel_format import build_measurement_sheet, write_results_workbook
+        results_rows = [{
+            "Section": r[0], "Contours": r[1],
+            "Cube length (mm)": r[-1].get("cube_len_mm"),
+            "Detected cube size (px)": r[-1].get("detected_cube_size_px"),
+            "Computed mm per px": r[-1].get("computed_mm_per_px"),
+            "Area": r[2],
+        } for r in rows]
+        parameters = {
+            "Slice thickness": float(slice_thickness),
+            "Slice direction": Slice_direction,
+            "Filtered threshold (mm²)": float(min_contour_area),
+            "Length unit": unit,
+            "Cavity correction": "on" if cavity_correction_enabled else "off",
+        }
         if cavity_correction_enabled:
-            rows.append(["n_surface_connected_cavities", cavity_corr.n_surface_connected])
-            rows.append(["n_enclosed_cavities", cavity_corr.n_enclosed])
-            rows.append([f"cavity_area_removed_{unit}2", round(float(cavity_corr.total_cavity_area_mm2), 4)])
-        df = pd.DataFrame(rows, columns=["Slice_indx", "Count_of_cont." ,f"Inner_area_{unit}^2"])
-        
+            parameters["Cavity area threshold (mm²)"] = float(cavity_area_threshold_mm2)
+        totals = {f"Volume ({unit}^3)": round(float(Volume), 4)}
+        if cavity_correction_enabled:
+            totals.update({
+                "Number of surface-connected cavities": int(cavity_corr.n_surface_connected),
+                "Number of enclosed cavities": int(cavity_corr.n_enclosed),
+                f"Cavity area removed ({unit}^2)": round(float(cavity_corr.total_cavity_area_mm2), 4),
+            })
+        sheet = build_measurement_sheet(
+            file_path, "Volume", results_rows, parameters, totals,
+            extra_columns=("Contours", "Cube length (mm)",
+                           "Detected cube size (px)", "Computed mm per px"))
         xlsx_path = os.path.join(out_dir, f"Mesh_Volume_{Slice_direction}.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
         print(f"[VTK Volume] Saved Excel → {xlsx_path}")
-        
     except Exception as ex:
         print(f"[VTK Volume] WARN: could not save Excel: {ex}")
 
@@ -1194,7 +1231,7 @@ def compute_vtk_area(
         # contours for the surface-connected cavity correction; the top-level
         # contours match the previous RETR_EXTERNAL result so the perimeter is
         # unchanged.
-        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
+        bw = threshold_binary(gray, BINARY_THRESHOLD_VTK, invert=False)
         contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -1234,7 +1271,7 @@ def compute_vtk_area(
         saved_pngs.append(slice_path)
         slice_png_by_idx[idx] = (slice_path, thickness)
         valid_slices.append(idx)
-        rows.append([idx, len(inner_filtered), inner_perim_mm])
+        rows.append([idx, len(inner_filtered), inner_perim_mm, scale_meta])
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
         plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         sections_list.append(section)
@@ -1272,8 +1309,7 @@ def compute_vtk_area(
     _mesh_area_phys, _volume = _mesh_area_volume_physical(mesh, mesh_dim_scaled)
     Area, lateral_phys, caps_phys = total_surface_area_simpson(
         lateral_samples, volume_samples)
-    print(f"[VTK Area] Surface area: Simpson lateral+caps={Area:.3f} {unit}² "
-          f"(verify mesh.area={_mesh_area_phys:.3f} {unit}²)")
+    print(f"[VTK Area] Surface area: lateral+caps={Area:.3f} {unit}²")
     if cavity_correction_enabled:
         print(f"[VTK Area] Cavity correction: "
               f"{cavity_corr.n_surface_connected} surface-connected, "
@@ -1286,23 +1322,44 @@ def compute_vtk_area(
         all_slices_mesh.save(slice_mesh_path)
     else:
         all_slices_mesh = pv.PolyData()
-    # Save per-slice + total to Excel
+    # Save per-slice + total to Excel (spec layout, like All-hallmarks).
     try:
-        rows.append([f"Surface Area {unit}^2", Area])
-        rows.append(["surface_area_method", "simpson_lateral+caps"])
-        rows.append([f"surface_area_lateral_{unit}2", round(float(lateral_phys), 4)])
-        rows.append([f"surface_area_caps_{unit}2", round(float(caps_phys), 4)])
-        rows.append([f"surface_area_mesh_verify_{unit}2", round(float(_mesh_area_phys), 4)])
-        rows.append(["cavity_correction", "on" if cavity_correction_enabled else "off"])
+        from helpers.results_excel_format import build_measurement_sheet, write_results_workbook
+        results_rows = [{
+            "Section": r[0], "Contours": r[1],
+            "Cube length (mm)": r[-1].get("cube_len_mm"),
+            "Detected cube size (px)": r[-1].get("detected_cube_size_px"),
+            "Computed mm per px": r[-1].get("computed_mm_per_px"),
+            "Perimeter": r[2],
+        } for r in rows]
+        parameters = {
+            "Slice thickness": float(slice_thickness),
+            "Slice direction": Slice_direction,
+            "Filtered threshold (mm²)": float(min_contour_area),
+            "Length unit": unit,
+            "Perimeter method": perimeter_method,
+            "Surface area method": "lateral + caps",
+            "Cavity correction": "on" if cavity_correction_enabled else "off",
+        }
         if cavity_correction_enabled:
-            rows.append(["n_surface_connected_cavities", cavity_corr.n_surface_connected])
-            rows.append(["n_enclosed_cavities", cavity_corr.n_enclosed])
-            rows.append([f"cavity_wall_perim_added_{unit}", round(float(cavity_corr.total_wall_perim_mm), 4)])
-
-        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", f"Inner_Perimeter_{unit}"])
-            
+            parameters["Cavity area threshold (mm²)"] = float(cavity_area_threshold_mm2)
+        totals = {
+            f"Surface Area ({unit}^2)": round(float(Area), 4),
+            f"Surface area lateral ({unit}^2)": round(float(lateral_phys), 4),
+            f"Surface area caps ({unit}^2)": round(float(caps_phys), 4),
+        }
+        if cavity_correction_enabled:
+            totals.update({
+                "Number of surface-connected cavities": int(cavity_corr.n_surface_connected),
+                "Number of enclosed cavities": int(cavity_corr.n_enclosed),
+                f"Cavity wall perimeter added ({unit})": round(float(cavity_corr.total_wall_perim_mm), 4),
+            })
+        sheet = build_measurement_sheet(
+            file_path, "Area", results_rows, parameters, totals,
+            extra_columns=("Contours", "Cube length (mm)",
+                           "Detected cube size (px)", "Computed mm per px"))
         xlsx_path = os.path.join(out_dir, f"Mesh_Area_{Slice_direction}.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
         print(f"[VTK Area] Saved Excel → {xlsx_path}")
     except Exception as ex:
         print(f"[VTK Area] WARN: could not save Excel: {ex}")
@@ -1439,7 +1496,7 @@ def compute_vtk_sulci_depth(
         thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         # Binary for contours
-        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
+        bw = threshold_binary(gray, BINARY_THRESHOLD_VTK, invert=False)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -1484,7 +1541,7 @@ def compute_vtk_sulci_depth(
                                     bgr = cv2.circle(bgr, far, radius_px, marker_color, -1)
 
         depth = flatten_depth_sets(depth_sets)
-        print(f"[VTK sulci] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")
+        print(f"[VTK Sulci depth] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
         if use_percent_filter:
@@ -1499,6 +1556,7 @@ def compute_vtk_sulci_depth(
             (max(depth) if depth else None),    # max_depth_{unit}
             mean_depth,                         # mean_depth_{unit}
             *per_class_cells,
+            scale_meta,                         # calibration metadata (last)
             ])
 
 
@@ -1522,44 +1580,48 @@ def compute_vtk_sulci_depth(
     else:
         all_slices_mesh = pv.PolyData()
 
-    # Save per-slice + total to Excel
+    # Save per-slice + total to Excel (spec layout, like All-hallmarks).
     try:
-        base_cols = [
-            "Slice", "Count_of_cont.", "Sulci_count",
-            f"min_depth_{unit}", f"max_depth_{unit}", f"mean_depth_{unit}",
-        ]
-        per_class_cols = sulcus_export_columns(unit)
-        cols = base_cols + per_class_cols
-        total_width = len(cols)
-
-        overall_depth_sets = empty_depth_sets()
-        for dsets in slice_class_data:
-            if dsets is None:
-                continue
-            for k in SULCUS_CLASSES:
-                overall_depth_sets[k].extend(dsets.get(k, []))
-
+        from helpers.results_excel_format import (
+            build_measurement_sheet, write_results_workbook, subtype_mean)
+        results_rows = []
+        for r, dsets in zip(rows, slice_class_data):
+            d = dsets if isinstance(dsets, dict) else {}
+            results_rows.append({
+                "Section": r[0],
+                "Contours": r[1],
+                "Cube length (mm)": r[-1].get("cube_len_mm"),
+                "Detected cube size (px)": r[-1].get("detected_cube_size_px"),
+                "Computed mm per px": r[-1].get("computed_mm_per_px"),
+                "PrimarySulciCount": len(d.get("primary", []) or []),
+                "SecondarySulciCount": len(d.get("secondary", []) or []),
+                "TertiarySulciCount": len(d.get("tertiary", []) or []),
+                "UnclassifiedSulciCount": len(d.get("unclassified", []) or []),
+                "PrimaryMeanDepth": subtype_mean(None, d.get("primary", []) or []),
+                "SecondaryMeanDepth": subtype_mean(None, d.get("secondary", []) or []),
+                "TertiaryMeanDepth": subtype_mean(None, d.get("tertiary", []) or []),
+                "UnclassifiedMeanDepth": subtype_mean(None, d.get("unclassified", []) or []),
+            })
         overall_n = len(total_depth)
-        overall_min = min(total_depth) if total_depth else None
-        overall_max = max(total_depth) if total_depth else None
         overall_mean = (sum(total_depth) / overall_n) if overall_n else None
-
-        summary_base = [None] * len(base_cols)
-        summary_base[0] = "Sulci_overall_summary"
-        summary_base[base_cols.index("Sulci_count")]        = overall_n
-        summary_base[base_cols.index(f"min_depth_{unit}")]  = overall_min
-        summary_base[base_cols.index(f"max_depth_{unit}")]  = overall_max
-        summary_base[base_cols.index(f"mean_depth_{unit}")] = overall_mean
-        rows.append(pad_row(
-            [*summary_base, *sulcus_export_cells(overall_depth_sets)],
-            total_width,
-        ))
-
-        df = pd.DataFrame(rows, columns=cols)
-        df = drop_empty_columns(df)
-
+        parameters = {
+            "Slice thickness": float(slice_thickness),
+            "Slice direction": Slice_direction,
+            "Filtered threshold (mm²)": float(min_contour_area),
+            "Length unit": unit,
+        }
+        totals = {
+            "Total sulci count": int(overall_n),
+            f"Min sulci depth ({unit})": (round(float(min(total_depth)), 4) if total_depth else None),
+            f"Max sulci depth ({unit})": (round(float(max(total_depth)), 4) if total_depth else None),
+            f"Mean sulci depth ({unit})": (round(float(overall_mean), 4) if overall_mean is not None else None),
+        }
+        sheet = build_measurement_sheet(
+            file_path, "Sulci depth", results_rows, parameters, totals,
+            extra_columns=("Contours", "Cube length (mm)",
+                           "Detected cube size (px)", "Computed mm per px"))
         xlsx_path = os.path.join(out_dir, f"Mesh_Sulci_depth_{Slice_direction}.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
         print(f"[VTK Sulci depth] Saved Excel → {xlsx_path}")
     except Exception as ex:
         print(f"[VTK Sulci depth] WARN: could not save Excel: {ex}")
@@ -1575,12 +1637,14 @@ def compute_compactness_vtk(parent,
     Slice_direction: Literal["X", "Y", "Z"] = "Y",
     Physical_dim: Sequence[int] | None = None,
     unit: str = "mm",
-    slice_thickness: float = 0.5):
+    slice_thickness: float = 0.5,
+    cavity_correction_enabled: bool = DEFAULT_CAVITY_CORRECTION_ENABLED,
+    cavity_area_threshold_mm2: float = DEFAULT_CAVITY_AREA_THRESHOLD_MM2):
 
     # --- Load mesh
 
     mesh = pv.read(str(file_path))
-    print(f"[VTK compactness] Loaded mesh: {mesh}")
+    print(f"[VTK Compactness] Loaded mesh: {mesh}")
 
     # --- Bounds / dims (mm)
     x_min, x_max, y_min, y_max, z_min, z_max = mesh.bounds
@@ -1602,14 +1666,14 @@ def compute_compactness_vtk(parent,
 
     N = len(slice_positions)
     if N == 0:
-        print(f"[VTK compactness] No slices to process (thickness too large vs. {Slice_direction} range).")
+        print(f"[VTK Compactness] No slices to process (thickness too large vs. {Slice_direction} range).")
         return 0.0, [], []
 
     # Effective thickness to exactly span the axis extent, scaled to physical units
     axis_index = {"X": 0, "Y": 1, "Z": 2}.get(Slice_direction)
     slice_thickness_eff = mesh_dim[axis_index] / N
     slice_thickness_eff *= mesh_dim_scaled[axis_index]
-    print(f"[VTK compactness] Effective slice thickness: {slice_thickness_eff} {unit}")
+    print(f"[VTK Compactness] Effective slice thickness: {slice_thickness_eff} {unit}")
 
     # --- Outputs
     os.makedirs(out_dir, exist_ok=True)
@@ -1619,7 +1683,7 @@ def compute_compactness_vtk(parent,
     out_dir_origin = os.path.join(out_dir, "vtk_orgin")
     os.makedirs(out_dir_origin, exist_ok=True)
 
-    print(f"[VTK compactness] Temp output dir: {out_dir}")
+    print(f"[VTK Compactness] Temp output dir: {out_dir}")
 
     saved_pngs: list[str] = []
     valid_slices: list[int] = []
@@ -1628,8 +1692,12 @@ def compute_compactness_vtk(parent,
     sum_inner_mm = 0.0
     sum_area_mm2 = 0.0
     axis_scale = float(mesh_dim_scaled[axis_index])
-    volume_samples: list[tuple[float, float]] = []   # (physical position, cross-section area)
-    lateral_samples: list[tuple[float, float]] = []  # (physical position, inner perimeter)
+    # Raw per-slice data for the surface-connected cavity correction (applied
+    # after the loop) so compactness mirrors the Area/Volume tools.
+    raw_lateral: list[tuple[int, float, float]] = []   # (idx, pos, inner_perim_mm)
+    raw_volume: list[tuple[int, float, float]] = []    # (idx, pos, inner_area_mm)
+    slice_records: list[SliceRecord] = []
+    slice_png_by_idx: dict[int, tuple[str, int]] = {}  # idx -> (png path, line thickness)
 
     # --- Use a context manager so the plotter is *guaranteed* to be closed safely
     p = pv.Plotter(off_screen=True, window_size=VTK_RENDER_WINDOW_SIZE)
@@ -1681,17 +1749,18 @@ def compute_compactness_vtk(parent,
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         # Binary for contours
-        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0)
+        bw = threshold_binary(gray, BINARY_THRESHOLD_VTK, invert=False)
         contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
 
-        inner_filtered, _internal_filtered = split_inner_and_internal_contours(
+        inner_filtered, internal_filtered = split_inner_and_internal_contours(
             contours, hierarchy, red_rect, bw.shape, float(min_contour_area) / (mm_per_px ** 2),
         )
         cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
-        # Convert pixel measurements to physical units (outer region).
+        # Convert pixel measurements to physical units (holes-filled outer region;
+        # surface-connected cavities are corrected after the loop).
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
         area_px = sum(cv2.contourArea(c) for c in inner_filtered)
         inner_perim_mm = inner_perim_px * mm_per_px
@@ -1701,15 +1770,25 @@ def compute_compactness_vtk(parent,
         # Accumulate in physical units
         sum_inner_mm += inner_perim_mm
         sum_area_mm2 += area_mm2
-        volume_samples.append((float(k) * axis_scale, area_mm2))
-        lateral_samples.append((float(k) * axis_scale, inner_perim_mm))
+        pos = float(k) * axis_scale
+        raw_lateral.append((idx, pos, inner_perim_mm))
+        raw_volume.append((idx, pos, area_mm2))
+        if cavity_correction_enabled:
+            center_px = get_red_rect_offset(img_rgb)
+            slice_records.append(SliceRecord(
+                idx=idx, position_mm=pos,
+                cavities=[make_slice_cavity(c, mm_per_px, center_px) for c in internal_filtered],
+                outer_polys_mm=[contour_to_mm(c, mm_per_px, center_px) for c in inner_filtered],
+                hole_polys_mm=[contour_to_mm(c, mm_per_px, center_px) for c in internal_filtered],
+            ))
 
         # Save annotated slice
         slice_path = os.path.join(out_dir_slices, f"slice_{idx:03d}.png")
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
+        slice_png_by_idx[idx] = (slice_path, thickness)
         valid_slices.append(idx)
-        rows.append([idx, len(inner_filtered), comp_2D])
+        rows.append([idx, len(inner_filtered), comp_2D, scale_meta])
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
         plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         sections_list.append(section)
@@ -1717,15 +1796,43 @@ def compute_compactness_vtk(parent,
 
     # ---- end with: plotter is fully and safely closed here ----
 
+    # Surface-connected cavity correction (mirrors the Area/Volume tools): the
+    # open-cavity wall perimeter is added to the surface lateral and the
+    # open-cavity area is subtracted from the volume + caps. Enclosed voids stay
+    # solid. Yellow-outline the open cavities on the saved slices.
+    if cavity_correction_enabled:
+        cavity_corr = cavity_correction_tracking(
+            slice_records, area_threshold_mm2=float(cavity_area_threshold_mm2))
+        lateral_samples = [(pos, perim + cavity_corr.perim_add(idx))
+                           for (idx, pos, perim) in raw_lateral]
+        volume_samples = [(pos, max(0.0, area - cavity_corr.area_subtract(idx)))
+                          for (idx, pos, area) in raw_volume]
+        for c_idx, c_contours in cavity_corr.surface_connected_by_idx.items():
+            png_thick = slice_png_by_idx.get(c_idx)
+            if png_thick is None:
+                continue
+            png_path, line_thick = png_thick
+            img = cv2.imread(png_path)
+            if img is None:
+                continue
+            cv2.drawContours(img, c_contours, -1, (0, 255, 255), int(max(1, line_thick)))
+            cv2.imwrite(png_path, img)
+    else:
+        cavity_corr = CavityCorrection.empty()
+        lateral_samples = [(pos, perim) for (_idx, pos, perim) in raw_lateral]
+        volume_samples = [(pos, area) for (_idx, pos, area) in raw_volume]
+
     # Surface area = Simpson lateral + caps; Volume = ∫ area dh via Simpson's
     # rule. Exact mesh.area / mesh.volume kept only for verification.
     _mesh_area_phys, _mesh_volume_phys = _mesh_area_volume_physical(mesh, mesh_dim_scaled)
     Volume = volume_simpson(volume_samples)
     Area, _lat_phys, _caps_phys = total_surface_area_simpson(lateral_samples, volume_samples)
-    print(f"[VTK Compactness] Volume: Simpson={Volume:.3f} {unit}³ "
-          f"(verify mesh.volume={_mesh_volume_phys:.3f} {unit}³); "
-          f"Surface: Simpson lateral+caps={Area:.3f} {unit}² "
-          f"(verify mesh.area={_mesh_area_phys:.3f} {unit}²)")
+    print(f"[VTK Compactness] Volume={Volume:.3f} {unit}³ "
+          f"Surface area: lateral+caps={Area:.3f} {unit}²")
+    if cavity_correction_enabled:
+        print(f"[VTK Compactness] Cavity correction: "
+              f"{cavity_corr.n_surface_connected} surface-connected, "
+              f"{cavity_corr.n_enclosed} enclosed")
     comp_3D = compactness_3D(Volume, Area)
     if sections_list:
         all_slices_mesh = pv.merge(sections_list)
@@ -1733,18 +1840,44 @@ def compute_compactness_vtk(parent,
         all_slices_mesh.save(slice_mesh_path)
     else:
         all_slices_mesh = pv.PolyData()
-    # Save per-slice + total to Excel
+    # Save per-slice + total to Excel (spec layout, like All-hallmarks).
     try:
-        rows.append(["Compactness", round(comp_3D, 2)])
-        rows.append([f"Volume {unit}^3", round(Volume, 2)])
-        rows.append([f"Area {unit}^2", round(Area, 2)])
-        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", "Slice_compactness"])
-
+        from helpers.results_excel_format import build_measurement_sheet, write_results_workbook
+        results_rows = [{
+            "Section": r[0], "Contours": r[1],
+            "Cube length (mm)": r[-1].get("cube_len_mm"),
+            "Detected cube size (px)": r[-1].get("detected_cube_size_px"),
+            "Computed mm per px": r[-1].get("computed_mm_per_px"),
+            "Compactness": r[2],
+        } for r in rows]
+        parameters = {
+            "Slice thickness": float(slice_thickness),
+            "Slice direction": Slice_direction,
+            "Filtered threshold (mm²)": float(min_contour_area),
+            "Length unit": unit,
+            "Cavity correction": "on" if cavity_correction_enabled else "off",
+        }
+        if cavity_correction_enabled:
+            parameters["Cavity area threshold (mm²)"] = float(cavity_area_threshold_mm2)
+        totals = {
+            "Compactness": round(float(comp_3D), 4),
+            f"Volume ({unit}^3)": round(float(Volume), 4),
+            f"Surface Area ({unit}^2)": round(float(Area), 4),
+        }
+        if cavity_correction_enabled:
+            totals.update({
+                "Number of surface-connected cavities": int(cavity_corr.n_surface_connected),
+                "Number of enclosed cavities": int(cavity_corr.n_enclosed),
+            })
+        sheet = build_measurement_sheet(
+            file_path, "Compactness", results_rows, parameters, totals,
+            extra_columns=("Contours", "Cube length (mm)",
+                           "Detected cube size (px)", "Computed mm per px"))
         xlsx_path = os.path.join(out_dir, f"Mesh_compactness_{Slice_direction}.xlsx")
-        df.to_excel(xlsx_path, index=False)
-        print(f"[VTK compactness] Saved Excel → {xlsx_path}")
+        write_results_workbook(xlsx_path, [sheet])
+        print(f"[VTK Compactness] Saved Excel → {xlsx_path}")
     except Exception as ex:
-        print(f"[VTK compactness] WARN: could not save Excel: {ex}")
+        print(f"[VTK Compactness] WARN: could not save Excel: {ex}")
 
 
     # Always return a 3-tuple

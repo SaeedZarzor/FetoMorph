@@ -21,7 +21,7 @@ ways:
   See :func:`cavity_correction_nifti`.
 
 GI/LGI must NOT change: the cavity-wall perimeter goes only into the 3-D surface
-lateral, never into the GI inner/outer perimeter sums.
+lateral, never into the GI exterior/closed-envelope perimeter sums.
 """
 
 from __future__ import annotations

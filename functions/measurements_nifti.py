@@ -131,9 +131,9 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
     # Extract pixel size
     pixel_size_x, pixel_size_y, pixel_size_z = header.get_zooms()[:3] # (x, y, z) in mm
 
-    print(f"[NIfTI All hallmarks] voxel size: {pixel_size_x:.4f} x {pixel_size_y:.4f} x {pixel_size_z:.4f} mm")
+    print(f"[NIfTI All Hallmarks] voxel size: {pixel_size_x:.4f} x {pixel_size_y:.4f} x {pixel_size_z:.4f} mm")
     print(
-        f"[NIfTI All hallmarks] Perimeter method={perimeter_method}; "
+        f"[NIfTI All Hallmarks] Perimeter method={perimeter_method}; "
         f"in-plane spacing={pixel_size_x:.4f} x {pixel_size_z:.4f} mm/px; "
         f"simplify={'on' if simplify_contours_for_perimeter else 'off'} "
         f"(epsilon={float(contour_simplify_epsilon):g} px)"
@@ -146,11 +146,11 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
     kernel_size_px = _to_kernel_px(kernel_size_mm, max(pixel_size_x, pixel_size_z))
 
     if not valid_labels:
-        print(" [NIfTI All hallmarks] Warning: None of the selected regions are present in this NIfTI file!")
+        print("[NIfTI All Hallmarks] Warning: None of the selected regions are present in this NIfTI file!")
         threshold = np.percentile(image_data, 50)
         brain_mask = image_data #> threshold
     else:
-        print("[NIfTI All hallmarks] Extracting regions:", valid_labels)
+        print("[NIfTI All Hallmarks] Extracting regions:", valid_labels)
         brain_mask = np.isin(image_data, list(valid_labels))
 
 
@@ -158,13 +158,13 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
     # Find coronal slice indices (axis 1) that contain brain tissue.
     brain_slices = np.where(np.any(brain_mask, axis=(0, 2)))[0]
     if brain_slices.size == 0:
-        QMessageBox.information(parent, "[NIfTI All hallmarks]", "No slices contain the selected mask.")
+        QMessageBox.information(parent, "[NIfTI All Hallmarks]", "No slices contain the selected mask.")
         return
         
    
     out_dir_slices = os.path.join(out_dir, "brain_slices")
     os.makedirs(out_dir_slices, exist_ok=True)
-    print(f"[NIfTI All hallmarks] Temp output dir: {out_dir}")
+    print(f"[NIfTI All Hallmarks] Temp output dir: {out_dir}")
 
 
 
@@ -183,7 +183,7 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
     sheet1=[]
     sum_area = 0
     sum_inner,sum_outer = 0, 0
-    # (slice position mm, inner perimeter mm) for the Simpson lateral integral,
+    # (slice position mm, exterior perimeter mm) for the Simpson lateral integral,
     # and (position mm, cross-section area mm²) for the Simpson volume integral.
     lateral_samples: list[tuple[float, float]] = []
     volume_samples: list[tuple[float, float]] = []
@@ -238,7 +238,7 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
             sum_outer += outer_perimeter
             # Cavity correction: volume cross-section uses the filled mask (tissue
             # + enclosed; open cavities removed); surface lateral gets the open
-            # cavity wall perimeter added. GI (inner/outer) is unchanged.
+            # cavity wall perimeter added. GI (exterior/closed-envelope) is unchanged.
             vol_area = (float(np.sum(filled_mask[:, idx, :]) * pixel_area_mm2)
                         if filled_mask is not None else slice_area)
             lateral_samples.append((float(idx) * pixel_size_y,
@@ -297,7 +297,7 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                                         annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
 
             depth = flatten_depth_sets(depth_sets)
-            print(f"[NIfTI allmarks] slice {idx}: {format_sulcus_class_summary(depth_sets)}")
+            print(f"[NIfTI All Hallmarks] slice {idx}: {format_sulcus_class_summary(depth_sets)}")
             mean_depth = (sum(depth)/len(depth)) if depth else None
             total_depth.extend(depth)
             slice_class_data.append(depth_sets)
@@ -319,17 +319,15 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
         # The voxel-sum volume (Σ area × spacing) is kept only for verification.
         brain_volume = volume_simpson(volume_samples) / 1000
         _voxel_volume_cm3 = (sum_area * pixel_size_y) / 1000
-        print(f"[NIfTI All hallmarks] Volume: Simpson={brain_volume:.3f} cm³ "
-              f"(verify voxel-sum={_voxel_volume_cm3:.3f} cm³)")
-        # Surface area = Simpson lateral (∫ inner perimeter dh) + top & bottom
+        print(f"[NIfTI All Hallmarks] Volume={brain_volume:.3f} cm³")
+        # Surface area = Simpson lateral (∫ exterior perimeter dh) + top & bottom
         # caps (mm² → /100 cm²).
         _total_area_mm2, _lat_mm2, _caps_mm2 = total_surface_area_simpson(
             lateral_samples, volume_samples)
         Area = _total_area_mm2 / 100
-        print(f"[NIfTI All hallmarks] Surface area: Simpson lateral+caps={Area:.3f} cm² "
-              f"(lateral={_lat_mm2 / 100:.3f}, caps={_caps_mm2 / 100:.3f} cm²)")
+        print(f"[NIfTI All Hallmarks] Surface area: lateral+caps={Area:.3f} cm²")
         if cavity_correction_enabled:
-            print(f"[NIfTI All hallmarks] Cavity correction: "
+            print(f"[NIfTI All Hallmarks] Cavity correction: "
                   f"{cavity_corr.n_surface_connected} surface-connected, "
                   f"{cavity_corr.n_enclosed} enclosed; "
                   f"area removed={cavity_corr.total_cavity_area_mm2 / 100:.3f} cm², "
@@ -388,35 +386,31 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                 "Pixel spacing": (
                     f"{float(pixel_size_x):.4f} × {float(pixel_size_z):.4f} mm "
                     "(in-plane)"),
-                "DEFAULT_PERIMETER_METHOD": DEFAULT_PERIMETER_METHOD,
-                "PERIMETER METHOD": perimeter_method,
-                "crofton_directions": 4,
-                "pixel_spacing_x": float(pixel_size_x),
-                "pixel_spacing_y": float(pixel_size_z),
-                "isotropic_spacing_used": perimeter_method == "crofton",
-                "contour_simplification_enabled": bool(simplify_contours_for_perimeter),
-                "contour_simplification_epsilon": float(contour_simplify_epsilon),
                 "Slice thickness": float(pixel_size_y),
                 "Filtered threshold (mm²)": float(min_contour_area),
-                "cavity_correction": "on" if cavity_correction_enabled else "off",
+                "Perimeter method": perimeter_method,
+                "Isotropic spacing used": perimeter_method == "crofton",
+                "Contour simplification enabled": bool(simplify_contours_for_perimeter),
+                "Contour simplification epsilon": float(contour_simplify_epsilon),
+                "Cavity correction": "on" if cavity_correction_enabled else "off",
             }
             if cavity_correction_enabled:
-                parameters["cavity_area_threshold_mm2"] = float(cavity_area_threshold_mm2)
+                parameters["Cavity area threshold (mm²)"] = float(cavity_area_threshold_mm2)
             totals = {
-                "Volume (cm^3)": round(float(brain_volume), 2),
-                "Surface Area (cm^2)": round(float(Area), 2),
+                "Volume (cm^3)": round(float(brain_volume), 4),
+                "Surface Area (cm^2)": round(float(Area), 4),
                 "GI": round(float(GI_total), 4),
                 "Total sulci count": int(overall_n),
-                "Mean sulci depth (mm)": (round(float(overall_mean), 3)
+                "Mean sulci depth (mm)": (round(float(overall_mean), 4)
                                            if overall_mean is not None
                                            else None),
             }
             if cavity_correction_enabled:
                 totals.update({
-                    "n_surface_connected_cavities": int(cavity_corr.n_surface_connected),
-                    "n_enclosed_cavities": int(cavity_corr.n_enclosed),
-                    "surface_connected_cavity_area_cm2": round(cavity_corr.total_cavity_area_mm2 / 100, 4),
-                    "cavity_wall_surface_cm2": round(cavity_corr.total_wall_perim_mm * float(pixel_size_y) / 100, 4),
+                    "Number of surface-connected cavities": int(cavity_corr.n_surface_connected),
+                    "Number of enclosed cavities": int(cavity_corr.n_enclosed),
+                    "Surface connected cavity area (cm^2)": round(cavity_corr.total_cavity_area_mm2 / 100, 4),
+                    "Cavity wall surface (cm^2)": round(cavity_corr.total_wall_perim_mm * float(pixel_size_y) / 100, 4),
                 })
             sheet = ResultsSheet(
                 sheet_name=os.path.basename(file_path) or "Results",
@@ -429,9 +423,9 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
             )
             xlsx_path = os.path.join(out_dir, "Brain_Allmarks.xlsx")
             write_results_workbook(xlsx_path, [sheet])
-            print(f"[NIfTI All hallmarks] Saved Excel → {xlsx_path}")
+            print(f"[NIfTI All Hallmarks] Saved Excel → {xlsx_path}")
         except Exception as ex:
-            print(f"[NIfTI All hallmarks] WARN: could not save Excel: {ex}")
+            print(f"[NIfTI All Hallmarks] WARN: could not save Excel: {ex}")
             
 
         # Step 3: Apply Mask & Save Extracted Brain NIfTI
@@ -440,12 +434,12 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
         
         brain_extracted = os.path.join(out_dir, "brain_extracted.nii.gz")
         nib.save(brain_nii, brain_extracted)
-        print("[NIfTI All hallmarks] Brain-extracted NIfTI file saved as 'brain_extracted.nii.gz'")
+        print("[NIfTI All Hallmarks] Brain-extracted NIfTI file saved as 'brain_extracted.nii.gz'")
         
         return dims, Area, brain_volume, GI_total, total_depth ,saved_pngs, valid_slices
 
     else:
-        QMessageBox.information(parent, "[NIfTI All hallmarks]", "All slices were filtered out (too small).")
+        QMessageBox.information(parent, "[NIfTI All Hallmarks]", "All slices were filtered out (too small).")
         return
 
 
@@ -489,7 +483,7 @@ def compute_nifti_volume(parent, file_path: str, out_dir: str, valid_labels: set
 #    # Check if selected regions exist in the image
 #    valid_labels = selected_regions.intersection(set(unique_labels))
     if not valid_labels:
-        print(" [NIfTI Volume] Warning: None of the selected regions are present in this NIfTI file!")
+        print("[NIfTI Volume] Warning: None of the selected regions are present in this NIfTI file!")
         threshold = np.percentile(image_data, 50)
         brain_mask = image_data #> threshold
     else:
@@ -574,8 +568,7 @@ def compute_nifti_volume(parent, file_path: str, out_dir: str, valid_labels: set
         # only for verification.
         brain_volume = volume_simpson(volume_samples) / 1000
         _voxel_volume_cm3 = (sum_area * pixel_size_y) / 1000
-        print(f"[NIfTI Volume] Simpson={brain_volume:.3f} cm³ "
-              f"(verify voxel-sum={_voxel_volume_cm3:.3f} cm³)")
+        print(f"[NIfTI Volume] Volume={brain_volume:.3f} cm³")
         if cavity_correction_enabled:
             print(f"[NIfTI Volume] Cavity correction: "
                   f"{cavity_corr.n_surface_connected} surface-connected, "
@@ -583,16 +576,27 @@ def compute_nifti_volume(parent, file_path: str, out_dir: str, valid_labels: set
                   f"area removed={cavity_corr.total_cavity_area_mm2 / 100:.3f} cm²")
 
 
-        sheet1.append(["Volume cm^3",round(brain_volume,2)])
-        sheet1.append(["cavity_correction", "on" if cavity_correction_enabled else "off"])
+        from helpers.results_excel_format import build_measurement_sheet, write_results_workbook
+        results_rows = [{"Section": r[0], "Area": r[1]} for r in sheet1]
+        parameters = {
+            "Pixel spacing": (
+                f"{float(pixel_size_x):.4f} × {float(pixel_size_z):.4f} mm "
+                "(in-plane)"),
+            "Slice thickness": float(pixel_size_y),
+            "Cavity correction": "on" if cavity_correction_enabled else "off",
+        }
         if cavity_correction_enabled:
-            sheet1.append(["n_surface_connected_cavities", cavity_corr.n_surface_connected])
-            sheet1.append(["n_enclosed_cavities", cavity_corr.n_enclosed])
-            sheet1.append(["cavity_area_removed_cm2", round(float(cavity_corr.total_cavity_area_mm2 / 100), 4)])
-
-        df = pd.DataFrame(sheet1, columns=["Slice", "Inner_area_mm^2", ])
+            parameters["Cavity area threshold (mm²)"] = float(cavity_area_threshold_mm2)
+        totals = {"Volume (cm^3)": round(float(brain_volume), 4)}
+        if cavity_correction_enabled:
+            totals.update({
+                "Number of surface-connected cavities": int(cavity_corr.n_surface_connected),
+                "Number of enclosed cavities": int(cavity_corr.n_enclosed),
+                "Cavity area removed (cm²)": round(float(cavity_corr.total_cavity_area_mm2 / 100), 4),
+            })
+        sheet = build_measurement_sheet(file_path, "Volume", results_rows, parameters, totals)
         xlsx_path = os.path.join(out_dir, "Brain_Volume.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
             
 
         # Step 3: Apply Mask & Save Extracted Brain NIfTI
@@ -621,7 +625,7 @@ def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[
     cavity_area_threshold_mm2: float = DEFAULT_CAVITY_AREA_THRESHOLD_MM2):
     """Compute brain surface area (cm²) from a NIfTI segmentation.
 
-    Sums inner-contour perimeters across coronal slices and multiplies
+    Sums exterior-contour perimeters across coronal slices and multiplies
     by slice spacing to approximate total surface area.
 
     Args:
@@ -665,7 +669,7 @@ def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[
 #    # Check if selected regions exist in the image
 #    valid_labels = selected_regions.intersection(set(unique_labels))
     if not valid_labels:
-        print(" [NIfTI Area] Warning: None of the selected regions are present in this NIfTI file!")
+        print("[NIfTI Area] Warning: None of the selected regions are present in this NIfTI file!")
         threshold = np.percentile(image_data, 50)
         brain_mask = image_data #> threshold
     else:
@@ -752,6 +756,7 @@ def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[
 
 
         Area = sum_inner * pixel_size_y/ 100
+        print(f"[NIfTI Area] Surface area: lateral+caps={Area:.3f} cm²")
         if cavity_correction_enabled:
             print(f"[NIfTI Area] Cavity correction: "
                   f"{cavity_corr.n_surface_connected} surface-connected, "
@@ -759,23 +764,31 @@ def compute_nifti_area(parent, file_path: str, out_dir: str,  valid_labels: set[
                   f"wall perim added={cavity_corr.total_wall_perim_mm / 10:.3f} cm")
 
 
-        sheet1.append(["Surface Area cm^2",round(Area,2)])
-        sheet1.append(["cavity_correction", "on" if cavity_correction_enabled else "off"])
+        from helpers.results_excel_format import build_measurement_sheet, write_results_workbook
+        results_rows = [{"Section": r[0], "Perimeter": r[1]} for r in sheet1]
+        parameters = {
+            "Perimeter method": perimeter_method,
+            "Pixel spacing": (
+                f"{float(pixel_size_x):.4f} × {float(pixel_size_z):.4f} mm "
+                "(in-plane)"),
+            "Slice thickness": float(pixel_size_y),
+            "Isotropic spacing used": perimeter_method == "crofton",
+            "Contour simplification enabled": bool(simplify_contours_for_perimeter),
+            "Contour simplification epsilon": float(contour_simplify_epsilon),
+            "Cavity correction": "on" if cavity_correction_enabled else "off",
+        }
         if cavity_correction_enabled:
-            sheet1.append(["n_surface_connected_cavities", cavity_corr.n_surface_connected])
-            sheet1.append(["n_enclosed_cavities", cavity_corr.n_enclosed])
-            sheet1.append(["cavity_wall_perim_added_cm", round(float(cavity_corr.total_wall_perim_mm / 10), 4)])
-
-        df = pd.DataFrame(sheet1, columns=["Slice", "Inner_Perimeter_mm"])
-        df.insert(0, "PERIMETER METHOD", perimeter_method)
-        df.insert(1, "DEFAULT_PERIMETER_METHOD", DEFAULT_PERIMETER_METHOD)
-        df.insert(2, "pixel_spacing_x", float(pixel_size_x))
-        df.insert(3, "pixel_spacing_y", float(pixel_size_z))
-        df.insert(4, "isotropic_spacing_used", perimeter_method == "crofton")
-        df.insert(5, "contour_simplification_enabled", bool(simplify_contours_for_perimeter))
-        df.insert(6, "contour_simplification_epsilon", float(contour_simplify_epsilon))
+            parameters["Cavity area threshold (mm²)"] = float(cavity_area_threshold_mm2)
+        totals = {"Surface Area (cm^2)": round(float(Area), 4)}
+        if cavity_correction_enabled:
+            totals.update({
+                "Number of surface-connected cavities": int(cavity_corr.n_surface_connected),
+                "Number of enclosed cavities": int(cavity_corr.n_enclosed),
+                "Cavity wall perimeter added (cm)": round(float(cavity_corr.total_wall_perim_mm / 10), 4),
+            })
+        sheet = build_measurement_sheet(file_path, "Area", results_rows, parameters, totals)
         xlsx_path = os.path.join(out_dir, "Brain_Surface_Area.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
             
 
         # Step 3: Apply Mask & Save Extracted Brain NIfTI
@@ -801,7 +814,7 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
     contour_simplify_epsilon: float = DEFAULT_CONTOUR_SIMPLIFY_EPSILON):
     """Compute the gyrification index (GI) from a NIfTI segmentation.
 
-    GI = total inner perimeter / total outer perimeter across all coronal
+    GI = total exterior perimeter / total closed-envelope perimeter across all coronal
     slices.  The "outer" contour is obtained by morphologically closing
     each slice mask to fill sulci.
 
@@ -848,7 +861,7 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
 #    # Check if selected regions exist in the image
 #    valid_labels = selected_regions.intersection(set(unique_labels))
     if not valid_labels:
-        print(" [NIfTI lGI] Warning: None of the selected regions are present in this NIfTI file!")
+        print("[NIfTI lGI] Warning: None of the selected regions are present in this NIfTI file!")
         threshold = np.percentile(image_data, 50)
         brain_mask = image_data #> threshold
     else:
@@ -963,16 +976,23 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
         GI_total = sum_inner / sum_outer if sum_outer > 0 else 0
 
 
-        sheet1.append(["GI", None, None, None, round(GI_total, 2)])
-
-        df = pd.DataFrame(sheet1, columns=["Slice", "Kernel_px", "Inner_Perimeter_mm", "Outer_Perimeter_mm", "GI"])
-        df.insert(0, "Kernel_size_mm", float(kernel_size_mm))
-        df.insert(1, "PERIMETER METHOD", perimeter_method)
-        df.insert(2, "DEFAULT_PERIMETER_METHOD", DEFAULT_PERIMETER_METHOD)
-        df.insert(3, "contour_simplification_enabled", bool(simplify_contours_for_perimeter))
-        df.insert(4, "contour_simplification_epsilon", float(contour_simplify_epsilon))
+        from helpers.results_excel_format import build_measurement_sheet, write_results_workbook
+        results_rows = [{
+            "Section": r[0], "Kernel px": r[1],
+            "Perimeter": r[2], "Closed-envelope perimeter": r[3], "LGI": r[4],
+        } for r in sheet1]
+        parameters = {
+            "Kernel size (mm)": float(kernel_size_mm),
+            "Perimeter method": perimeter_method,
+            "Contour simplification enabled": bool(simplify_contours_for_perimeter),
+            "Contour simplification epsilon": float(contour_simplify_epsilon),
+        }
+        totals = {"GI": round(float(GI_total), 4)}
+        sheet = build_measurement_sheet(
+            file_path, "LGI", results_rows, parameters, totals,
+            extra_columns=("Kernel px", "Closed-envelope perimeter"))
         xlsx_path = os.path.join(out_dir, "Brain_lGI.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
             
 
         # Step 3: Apply Mask & Save Extracted Brain NIfTI
@@ -1034,7 +1054,7 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
 #    # Check if selected regions exist in the image
 #    valid_labels = selected_regions.intersection(set(unique_labels))
     if not valid_labels:
-        print(" [NIfTI Sulci depth] Warning: None of the selected regions are present in this NIfTI file!")
+        print("[NIfTI Sulci depth] Warning: None of the selected regions are present in this NIfTI file!")
         threshold = np.percentile(image_data, 50)
         brain_mask = image_data #> threshold
     else:
@@ -1124,7 +1144,7 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
                                         annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
 
             depth = flatten_depth_sets(depth_sets)
-            print(f"[NIfTI sulci] slice {idx}: {format_sulcus_class_summary(depth_sets)}")
+            print(f"[NIfTI Sulci depth] slice {idx}: {format_sulcus_class_summary(depth_sets)}")
             total_depth.extend(depth)
             slice_class_data.append(depth_sets)
             mean_depth = (sum(depth)/len(depth)) if depth else None
@@ -1147,38 +1167,33 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
         total_depth_mm = list(total_depth)
         total_depth = [x / 10 for x in total_depth]
 
-        base_cols = ["Slice", "Sulci_count", "min_depth_mm", "max_depth_mm", "mean_depth_mm"]
-        per_class_cols = sulcus_export_columns("mm")
-        cols = base_cols + per_class_cols
-        total_width = len(cols)
-
-        overall_depth_sets = empty_depth_sets()
-        for dsets in slice_class_data:
-            if dsets is None:
-                continue
-            for k in SULCUS_CLASSES:
-                overall_depth_sets[k].extend(dsets.get(k, []))
-
+        from helpers.results_excel_format import (
+            build_measurement_sheet, write_results_workbook, subtype_mean)
+        results_rows = []
+        for r, dsets in zip(sheet1, slice_class_data):
+            d = dsets if isinstance(dsets, dict) else {}
+            results_rows.append({
+                "Section": r[0],
+                "PrimarySulciCount": len(d.get("primary", []) or []),
+                "SecondarySulciCount": len(d.get("secondary", []) or []),
+                "TertiarySulciCount": len(d.get("tertiary", []) or []),
+                "UnclassifiedSulciCount": len(d.get("unclassified", []) or []),
+                "PrimaryMeanDepth": subtype_mean(None, d.get("primary", []) or []),
+                "SecondaryMeanDepth": subtype_mean(None, d.get("secondary", []) or []),
+                "TertiaryMeanDepth": subtype_mean(None, d.get("tertiary", []) or []),
+                "UnclassifiedMeanDepth": subtype_mean(None, d.get("unclassified", []) or []),
+            })
         overall_n = len(total_depth_mm)
-        overall_min = min(total_depth_mm) if total_depth_mm else None
-        overall_max = max(total_depth_mm) if total_depth_mm else None
         overall_mean = (sum(total_depth_mm) / overall_n) if overall_n else None
-
-        summary_base = [None] * len(base_cols)
-        summary_base[0] = "Sulci_overall_summary"
-        summary_base[base_cols.index("Sulci_count")]   = overall_n
-        summary_base[base_cols.index("min_depth_mm")]  = overall_min
-        summary_base[base_cols.index("max_depth_mm")]  = overall_max
-        summary_base[base_cols.index("mean_depth_mm")] = overall_mean
-        sheet1.append(pad_row(
-            [*summary_base, *sulcus_export_cells(overall_depth_sets)],
-            total_width,
-        ))
-
-        df = pd.DataFrame(sheet1, columns=cols)
-        df = drop_empty_columns(df)
+        totals = {
+            "Total sulci count": int(overall_n),
+            "Min sulci depth (mm)": (round(float(min(total_depth_mm)), 4) if total_depth_mm else None),
+            "Max sulci depth (mm)": (round(float(max(total_depth_mm)), 4) if total_depth_mm else None),
+            "Mean sulci depth (mm)": (round(float(overall_mean), 4) if overall_mean is not None else None),
+        }
+        sheet = build_measurement_sheet(file_path, "Sulci depth", results_rows, {}, totals)
         xlsx_path = os.path.join(out_dir, "Brain_Sulci.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
             
 
         # Step 3: Apply Mask & Save Extracted Brain NIfTI
@@ -1187,7 +1202,7 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
         
         brain_extracted = os.path.join(out_dir, "brain_extracted.nii.gz")
         nib.save(brain_nii, brain_extracted)
-        print("[NIfTI Slice] Brain-extracted NIfTI file saved as 'brain_extracted.nii.gz'")
+        print("[NIfTI Sulci depth] Brain-extracted NIfTI file saved as 'brain_extracted.nii.gz'")
         
         return  dims, total_depth, saved_pngs, valid_slices
 

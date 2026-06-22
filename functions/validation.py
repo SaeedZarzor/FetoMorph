@@ -50,10 +50,10 @@ def validate_nifti_area(out_dir: str):
         return
 
 def validate_nifti_lGI (out_dir: str):
-    """Plot inner perimeter vs. convex-hull perimeter across slices.
+    """Plot exterior perimeter vs. convex-hull perimeter across slices.
 
     Reads ``Brain_lGI.xlsx`` from *out_dir* and produces an overlay
-    plot of the inner perimeter (red) and the convex-hull perimeter
+    plot of the exterior perimeter (red) and the convex-hull perimeter
     (blue) for each slice, saved as ``brain_convex_perimeter.png``.
 
     Args:

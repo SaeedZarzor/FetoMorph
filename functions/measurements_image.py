@@ -16,6 +16,7 @@ from helpers.helpers import (
     compactness_2D,
     mask_perimeter_mm,
     split_inner_and_internal_contours,
+    threshold_binary,
     _add_scalebar_on_annotated,
     draw_hallmarks_values_on_image,
     SULCUS_CLASS_COLORS,
@@ -80,7 +81,7 @@ def compute_image_allmarks(
     Pipeline:
         1. Threshold → extract inner contours (brain boundary).
         2. Morphological close → extract outer contours (sulci filled).
-        3. GI = inner perimeter / outer perimeter.
+        3. GI = exterior perimeter / closed-envelope perimeter.
         4. Convexity defects → sulci depths.
 
     Args:
@@ -98,7 +99,7 @@ def compute_image_allmarks(
     ``perimeter_internal``. GI and compactness stay on the brain boundary.
 
     Returns:
-        Tuple of ``(area, perimeter, perimeter_internal, perimeter_convex, GI,
+        Tuple of ``(area, perimeter, perimeter_internal, perimeter_outer_envelope, GI,
         compactness, depths, depth_sets, annotated_bgr, slice_kind)``.
     """
     margin = 6
@@ -108,9 +109,9 @@ def compute_image_allmarks(
     if image is None:
         raise ValueError(f"Could not read image: {file_path}")
 
-    print(file_path + " is processing")
+    print(f"[Image] {file_path} is processing")
     im_bw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    (thresh, im_bw) = cv2.threshold(im_bw, BINARY_THRESHOLD_DEFAULT, 255, 1)
+    im_bw = threshold_binary(im_bw, BINARY_THRESHOLD_DEFAULT, invert=True)
     # Brain-boundary (inner) + hole (internal) contours for Contour Accounting.
     inner_filtered, internal_filtered = _split_contours_for_mode(im_bw, cnt_threshold, pixel_size)
     filtered_contours = inner_filtered  # sulci defects + GI operate on the brain boundary
@@ -125,7 +126,7 @@ def compute_image_allmarks(
     # Cropped sub-slice bands fall back to the original fixed-millimeter rule.
     slice_kind, slice_kind_conf = classify_slice_kind(image)
     use_percent_filter = slice_kind != "not_full_slice" and slice_kind_conf >= 0.7
-    print(f"Classified slice kind: {slice_kind} (confidence {slice_kind_conf:.2f}), using {'percent' if use_percent_filter else 'fixed'} filter for sulci depth.")
+    print(f"[Image] Classified slice kind: {slice_kind} (confidence {slice_kind_conf:.2f}), using {'percent' if use_percent_filter else 'fixed'} filter for sulci depth.")
     # Slice length = longest side of the brain's bounding box (physical units),
     # not the raw image size. Falls back to image extent if no brain contour was found.
     if filtered_contours:
@@ -135,7 +136,7 @@ def compute_image_allmarks(
         slice_length = max(W, H) * pixel_size
 
     if use_percent_filter:
-        print(f"The sulcus depth filter thresholds are {(SULCUS_TERTIARY_MIN_FRACTION * slice_length):.2f} {unit} (min) and {(SULCUS_PRIMARY_MAX_FRACTION * slice_length):.2f} {unit} (max).")
+        print(f"[Image] The sulcus depth filter thresholds are {(SULCUS_TERTIARY_MIN_FRACTION * slice_length):.2f} {unit} (min) and {(SULCUS_PRIMARY_MAX_FRACTION * slice_length):.2f} {unit} (max).")
 
     if filtered_contours:
         cv2.drawContours(annotated, filtered_contours, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
@@ -181,7 +182,7 @@ def compute_image_allmarks(
         x1, y1 = 15, 40
 
     # --- Outer contour: morphological close fills sulci, giving the "convex" boundary.
-    # GI (gyrification index) = inner perimeter / outer perimeter.
+    # GI (gyrification index) = exterior perimeter / closed-envelope perimeter.
     # Rebuild the source mask from ONLY the kept inner contours so noise blobs
     # the inner filter rejected cannot produce spurious outer components after
     # morph-close.
@@ -193,7 +194,7 @@ def compute_image_allmarks(
         annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, tuple(_get_viz().contour_outer_color_bgr), thickness)
         outer_mask_only = np.zeros_like(closed_mask)
         cv2.drawContours(outer_mask_only, filtered_conv_contours, -1, 255, thickness=cv2.FILLED)
-        perimeter_convex = mask_perimeter_mm(
+        perimeter_outer_envelope = mask_perimeter_mm(
             outer_mask_only, pixel_size, pixel_size,
             method=perimeter_method,
             simplify=simplify_contours_for_perimeter,
@@ -201,12 +202,12 @@ def compute_image_allmarks(
         )
 
     else:
-        perimeter_convex = None
+        perimeter_outer_envelope = None
 
-    perimeter_Rate = (perimeter / perimeter_convex
-                      if perimeter_convex else None)  # GI ratio
+    perimeter_Rate = (perimeter / perimeter_outer_envelope
+                      if perimeter_outer_envelope else None)  # GI ratio
     comp = (compactness_2D(area, perimeter)
-            if perimeter_convex is not None else None)
+            if perimeter_outer_envelope is not None else None)
 
     # --- Sulci depth via convexity defects ---
     # When use_percent_filter is True (full MRI slices), depths are split into
@@ -266,7 +267,7 @@ def compute_image_allmarks(
 
     depth = flatten_depth_sets(depth_sets)
     if use_percent_filter:
-        print(format_sulcus_class_summary(depth_sets))
+        print(f"[Image] {format_sulcus_class_summary(depth_sets)}")
 
     if draw_hallmarks:
         annotated = draw_hallmarks_values_on_image(
@@ -283,7 +284,7 @@ def compute_image_allmarks(
             anchor_ratio=(0.02, 0.05),
         )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
-    return area, perimeter, perimeter_internal, perimeter_convex ,perimeter_Rate, comp, depth, depth_sets, annotated, slice_kind  # BGR ndarray
+    return area, perimeter, perimeter_internal, perimeter_outer_envelope ,perimeter_Rate, comp, depth, depth_sets, annotated, slice_kind  # BGR ndarray
 
 
 def compute_image_perimeter(
@@ -318,7 +319,7 @@ def compute_image_perimeter(
     slice_kind, _ = classify_slice_kind(image)
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+    bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
 
     inner_filtered, internal_filtered = _split_contours_for_mode(bw, cnt_threshold, pixel_size)
 
@@ -396,7 +397,7 @@ def compute_image_area(
     slice_kind, _ = classify_slice_kind(image)
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+    bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
 
     inner_filtered, internal_filtered = _split_contours_for_mode(bw, cnt_threshold, pixel_size)
 
@@ -453,7 +454,7 @@ def compute_image_lGI(
 )  -> tuple[float, float, float, np.ndarray, SliceKind]:
     """Compute the local Gyrification Index from a 2-D brain-slice image.
 
-    GI = inner perimeter / outer perimeter, where "outer" is derived by
+    GI = exterior perimeter / closed-envelope perimeter, where the "closed-envelope" is derived by
     morphologically closing the binary mask (fills sulci).
 
     Args:
@@ -476,9 +477,9 @@ def compute_image_lGI(
 
     slice_kind, _ = classify_slice_kind(image)
 
-    print(file_path + " is processing")
+    print(f"[Image] {file_path} is processing")
     im_bw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    (thresh, im_bw) = cv2.threshold(im_bw, BINARY_THRESHOLD_DEFAULT, 255, 1)
+    im_bw = threshold_binary(im_bw, BINARY_THRESHOLD_DEFAULT, invert=True)
     contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) * (pixel_size ** 2) > cnt_threshold]
@@ -511,7 +512,7 @@ def compute_image_lGI(
         annotated = cv2.drawContours(annotated, filtered_conv_contours, -1, tuple(_get_viz().contour_outer_color_bgr), thickness)
         outer_mask_only = np.zeros_like(closed_mask)
         cv2.drawContours(outer_mask_only, filtered_conv_contours, -1, 255, thickness=cv2.FILLED)
-        perimeter_convex_u = mask_perimeter_mm(
+        perimeter_outer_envelope_u = mask_perimeter_mm(
             outer_mask_only, pixel_size, pixel_size,
             method=perimeter_method,
             simplify=simplify_contours_for_perimeter,
@@ -519,11 +520,11 @@ def compute_image_lGI(
         )
     
     else:
-        perimeter_convex_u = None
+        perimeter_outer_envelope_u = None
         
 
-    perimeter_Rate = (perimeter_u / perimeter_convex_u
-                      if perimeter_convex_u else None)
+    perimeter_Rate = (perimeter_u / perimeter_outer_envelope_u
+                      if perimeter_outer_envelope_u else None)
     
 
     if filtered_contours and len(filtered_contours[0]) > 0:
@@ -560,7 +561,7 @@ def compute_image_lGI(
             anchor_ratio=(0.02, 0.05),
         )
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
-    return perimeter_Rate, perimeter_u, perimeter_convex_u, annotated, slice_kind  # BGR ndarray
+    return perimeter_Rate, perimeter_u, perimeter_outer_envelope_u, annotated, slice_kind  # BGR ndarray
 
         
 def compute_image_sulci_depth(
@@ -589,9 +590,9 @@ def compute_image_sulci_depth(
     if image is None:
         raise ValueError(f"Could not read image: {file_path}")
 
-    print(file_path + " is processing")
+    print(f"[Image] {file_path} is processing")
     im_bw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    (thresh, im_bw) = cv2.threshold(im_bw, BINARY_THRESHOLD_DEFAULT, 255, 1)
+    im_bw = threshold_binary(im_bw, BINARY_THRESHOLD_DEFAULT, invert=True)
     contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) * (pixel_size ** 2) > cnt_threshold]
@@ -612,9 +613,9 @@ def compute_image_sulci_depth(
     else:
         slice_length = max(W, H) * pixel_size
 
-    print(f"Classified slice kind: {slice_kind} (confidence {slice_kind_conf:.2f}), using {'percent' if use_percent_filter else 'fixed'} filter for sulci depth.")  
+    print(f"[Image] Classified slice kind: {slice_kind} (confidence {slice_kind_conf:.2f}), using {'percent' if use_percent_filter else 'fixed'} filter for sulci depth.")  
     if use_percent_filter:
-        print(f"The sulcus depth filter thresholds are {(SULCUS_TERTIARY_MIN_FRACTION * slice_length):.2f} {unit} (min) and {(SULCUS_PRIMARY_MAX_FRACTION * slice_length):.2f} {unit} (max).")
+        print(f"[Image] The sulcus depth filter thresholds are {(SULCUS_TERTIARY_MIN_FRACTION * slice_length):.2f} {unit} (min) and {(SULCUS_PRIMARY_MAX_FRACTION * slice_length):.2f} {unit} (max).")
 
     if filtered_contours:
         cv2.drawContours(annotated, filtered_contours, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
@@ -675,7 +676,7 @@ def compute_image_sulci_depth(
 
     depth = flatten_depth_sets(depth_sets)
     if use_percent_filter:
-        print(format_sulcus_class_summary(depth_sets))
+        print(f"[Image] {format_sulcus_class_summary(depth_sets)}")
 
     annotated = _add_scalebar_on_annotated(annotated, pixel_size, unit, add_scalebar)
     return depth, depth_sets, annotated, slice_kind  # BGR ndarray
@@ -690,7 +691,7 @@ def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0, pixel_si
     slice_kind, _ = classify_slice_kind(image)
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+    bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
 
     contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filtered = [c for c in contours if cv2.contourArea(c) * (pixel_size ** 2) > cnt_threshold]
@@ -759,7 +760,7 @@ def compute_image_curved_length(
     slice_kind, _ = classify_slice_kind(image)
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+    bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
 
     contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filtered = [c for c in contours if cv2.contourArea(c) * (pixel_size ** 2) > cnt_threshold]
@@ -908,62 +909,62 @@ def compute_image_curved_length(
     return curved_length, annotated, slice_kind
 
 
-# def put_label_on_bgr(
-#     bgr: np.ndarray,
-#     text: str,
-#     pos: str | tuple[int, int] = "topleft",  # 'topleft'|'topright'|'bottomleft'|'bottomright' or (x, y)
-#     *,
-#     font_scale: float | None = None,     # auto if None
-#     thickness: int | None = None,        # auto if None
-#     margin: int = 6,
-#     box_color: tuple[int, int, int] = (0, 0, 0),      # BGR
-#     box_alpha: float = 0.55,                           # 0..1
-#     text_color: tuple[int, int, int] = (255, 255, 255) # BGR
-# ) -> np.ndarray:
-#     """
-#     Draw `text` with a translucent background box on a BGR image and return the result (BGR).
-#     """
-#     if not (isinstance(bgr, np.ndarray) and bgr.ndim == 3 and bgr.shape[2] == 3 and bgr.dtype == np.uint8):
-#         raise ValueError("Expected uint8 BGR image of shape (H, W, 3).")
+def put_label_on_bgr(
+    bgr: np.ndarray,
+    text: str,
+    pos: str | tuple[int, int] = "topleft",  # 'topleft'|'topright'|'bottomleft'|'bottomright' or (x, y)
+    *,
+    font_scale: float | None = None,     # auto if None
+    thickness: int | None = None,        # auto if None
+    margin: int = 6,
+    box_color: tuple[int, int, int] = (0, 0, 0),      # BGR
+    box_alpha: float = 0.55,                           # 0..1
+    text_color: tuple[int, int, int] = (255, 255, 255) # BGR
+) -> np.ndarray:
+    """
+    Draw `text` with a translucent background box on a BGR image and return the result (BGR).
+    """
+    if not (isinstance(bgr, np.ndarray) and bgr.ndim == 3 and bgr.shape[2] == 3 and bgr.dtype == np.uint8):
+        raise ValueError("Expected uint8 BGR image of shape (H, W, 3).")
 
-#     out = bgr.copy()
-#     H, W = out.shape[:2]
-#     if not text:
-#         return None
+    out = bgr.copy()
+    H, W = out.shape[:2]
+    if not text:
+        return out
 
-#     # Auto size to image height (looks good across sizes)
-#     if font_scale is None:
-#         font_scale = max(0.45, H / 800.0 * 0.9)
-#     if thickness is None:
-#         thickness = max(1, int(round(H / 400.0)))
+    # Auto size to image height (looks good across sizes)
+    if font_scale is None:
+        font_scale = max(0.45, H / 800.0 * 0.9)
+    if thickness is None:
+        thickness = max(1, int(round(H / 400.0)))
 
-#     (tw, th), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-#     bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
+    (tw, th), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+    bw, bh = tw + 2*margin, th + baseline + 2*margin  # box size
 
-#     # Anchor selection
-#     if isinstance(pos, tuple):
-#         x, y = int(pos[0]), int(pos[1])
-#     else:
-#         pos = str(pos).lower()
-#         if pos == "bottomleft":
-#             x, y = margin, H - bh - margin
-#         elif pos == "bottomright":
-#             x, y = W - bw - margin, H - bh - margin
-#         elif pos == "topright":
-#             x, y = W - bw - margin, margin
-#         else:  # "topleft"
-#             x, y = margin, margin
+    # Anchor selection
+    if isinstance(pos, tuple):
+        x, y = int(pos[0]), int(pos[1])
+    else:
+        pos = str(pos).lower()
+        if pos == "bottomleft":
+            x, y = margin, H - bh - margin
+        elif pos == "bottomright":
+            x, y = W - bw - margin, H - bh - margin
+        elif pos == "topright":
+            x, y = W - bw - margin, margin
+        else:  # "topleft"
+            x, y = margin, margin
 
-#     # Clamp box fully inside image
-#     x = max(0, min(x, W - bw))
-#     y = max(0, min(y, H - bh))
+    # Clamp box fully inside image
+    x = max(0, min(x, W - bw))
+    y = max(0, min(y, H - bh))
 
-#     # Translucent background box
-#     overlay = out.copy()
-#     cv2.rectangle(overlay, (x, y), (x + bw, y + bh), box_color, -1)
-#     cv2.addWeighted(overlay, float(box_alpha), out, 1.0 - float(box_alpha), 0, out)
+    # Translucent background box
+    overlay = out.copy()
+    cv2.rectangle(overlay, (x, y), (x + bw, y + bh), box_color, -1)
+    cv2.addWeighted(overlay, float(box_alpha), out, 1.0 - float(box_alpha), 0, out)
 
-#     # Text baseline inside the box
-#     tx, ty = x + margin, y + margin + th
-#     cv2.putText(out, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
-#     return out
+    # Text baseline inside the box
+    tx, ty = x + margin, y + margin + th
+    cv2.putText(out, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
+    return out

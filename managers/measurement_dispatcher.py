@@ -120,7 +120,7 @@ class MeasurementDispatcher:
             # Call measurement function
             depth_sets = None
             if mode == "allmarks":
-                area, perimeter, perimeter_internal, perimeter_convex, lGI, compactness, depth, depth_sets, annotated_bgr, slice_kind = compute_image_allmarks(
+                area, perimeter, perimeter_internal, perimeter_outer_envelope, lGI, compactness, depth, depth_sets, annotated_bgr, slice_kind = compute_image_allmarks(
                     img_path, pixel_size=pixel_size, kernel_size_mm=self.mw.settings.kernel_size_mm,
                     cnt_threshold=self.mw.cnt_threshold, unit=u, add_scalebar=False,
                     draw_hallmarks=self.mw.draw_hallmarks_on_image, contour_mode=self.mw.contour_mode)
@@ -133,7 +133,7 @@ class MeasurementDispatcher:
                     img_path, pixel_size=pixel_size, cnt_threshold=self.mw.cnt_threshold, unit=u, add_scalebar=False,
                     draw_hallmarks=self.mw.draw_hallmarks_on_image, contour_mode=self.mw.contour_mode)
             elif mode == "lGI":
-                lGI, perimeter, perimeter_convex, annotated_bgr, slice_kind = compute_image_lGI(
+                lGI, perimeter, perimeter_outer_envelope, annotated_bgr, slice_kind = compute_image_lGI(
                     img_path, pixel_size=pixel_size, kernel_size_mm=self.mw.settings.kernel_size_mm,
                     cnt_threshold=self.mw.cnt_threshold, unit=u, add_scalebar=False,
                     draw_hallmarks=self.mw.draw_hallmarks_on_image)
@@ -173,38 +173,38 @@ class MeasurementDispatcher:
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
                     kernel_size_mm=self.mw.settings.kernel_size_mm, kernel_size_px=self.mw.settings.kernel_size_px(pixel_size), area=area, perimeter=perimeter,
                     perimeter_internal=perimeter_internal, contour_mode=self.mw.contour_mode,
-                    perimeter_convex=perimeter_convex, lgi=lGI, compactness=compactness,
+                    perimeter_outer_envelope=perimeter_outer_envelope, lgi=lGI, compactness=compactness,
                     sulci_depth=depth, sulci_depth_sets=depth_sets, slice_kind=slice_kind)
-                print(f"[Planar VTK allmarks] area={area:.2f} {u}^2, perimeter={perimeter:.2f} {u}, GI={_fmt_optional(lGI)}")
-                print(f"[Planar VTK allmarks] Maximum Sulci Depth = {MetricsStore.depth_summary(depth, u)}")
+                print(f"[Planar VTK | All hallmarks] area={area:.2f} {u}^2, perimeter={perimeter:.2f} {u}, GI={_fmt_optional(lGI)}")
+                print(f"[Planar VTK | All hallmarks] Maximum Sulci Depth = {MetricsStore.depth_summary(depth, u)}")
 
             elif mode == "perimeter":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
                     perimeter=perimeter, perimeter_internal=perimeter_internal,
                     contour_mode=self.mw.contour_mode, slice_kind=slice_kind)
-                print(f"[Planar VTK perimeter] perimeter={perimeter:.2f} {u}"
+                print(f"[Planar VTK | Perimeter] perimeter={perimeter:.2f} {u}"
                       + (f", interior={perimeter_internal:.2f} {u}" if perimeter_internal is not None else ""))
             elif mode == "area":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
                     area=area, contour_mode=self.mw.contour_mode, slice_kind=slice_kind)
-                print(f"[Planar VTK area] area={area:.2f} {u}^2")
+                print(f"[Planar VTK | Area] area={area:.2f} {u}^2")
             elif mode == "lGI":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
                     kernel_size_mm=self.mw.settings.kernel_size_mm, kernel_size_px=self.mw.settings.kernel_size_px(pixel_size), lgi=lGI, slice_kind=slice_kind)
-                print(f"[Planar VTK lGI] GI={_fmt_optional(lGI)}")
+                print(f"[Planar VTK | LGI] GI={_fmt_optional(lGI)}")
             elif mode == "compactness":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
                     kernel_size_mm=self.mw.settings.kernel_size_mm, kernel_size_px=self.mw.settings.kernel_size_px(pixel_size), compactness=compactness, slice_kind=slice_kind)
-                print(f"[Planar VTK compactness] Compactness={_fmt_optional(compactness)}")
+                print(f"[Planar VTK | Compactness] Compactness={_fmt_optional(compactness)}")
             elif mode == "sulci_depth":
                 self.mw.metrics_store.record_metric_for(img_path, unit=u, dimensions=self.mw.physical_dim,
                     sulci_depth=depth, sulci_depth_sets=depth_sets, slice_kind=slice_kind)
                 if isinstance(depth, (list, tuple)) and len(depth) > 0:
                     summary = ", ".join(f"{float(v):.2f}" for v in depth[:3])
-                    print(f"[Planar VTK sulci depth] Maximum depths = {MetricsStore.depth_summary(depth, u)}")
+                    print(f"[Planar VTK | Sulci Depth] Maximum depths = {MetricsStore.depth_summary(depth, u)}")
 
             dt = time.time() - t0
-            print(f"[Planar VTK {mode}] Done in {dt:.2f}s.")
+            print(f"[Planar VTK | {mode}] Done in {dt:.2f}s.")
 
         except Exception as ex:
             logger.error("Planar VTK {mode} failed: %s", ex)
@@ -214,7 +214,7 @@ class MeasurementDispatcher:
     def on_measure_allmarks(self):
         """Process → Measures → All hallmarks: compute and show annotated result WITHOUT saving."""
         if not self.mw.current_path or not os.path.isfile(self.mw.current_path):
-            print("[All hallmarks] No image file is loaded."); return
+            print("[Image All hallmarks] No image file is loaded."); return
         if self.mw.current_kind == "image":
             try:
                 result = self.mw.settings.ensure_calibrated()
@@ -222,15 +222,14 @@ class MeasurementDispatcher:
                     return
                 u, px_size = result
 
-                print(f"[All hallmarks] Measuring: {self.mw.current_path}")
-                print(f"[All hallmarks] Measuring with pixel size = {px_size} {u}/pixel")
-                print(f"[All hallmarks] Perimeter method = {self.mw.settings.perimeter_method}")
+                print(f"[Image | All hallmarks] Measuring: {self.mw.current_path}")
+                print(f"[Image | All hallmarks] Measuring with pixel size = {px_size} {u}/pixel")
 
                 image_path = self.mw.current_path
                 if self.mw.last_annotated_path is not None:
                     image_path = self.mw.last_annotated_path
                     
-                area, perimeter, perimeter_internal, perimeter_convex, lGI, compactness, depth, depth_sets, annotated_bgr, slice_kind = compute_image_allmarks(
+                area, perimeter, perimeter_internal, perimeter_outer_envelope, lGI, compactness, depth, depth_sets, annotated_bgr, slice_kind = compute_image_allmarks(
                     image_path,
                     pixel_size=px_size,
                     kernel_size_mm=self.mw.settings.kernel_size_mm,
@@ -244,13 +243,13 @@ class MeasurementDispatcher:
                     contour_mode=self.mw.contour_mode,
                 )
                 
-                print(f"[All hallmarks] Results:")
-                print(f"Annotated area = {area:.2f} {u}^2.")
-                print(f"Annotated Perimeter = {perimeter:.2f} {u}.")
-                print(f"Convex Perimeter = {perimeter_convex:.2f} {u}.")
-                print(f"LGI (Convex Perimeter/ Perimeter) = {_fmt_optional(lGI)} .")
-                print(f"Compactness = {_fmt_optional(compactness)} .")
-                print(f"Maximum Sulci Depth = {MetricsStore.depth_summary(depth, u)}")
+                print(f"[Image | All hallmarks] Results:")
+                print(f"\tAnnotated area = {area:.2f} {u}^2.")
+                print(f"\tAnnotated Perimeter = {perimeter:.2f} {u}.")
+                print(f"\tClosed-envelope perimeter = {perimeter_outer_envelope:.2f} {u}.")
+                print(f"\tLGI (Closed-envelope perimeter / Perimeter) = {_fmt_optional(lGI)} .")
+                print(f"\tCompactness = {_fmt_optional(compactness)} .")
+                print(f"\tMaximum Sulci Depth = {MetricsStore.depth_summary(depth, u)}")
                 
                 # Convert BGR ndarray → QPixmap and show (no disk write)
                 label_text = self.mw.get_label_for_cropped_path(image_path)
@@ -279,7 +278,7 @@ class MeasurementDispatcher:
                     perimeter=perimeter,
                     perimeter_internal=perimeter_internal,
                     contour_mode=self.mw.contour_mode,
-                    perimeter_convex = perimeter_convex,
+                    perimeter_outer_envelope = perimeter_outer_envelope,
                     lgi=lGI,
                     compactness=compactness,
                     sulci_depth = depth,
@@ -287,13 +286,13 @@ class MeasurementDispatcher:
                     slice_kind = slice_kind)
                     
             except Exception as ex:
-                logger.error("All hallmarks failed: %s", ex)
-                QMessageBox.critical(self.mw, "All hallmarks Failed", f"{type(ex).__name__}: {ex}")
+                logger.error("Image All hallmarks failed: %s", ex)
+                QMessageBox.critical(self.mw, "[Image | All hallmarks] Failed", f"{type(ex).__name__}: {ex}")
         elif self.mw.current_kind == "nifti":
             t0 = time.time()
             try:
                 nif_path = self.mw.current_path
-                print(f"[NIfTI] Computing area/perimeter from: {nif_path}")
+                print(f"[NIfTI | All hallmarks] Computing hallmarks from: {nif_path}")
 
                 uid = uuid.uuid4().hex[:8]
                 out_dir = os.path.join(self.mw.temp_dir, f"nifti_allmarks_{uid}")
@@ -327,20 +326,20 @@ class MeasurementDispatcher:
                 mid = len(saved_pngs) // 2
                 self.mw.view.on_slice_slider_changed(mid)
                 
-                print(f"[NIfTI hallmarks] Results:")
-                print(f"The Brain Volume Result = {volume:.2f} cm^3.")
-                print(f"The Brain Outer Surface Area Result = {area:.2f} cm^2.")
-                print(f"The Brain GI (Convex surface area/ surfacearea) = {gi:.2f} .")
-                print(f"Maximum Sulci Depth = {MetricsStore.depth_summary(depth, 'cm')}")
+                print(f"[NIfTI | All hallmarks] Results:")
+                print(f"\tVolume Result = {volume:.2f} cm^3.")
+                print(f"\tOuter Surface Area Result = {area:.2f} cm^2.")
+                print(f"\tGI (Closed-envelope surface area/ surfacearea) = {gi:.2f} .")
+                print(f"\tMaximum Sulci Depth = {MetricsStore.depth_summary(depth, 'cm')}")
 
                     
                 dt = time.time() - t0
-                print(f"[NIfTI hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[NIfTI | All hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
-                logger.error("NIfTI hallmarks failed: %s", ex)
-                QMessageBox.critical(self.mw, "NIfTI All hallmarks Failed", f"{type(ex).__name__}: {ex}")
+                logger.error("NIfTI All hallmarks failed: %s", ex)
+                QMessageBox.critical(self.mw, "[NIfTI | All hallmarks] Failed", f"{type(ex).__name__}: {ex}")
             return
             
         elif self.mw.current_kind == "stl":
@@ -384,12 +383,12 @@ class MeasurementDispatcher:
                 self.mw.view.two_mode_view(out_dir, saved_pngs, valid_slices)
 
                 
-                print(f"[STL hallmarks] Results:")
-                print(f"STL mesh Volume Result = {volume:.2f} cm^3.")
-                print(f"STL mesh Outer Surface Area Result = {area:.2f} cm^2.")
-                print(f"STL mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
-                print(f"STL mesh Compactness = {compactness:.2f} .")
-                print(f"The Maximum Grooves Depth = {MetricsStore.depth_summary(depth, 'cm')}")
+                print(f"[STL | All hallmarks] Results:")
+                print(f"\tVolume Result = {volume:.2f} cm^3.")
+                print(f"\tOuter Surface Area Result = {area:.2f} cm^2.")
+                print(f"\tGI (Closed-envelope surface area/ surfacearea) = {gi:.2f} .")
+                print(f"\tCompactness = {compactness:.2f} .")
+                print(f"\tThe Maximum Grooves Depth = {MetricsStore.depth_summary(depth, 'cm')}")
 
                 if compactness > 1.0:
                     QMessageBox.warning(self.mw, "Compactness Warning",
@@ -398,12 +397,12 @@ class MeasurementDispatcher:
                         "physical dimensions or unit settings.")
 
                 dt = time.time() - t0
-                print(f"[STL hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[STL | All hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
             
             except Exception as ex:
-                logger.error("STL hallmarks failed: %s", ex)
-                QMessageBox.critical(self.mw, "STL hallmarks Failed", f"{type(ex).__name__}: {ex}")
+                logger.error("STL All hallmarks failed: %s", ex)
+                QMessageBox.critical(self.mw, "[STL | All hallmarks] Failed", f"{type(ex).__name__}: {ex}")
                 return
         
         elif self.mw.is_vtk:
@@ -451,12 +450,12 @@ class MeasurementDispatcher:
                 
                 self.mw.view.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
-                print(f"[VTK hallmarks] Results:")
-                print(f"VTK mesh Volume Result = {volume:.2f} {u}^3.")
-                print(f"VTK mesh Outer Surface Area Result = {area:.2f} {u}^2.")
-                print(f"VTK mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
-                print(f"VTK mesh Compactness = {compactness:.2f} .")
-                print(f"VTK mesh Maximum Sulci Depth = {MetricsStore.depth_summary(depth, u)}")
+                print(f"[VTK | All hallmarks] Results:")
+                print(f"\tVolume Result = {volume:.2f} {u}^3.")
+                print(f"\tEnclosing Surface Area Result = {area:.2f} {u}^2.")
+                print(f"\tGI (Closed-envelope surface area/ surfacearea) = {gi:.2f} .")
+                print(f"\tCompactness = {compactness:.2f} .")
+                print(f"\tMaximum Sulci Depth = {MetricsStore.depth_summary(depth, u)}")
 
                 if compactness > 1.0:
                     QMessageBox.warning(self.mw, "Compactness Warning",
@@ -465,16 +464,16 @@ class MeasurementDispatcher:
                         "physical dimensions or unit settings.")
 
                 dt = time.time() - t0
-                print(f"[VTK hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[VTK | All hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
                       
             except Exception as ex:
-                logger.error("VTK hallmarks failed: %s", ex)
-                QMessageBox.critical(self.mw, "VTK hallmarks Failed", f"{type(ex).__name__}: {ex}")
+                logger.error("VTK All hallmarks failed: %s", ex)
+                QMessageBox.critical(self.mw, "[VTK | All hallmarks] Failed", f"{type(ex).__name__}: {ex}")
                 return
             
         else:
-            print("[All hallmarks] Unsupported current kind.")
+            print("[VTK | All hallmarks] Unsupported current kind.")
 
 
     def on_measure_volumes(self):
@@ -488,7 +487,7 @@ class MeasurementDispatcher:
             t0 = time.time()
             try:
                 nif_path = self.mw.current_path
-                print(f"[NIfTI] Computing Volume from: {nif_path}")
+                print(f"[NIfTI | Volume] Computing Volume from: {nif_path}")
 
 
                 uid = uuid.uuid4().hex[:8]
@@ -512,14 +511,14 @@ class MeasurementDispatcher:
                 mid = len(saved_pngs) // 2
                 self.mw.view.on_slice_slider_changed(mid)
                 
-                print(f"[NIfTI Volume] The Brain Volume Result = {volume:.2f} cm^3. ")
+                print(f"[NIfTI | Volume] The Brain Volume Result = {volume:.2f} cm^3. ")
                 dt = time.time() - t0
-                print(f"[NIfTI Volume] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[NIfTI | Volume] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
                 logger.error("NIfTI volume failed: %s", ex)
-                QMessageBox.critical(self.mw, "NIfTI Volume Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[NIfTI | Volume] Failed", f"{type(ex).__name__}: {ex}")
             return
         elif self.mw.current_kind == "stl":
             if not self._ensure_stl_slice_direction():
@@ -536,7 +535,7 @@ class MeasurementDispatcher:
                 cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
             
                 if source_label == "not_brain":
-                    QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")
+                    QMessageBox.warning(self.mw, "[STL | Volume] Mesh ignored", "The computation has been canceled")
                     return
                 elif volume is None:
                     return
@@ -553,16 +552,16 @@ class MeasurementDispatcher:
                 self.mw.view.two_mode_view(out_dir, saved_pngs, valid_slices)
 
                 
-                print(f"STL mesh Volume Result = {volume:.2f} cm^3.")
+                print(f"[STL | Volume] STL mesh Volume Result = {volume:.2f} cm^3.")
 
 
                 dt = time.time() - t0
-                print(f"[STL Volume] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[STL | Volume] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
                 logger.error("STL Volume failed: %s", ex)
-                QMessageBox.critical(self.mw, "STL Volume Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[STL | Volume] Failed", f"{type(ex).__name__}: {ex}")
             return
             
         elif self.mw.is_vtk:
@@ -602,15 +601,15 @@ class MeasurementDispatcher:
                     
                 self.mw.view.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
-                print(f"VTK mesh Volume Result = {volume:.2f} {u}^3.")
+                print(f"[VTK | Volume] VTK mesh Volume Result = {volume:.2f} {u}^3.")
 
                 dt = time.time() - t0
-                print(f"[VTK hallmarks] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[VTK | Volume] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
                       
             except Exception as ex:
                 logger.error("VTK Volume failed: %s", ex)
-                QMessageBox.critical(self.mw, "VTK hallmarks Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[VTK | Volume] Failed", f"{type(ex).__name__}: {ex}")
                 return
                 
         else:
@@ -628,9 +627,8 @@ class MeasurementDispatcher:
                     return
                 u, px_size = result
 
-                print(f"[Perimeter] Measuring: {self.mw.current_path}")
-                print(f"[Perimeter] Measuring with pixel size = {px_size} {u}/pixel")
-                print(f"[Perimeter] Method = {self.mw.settings.perimeter_method}")
+                print(f"[Image | Perimeter] Measuring: {self.mw.current_path}")
+                print(f"[Image | Perimeter] Measuring with pixel size = {px_size} {u}/pixel")
 
                 image_path = self.mw.current_path
                 if self.mw.last_annotated_path is not None:
@@ -648,8 +646,9 @@ class MeasurementDispatcher:
                     contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
                     contour_mode=self.mw.contour_mode,
                 )
-                print(f"Annotated perimeter = {perimeter:.2f} {u}."
-                      + (f" Interior = {perimeter_internal:.2f} {u}." if perimeter_internal is not None else ""))
+                print(f"[Image | Perimeter] Results:")
+                print(f"\tAnnotated Perimeter = {perimeter:.2f} {u}."
+                      + (f" \tInterior Perimeter = {perimeter_internal:.2f} {u}." if perimeter_internal is not None else ""))
                 
                 label_text = self.mw.get_label_for_cropped_path(image_path)
                 if label_text:
@@ -673,8 +672,8 @@ class MeasurementDispatcher:
                     slice_kind=slice_kind)
 
             except Exception as ex:
-                logger.error("Perimeter failed: %s", ex)
-                QMessageBox.critical(self.mw, "Perimeter Failed", f"{type(ex).__name__}: {ex}")
+                logger.error("Image Perimeter failed: %s", ex)
+                QMessageBox.critical(self.mw, "[Image | Perimeter] Failed", f"{type(ex).__name__}: {ex}")
             
         elif self.mw.is_vtk:
             if self.mw._flat_axis is not None:
@@ -718,7 +717,9 @@ class MeasurementDispatcher:
                         source_label, dims, comp, saved_pngs, valid_slices = compute_compactness_stl(
                             self, file_path=self.mw.current_path, out_dir=out_dir,
                             min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness,
-                            Slice_direction=self.mw.slice_direction)
+                            Slice_direction=self.mw.slice_direction,
+                            cavity_correction_enabled=self.mw.settings.cavity_correction_enabled,
+                            cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
                         if source_label == "not_brain":
                             return
 
@@ -728,7 +729,9 @@ class MeasurementDispatcher:
                         comp, saved_pngs, valid_slices = compute_compactness_vtk(self, file_path=self.mw.current_path,
                         out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
                         Slice_direction=self.mw.slice_direction, Physical_dim=self.mw.physical_dim,
-                        unit=self.mw.units_length, slice_thickness=self.mw.slice_thickness)
+                        unit=self.mw.units_length, slice_thickness=self.mw.slice_thickness,
+                        cavity_correction_enabled=self.mw.settings.cavity_correction_enabled,
+                        cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
                         contour_mode_used = None  # VTK uses the cavity correction, not a manual mode
 
                     if comp is None:
@@ -743,18 +746,18 @@ class MeasurementDispatcher:
                     compactness=comp)
 
                 base_name = os.path.basename(self.mw.current_path)
-                print(f"[Compactness] for {base_name}: Compactness(3D)={comp:.4f}")
+                print(f"[3D | Compactness] for {base_name}: Compactness(3D)={comp:.4f}")
                 if comp > 1.0:
                     QMessageBox.warning(self.mw, "Compactness Warning",
                         f"Compactness = {comp:.4f} exceeds 1.0.\n"
                         "The expected range is [0, 1]. This may indicate incorrect "
                         "physical dimensions or unit settings.")
                 dt = time.time() - t0
-                print(f"[Compactness] Done in {dt:.2f}s.")
+                print(f"[3D | Compactness] Done in {dt:.2f}s.")
 
             except Exception as ex:
                 logger.error("Compactness failed: %s", ex)
-                QMessageBox.critical(self.mw, "Compactness Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[3D | Compactness] Failed", f"{type(ex).__name__}: {ex}")
             return
 
         # ── 2D image ───────────────────────────────────────────────────
@@ -786,18 +789,18 @@ class MeasurementDispatcher:
                     self.mw.view.show_widget(self.mw.image_label)
                     self.mw._active_view = "image"
 
-                base_name = os.path.basename(image_path)
-                print(f"[Compactness] for {base_name}: Compactness={compactness_2D_value:.4f}")
+                print(f"[Image | Compactness] Results:")
+                print(f"\tCompactness = {_fmt_optional(compactness_2D_value)} .")
                 if compactness_2D_value > 1.0:
-                    QMessageBox.warning(self.mw, "Compactness Warning",
+                    QMessageBox.warning(self.mw, "Image | Compactness Warning",
                         f"Compactness = {compactness_2D_value:.4f} exceeds 1.0.\n"
                         "The expected range is [0, 1]. This may indicate an issue "
                         "with contour detection or image quality.")
                 self.mw._set_current("image", self.mw.current_path)
 
             except Exception as ex:
-                logger.error("Compactness failed: %s", ex)
-                QMessageBox.critical(self.mw, "Compactness Failed", f"{type(ex).__name__}: {ex}")
+                logger.error("Image Compactness failed: %s", ex)
+                QMessageBox.critical(self.mw, "[Image | Compactness] Failed", f"{type(ex).__name__}: {ex}")
         else:
             QMessageBox.information(self.mw, "Compactness", "Compactness measurement is currently only supported for 2D images and 3D meshes. Please open an image or 3D mesh file.")      
             print("[Compactness] Unsupported current kind. Open an image or 3D mesh file.")
@@ -815,8 +818,8 @@ class MeasurementDispatcher:
                     return
                 u, px_size = result
 
-                print(f"[Curve Length] Measuring: {self.mw.current_path}")
-                print(f"[Curve Length] Measuring with pixel size = {px_size} {u}/pixel")
+                print(f"[Image | Curve Length] Measuring: {self.mw.current_path}")
+                print(f"[Image | Curve Length] Measuring with pixel size = {px_size} {u}/pixel")
 
                 image_path = self.mw.current_path
                 if self.mw.last_annotated_path is not None:
@@ -830,7 +833,7 @@ class MeasurementDispatcher:
                     add_scalebar=not bool(self.mw.image_scale_from_scalebar.get(self.mw.current_path, False)),
                     draw_hallmarks=self.mw.draw_hallmarks_on_image,
                 )
-                print(f"Curved length = {curved_length:.2f} {u}.")
+                print(f"[Image | Curve Length] Curved length = {curved_length:.2f} {u}.")
 
                 label_text = self.mw.get_label_for_cropped_path(image_path)
                 if label_text:
@@ -853,19 +856,19 @@ class MeasurementDispatcher:
 
             except Exception as ex:
                 logger.error("Curve Length failed: %s", ex)
-                QMessageBox.critical(self.mw, "Curve Length Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[Image | Curve Length] Failed", f"{type(ex).__name__}: {ex}")
 
         else:
-            print("[Curve Length] Only supported for images.")
+            print("[Image | Curve Length] Only supported for images.")
             return
 
     def on_measure_straight(self):
         """Process → Measures → Straight Line: interactive two-click distance measurement."""
         if not self.mw.current_path or not os.path.isfile(self.mw.current_path):
-            print("[Straight line] No file is loaded."); return
+            print("[Image | Straight Line] No file is loaded."); return
 
         if self.mw.current_kind != "image":
-            print("[Straight line] Only supported for images."); return
+            print("[Image | Straight Line] Only supported for images."); return
 
         # ensure calibration
         result = self.mw.settings.ensure_calibrated()
@@ -873,7 +876,7 @@ class MeasurementDispatcher:
             return
         u, px_size = result
 
-        print(f"[Straight line] Click two points on the image to measure distance.")
+        print(f"[Image | Straight Line] Click two points on the image to measure distance.")
 
         def _finish(pixel_length, p1, p2):
             distance = pixel_length * px_size
@@ -884,7 +887,7 @@ class MeasurementDispatcher:
                 unit=u,
                 pixel_size=px_size,
                 straight_line_distance=distance)
-            print(f"[Straight line] Distance = {distance:.2f} {u}")
+            print(f"[Image | Straight Line] Distance = {distance:.2f} {u}")
 
         self.mw.image_label.start_line_measure(_finish)
     
@@ -892,7 +895,7 @@ class MeasurementDispatcher:
         """Process → Measures → lGI: compute and show annotated result WITHOUT saving."""
         
         if not self.mw.current_path or not os.path.isfile(self.mw.current_path):
-            print("[lGI] No file is loaded."); return
+            print("[Image | LGI] No file is loaded."); return
         if self.mw.current_kind == "image":
             try:
                 result = self.mw.settings.ensure_calibrated()
@@ -900,25 +903,59 @@ class MeasurementDispatcher:
                     return
                 u, px_size = result
 
-                print(f"[lGI] Measuring: {self.mw.current_path}")
-                print(f"[lGI] Perimeter method = {self.mw.settings.perimeter_method}")
+                print(f"[Image | LGI] Measuring: {self.mw.current_path}")
 
                 image_path = self.mw.current_path
                 if self.mw.last_annotated_path is not None:
                     image_path = self.mw.last_annotated_path
-                lGI,perimeter, perimeter_convex, annotated_bgr, slice_kind = compute_image_lGI(
-                    image_path,
-                    pixel_size = px_size,
-                    kernel_size_mm=self.mw.settings.kernel_size_mm,
-                    cnt_threshold=self.mw.cnt_threshold,
-                    unit = u,
-                    add_scalebar=not bool(self.mw.image_scale_from_scalebar.get(self.mw.current_path, False)),
-                    draw_hallmarks=self.mw.draw_hallmarks_on_image,
-                    perimeter_method=self.mw.settings.perimeter_method,
-                    simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
-                    contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
-                )
-                print(f"lGI = {_fmt_optional(lGI)}.")
+                def _measure_lgi(k_mm):
+                    return compute_image_lGI(
+                        image_path,
+                        pixel_size = px_size,
+                        kernel_size_mm=k_mm,
+                        cnt_threshold=self.mw.cnt_threshold,
+                        unit = u,
+                        add_scalebar=not bool(self.mw.image_scale_from_scalebar.get(self.mw.current_path, False)),
+                        draw_hallmarks=self.mw.draw_hallmarks_on_image,
+                        perimeter_method=self.mw.settings.perimeter_method,
+                        simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
+                        contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
+                    )
+
+                # Kernel diameter in px (morphology clamps to a 3 px minimum).
+                def _kernel_px(k_mm):
+                    return max(3, int(round(float(k_mm) / max(float(px_size), 1e-9))))
+
+                kernel_mm = float(self.mw.settings.kernel_size_mm)
+                kernel_px = _kernel_px(kernel_mm)
+                lGI, perimeter, perimeter_outer_envelope, annotated_bgr, slice_kind = _measure_lgi(kernel_mm)
+
+                # An LGI < 1 means the closed-envelope perimeter came out longer
+                # than the exterior perimeter (usually a too-large close kernel
+                # over-smoothing into artefacts). Retry with progressively
+                # smaller kernels until LGI > 1 or the 3 px floor is reached.
+                MAX_LGI_RETRIES = 25
+                retries = 0
+                while lGI is not None and lGI < 1.0 and kernel_px > 3 and retries < MAX_LGI_RETRIES:
+                    kernel_px = max(3, min(kernel_px - 1, int(round(kernel_px * 0.8))))
+                    kernel_mm = kernel_px * float(px_size)
+                    retries += 1
+                    print(f"[Image | LGI] LGI = {lGI:.3f} < 1 → retrying with a smaller kernel size: "
+                          f"{kernel_mm:.3f} {u} ({kernel_px} px).")
+                    lGI, perimeter, perimeter_outer_envelope, annotated_bgr, slice_kind = _measure_lgi(kernel_mm)
+
+                if lGI is not None and lGI < 1.0:
+                    print(f"[Image | LGI] Note: LGI = {_fmt_optional(lGI)} is still < 1 at the minimum "
+                          f"kernel size ({kernel_px} px); cannot reduce further.")
+
+                print(f"[Image | LGI] Results:")
+                print(f"\tPerimeter = {perimeter:.2f} {u}.")
+                print(f"\tClosed-envelope perimeter = {perimeter_outer_envelope:.2f} {u}.")
+                print(f"\tLGI (Closed-envelope perimeter / Perimeter) = {_fmt_optional(lGI)} .")
+                if retries:
+                    print(f"\t(kernel size auto-reduced to {kernel_mm:.3f} {u} = {kernel_px} px "
+                          f"for {retries} retr{'y' if retries == 1 else 'ies'}; kernel size reset to "
+                          f"the last set value {float(self.mw.settings.kernel_size_mm):.3f} {u})")
 
                 label_text = self.mw.get_label_for_cropped_path(image_path)
                 if label_text:
@@ -938,12 +975,12 @@ class MeasurementDispatcher:
                     pixel_size = self.mw.pixel_size,
                     kernel_size_mm=self.mw.settings.kernel_size_mm,
                     kernel_size_px=self.mw.settings.kernel_size_px(px_size),
-                    perimeter=perimeter, perimeter_convex=perimeter_convex, lgi=lGI,
+                    perimeter=perimeter, perimeter_outer_envelope=perimeter_outer_envelope, lgi=lGI,
                     slice_kind=slice_kind)
 
             except Exception as ex:
-                logger.error("lGI failed: %s", ex)
-                QMessageBox.critical(self.mw, "lGI Failed", f"{type(ex).__name__}: {ex}")
+                logger.error("Image LGI failed: %s", ex)
+                QMessageBox.critical(self.mw, "[Image | LGI] Failed", f"{type(ex).__name__}: {ex}")
                 
         elif self.mw.current_kind == "nifti":
             t0 = time.time()
@@ -952,12 +989,12 @@ class MeasurementDispatcher:
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
             
             if reply == QMessageBox.No:
-                QMessageBox.warning(self.mw, "LGI Input Missing",
+                QMessageBox.warning(self.mw, "NIFTI LGI Input Missing",
                     "The LGI can be computed based on the NIfTI file alone, but the accuracy of the results is not guaranteed.")
                 
                 try:
                     nif_path = self.mw.current_path
-                    print(f"[NIfTI] Computing lGI from: {nif_path}")
+                    print(f"[NIfTI | LGI] Computing lGI from: {nif_path}")
 
 
                     uid = uuid.uuid4().hex[:8]
@@ -986,14 +1023,14 @@ class MeasurementDispatcher:
                     mid = len(saved_pngs) // 2
                     self.mw.view.on_slice_slider_changed(mid)
                     
-                    print(f"[NIfTI lGI] The Brain GI (Convex surface area/ surfacearea) = {lGI:.2f}. ")
+                    print(f"[NIfTI | LGI] The Brain GI (Closed-envelope surface area/ surfacearea) = {lGI:.2f}. ")
                     dt = time.time() - t0
-                    print(f"[NIfTI lGI] Done in {dt:.2f}s. Results live in TEMP.\n"
+                    print(f"[NIfTI | LGI] Done in {dt:.2f}s. Results live in TEMP.\n"
                           f"Use File → Save Data As… to copy outputs you want to keep.")
 
                 except Exception as ex:
-                    logger.error("NIfTI lGI failed: %s", ex)
-                    QMessageBox.critical(self.mw, "NIfTI lGI Failed", f"{type(ex).__name__}: {ex}")
+                    logger.error("NIfTI LGI failed: %s", ex)
+                    QMessageBox.critical(self.mw, "[NIfTI | LGI] Failed", f"{type(ex).__name__}: {ex}")
                 return
         
             elif reply == QMessageBox.Yes:
@@ -1003,7 +1040,7 @@ class MeasurementDispatcher:
                 stl_path = self.mw.current_path if (self.mw.current_path and os.path.isfile(self.mw.current_path)) else None
                 
                 try:
-                    print(f"[NIfTI] Computing lGI from: {nif_path} based on rh & lh .pial")
+                    print(f"[NIfTI | LGI] Computing lGI from: {nif_path} based on rh & lh .pial")
 
                     uid = uuid.uuid4().hex[:8]
                     out_dir = os.path.join(self.mw.temp_dir, f"STL_lGI_{uid}")
@@ -1043,14 +1080,14 @@ class MeasurementDispatcher:
                     mid = len(saved_pngs) // 2
                     self.mw.view.on_slice_slider_changed(mid)
                     
-                    print(f"[STL lGI] The Brain GI (Convex surface area/ surfacearea) = {gi:.2f}. ")
+                    print(f"[STL | LGI] The Brain GI (Closed-envelope surface area/ surfacearea) = {gi:.2f}. ")
                     dt = time.time() - t0
-                    print(f"[STL lGI] Done in {dt:.2f}s. Results live in TEMP.\n"
+                    print(f"[STL | LGI] Done in {dt:.2f}s. Results live in TEMP.\n"
                           f"Use File → Save Data As… to copy outputs you want to keep.")
 
                 except Exception as ex:
-                    logger.error("STL lGI failed: %s", ex)
-                    QMessageBox.critical(self.mw, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
+                    logger.error("STL LGI failed: %s", ex)
+                    QMessageBox.critical(self.mw, "[STL | LGI] Failed", f"{type(ex).__name__}: {ex}")
                 return
                 
         elif self.mw.current_kind == "stl":
@@ -1088,15 +1125,15 @@ class MeasurementDispatcher:
                 self.mw.view.two_mode_view(out_dir, saved_pngs, valid_slices)
 
                 
-                print(f"STL mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
+                print(f"[STL | LGI] STL mesh GI (Closed-envelope surface area/ surfacearea) = {gi:.2f} .")
 
                 dt = time.time() - t0
-                print(f"[STL lGI] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[STL | LGI] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
-                logger.error("STL lGI failed: %s", ex)
-                QMessageBox.critical(self.mw, "STL lGI Failed", f"{type(ex).__name__}: {ex}")
+                logger.error("STL LGI failed: %s", ex)
+                QMessageBox.critical(self.mw, "[STL | LGI] Failed", f"{type(ex).__name__}: {ex}")
             return
             
         elif self.mw.is_vtk:
@@ -1137,19 +1174,19 @@ class MeasurementDispatcher:
                 
                 self.mw.view.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
-                print(f"VTK mesh GI (Convex surface area/ surfacearea) = {gi:.2f} .")
+                print(f"[VTK | LGI] VTK mesh GI (Closed-envelope surface area/ surfacearea) = {gi:.2f} .")
 
                 dt = time.time() - t0
-                print(f"[VTK lGI] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[VTK | LGI] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
                       
             except Exception as ex:
-                logger.error("VTK lGI failed: %s", ex)
-                QMessageBox.critical(self.mw, "VTK lGI Failed", f"{type(ex).__name__}: {ex}")
+                logger.error("VTK LGI failed: %s", ex)
+                QMessageBox.critical(self.mw, "[VTK | LGI] Failed", f"{type(ex).__name__}: {ex}")
                 return
             
         else:
-            print("[lGI] Unsupported current kind.")
+            print("[LGI] Unsupported current kind.")
 
             
         
@@ -1166,8 +1203,8 @@ class MeasurementDispatcher:
                     return
                 u, px_size = result
 
-                print(f"[Sulci depth] Measuring: {self.mw.current_path}")
-                print(f"[Sulci depth] Measuring with pixel size = {px_size} {u}/pixel")
+                print(f"[Image Sulci depth] Measuring: {self.mw.current_path}")
+                print(f"[Image Sulci depth] Measuring with pixel size = {px_size} {u}/pixel")
 
                 image_path = self.mw.current_path
                 if self.mw.last_annotated_path is not None:
@@ -1179,7 +1216,8 @@ class MeasurementDispatcher:
                     unit = u,
                     add_scalebar=not bool(self.mw.image_scale_from_scalebar.get(self.mw.current_path, False))
                 )
-                print(f"[Sulci depth] Maximum Sulci Depth = {MetricsStore.depth_summary(depth, u)}")
+                print(f"[Image | Sulci depth] Results:")
+                print(f"\tMaximum Sulci Depth = {MetricsStore.depth_summary(depth, u)}")
                 
                 label_text = self.mw.get_label_for_cropped_path(image_path)
                 if label_text:
@@ -1204,18 +1242,18 @@ class MeasurementDispatcher:
                     slice_kind = slice_kind)
 
             except Exception as ex:
-                logger.error("Sulci depth failed: %s", ex)
-                QMessageBox.critical(self.mw, "Sulci depth Failed", f"{type(ex).__name__}: {ex}")
+                logger.error("Image Sulci depth failed: %s", ex)
+                QMessageBox.critical(self.mw, "[Image | Sulci depth] Failed", f"{type(ex).__name__}: {ex}")
         
         elif self.mw.current_kind == "nifti":
             t0 = time.time()
             try:
                 nif_path = self.mw.current_path
-                print(f"[NIfTI] Computing Volume from: {nif_path}")
+                print(f"[NIfTI] Computing Sulci depth from: {nif_path}")
 
 
                 uid = uuid.uuid4().hex[:8]
-                out_dir = os.path.join(self.mw.temp_dir, f"nifti_volume_{uid}")
+                out_dir = os.path.join(self.mw.temp_dir, f"nifti_Sulci_depth_{uid}")
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.mw.current_output_dir = out_dir
@@ -1234,14 +1272,14 @@ class MeasurementDispatcher:
                 mid = len(saved_pngs) // 2
                 self.mw.view.on_slice_slider_changed(mid)
                 
-                print(f"[NIfTI Sulci depth] The max Brain Sulci depth across slices = {MetricsStore.depth_summary(depth, 'mm')}")
+                print(f"[NIfTI | Sulci depth] The max Brain Sulci depth across slices = {MetricsStore.depth_summary(depth, 'mm')}")
                 dt = time.time() - t0
-                print(f"[NIfTI Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[NIfTI | Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
                 logger.error("NIfTI Sulci depth failed: %s", ex)
-                QMessageBox.critical(self.mw, "NIfTI Sulci depth Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[NIfTI | Sulci depth] Failed", f"{type(ex).__name__}: {ex}")
             return
             
         elif self.mw.current_kind == "stl":
@@ -1268,14 +1306,14 @@ class MeasurementDispatcher:
 
                 self.mw.view.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
-                print(f"[STL Sulci depth] The max Brain Sulci depth across slices = {MetricsStore.depth_summary(depth, 'mm')}")
+                print(f"[STL | Sulci depth] The max Brain Sulci depth across slices = {MetricsStore.depth_summary(depth, 'mm')}")
                 dt = time.time() - t0
-                print(f"[STL Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[STL | Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
                 logger.error("STL Sulci depth failed: %s", ex)
-                QMessageBox.critical(self.mw, "STL Sulci depth Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[STL | Sulci depth] Failed", f"{type(ex).__name__}: {ex}")
             return
             
         elif self.mw.is_vtk:
@@ -1312,16 +1350,16 @@ class MeasurementDispatcher:
                 self.mw.view.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
                 if isinstance(depth, (list, tuple)) and len(depth) > 0:
-                    print("[VTK Sulci depth]")
+                    print("[VTK | Sulci depth]")
                     print(f"The Maximum Grooves Depth = {MetricsStore.depth_summary(depth, u)}")
 
                 dt = time.time() - t0
-                print(f"[VTK Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[VTK | Sulci depth] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
                       
             except Exception as ex:
                 logger.error("VTK Sulci depth failed: %s", ex)
-                QMessageBox.critical(self.mw, "VTK Sulci depth Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[VTK | Sulci depth] Failed", f"{type(ex).__name__}: {ex}")
                 return
         else:
             print("[Sulci depth] Unsupported current kind.")
@@ -1337,15 +1375,15 @@ class MeasurementDispatcher:
         """
         if self.mw.current_kind == "image":
             if not self.mw.current_path or not os.path.isfile(self.mw.current_path):
-                print("[Area] No image file is loaded."); return
+                print("[Image | Area] No image file is loaded."); return
             try:
                 result = self.mw.settings.ensure_calibrated()
                 if result is None:
                     return
                 u, px_size = result
 
-                print(f"[Area] Measuring: {self.mw.current_path}")
-                print(f"[Area] Measuring with pixel size = {px_size} {u}/pixel")
+                print(f"[Image | Area] Measuring: {self.mw.current_path}")
+                print(f"[Image | Area] Measuring with pixel size = {px_size} {u}/pixel")
                 
                 image_path = self.mw.current_path
                 if self.mw.last_annotated_path is not None:
@@ -1365,7 +1403,8 @@ class MeasurementDispatcher:
                 if label_text:
                     annotated_bgr = put_label_on_bgr(annotated_bgr, label_text, pos="topleft")
                     
-                print(f"[Area] Result = {area:.2f} {u}^2.")
+                print(f"[Image | Area] Results:")
+                print(f"\tAnnotated area = {area:.2f} {u}^2.")
                 # Convert BGR ndarray → QPixmap and show (no disk write)
                 pm = ViewManager.np_bgr_to_qpixmap(annotated_bgr)
                 self.mw.image_label.setImage(pm)
@@ -1384,13 +1423,13 @@ class MeasurementDispatcher:
                 slice_kind=slice_kind)
 
             except Exception as ex:
-                print(f"[Area] ERROR : {ex}")
-                QMessageBox.critical(self.mw, "[Area] Failed", f"{type(ex).__name__}: {ex}")
+                print(f"[Image | Area] ERROR : {ex}")
+                QMessageBox.critical(self.mw, "[Image | Area] Failed", f"{type(ex).__name__}: {ex}")
         elif self.mw.current_kind == "nifti":
             t0 = time.time()
             try:
                 nif_path = self.mw.current_path
-                print(f"[NIfTI] Computing area/perimeter from: {nif_path}")
+                print(f"[NIfTI] Computing area from: {nif_path}")
 
 
                 uid = uuid.uuid4().hex[:8]
@@ -1421,14 +1460,14 @@ class MeasurementDispatcher:
                 mid = len(saved_pngs) // 2
                 self.mw.view.on_slice_slider_changed(mid)
                 
-                print(f"[NIfTI Area] The Brain Outer Surface Area Result = {area:.2f} cm^2. ")
+                print(f"[NIfTI | Area] The Brain Outer Surface Area Result = {area:.2f} cm^2. ")
                 dt = time.time() - t0
-                print(f"[NIfTI Area] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[NIfTI | Area] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
                 logger.error("NIfTI Area failed: %s", ex)
-                QMessageBox.critical(self.mw, "[NIfTI Area] Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[NIfTI | Area] Failed", f"{type(ex).__name__}: {ex}")
             return
             
         elif self.mw.current_kind == "stl":
@@ -1464,16 +1503,16 @@ class MeasurementDispatcher:
                 self.mw.view.two_mode_view(out_dir, saved_pngs, valid_slices)
 
                 
-                print(f"STL mesh Area Result = {area:.2f} cm^2.")
+                print(f"[STL | Area] STL mesh Area Result = {area:.2f} cm^2.")
 
 
                 dt = time.time() - t0
-                print(f"[STL Area] Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[STL | Area] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
 
             except Exception as ex:
                 logger.error("STL Area failed: %s", ex)
-                QMessageBox.critical(self.mw, "STL Area Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[STL | Area] Failed", f"{type(ex).__name__}: {ex}")
             return
         
         elif self.mw.is_vtk:
@@ -1512,16 +1551,16 @@ class MeasurementDispatcher:
                 
                 self.mw.view.two_mode_view(out_dir, saved_pngs, valid_slices)
                 
-                print(f"VTK mesh Outer Surface Area Result = {area:.2f} {u}^2.")
+                print(f"[VTK | Area] VTK mesh Outer Surface Area Result = {area:.2f} {u}^2.")
 
 
                 dt = time.time() - t0
-                print(f" Done in {dt:.2f}s. Results live in TEMP.\n"
+                print(f"[VTK | Area] Done in {dt:.2f}s. Results live in TEMP.\n"
                       f"Use File → Save Data As… to copy outputs you want to keep.")
                       
             except Exception as ex:
                 logger.error("VTK Area failed: %s", ex)
-                QMessageBox.critical(self.mw, "VTK area Failed", f"{type(ex).__name__}: {ex}")
+                QMessageBox.critical(self.mw, "[VTK | Area] Failed", f"{type(ex).__name__}: {ex}")
                 return
     
         else:
@@ -1600,7 +1639,8 @@ class MeasurementDispatcher:
                 cnt_threshold=self.mw.cnt_threshold, unit=u,
                 perimeter_method=self.mw.settings.perimeter_method,
                 simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
-                contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon)
+                contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
+                contour_mode=self.mw.contour_mode)
                 
             self.mw.view.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
 
@@ -1753,7 +1793,7 @@ class MeasurementDispatcher:
                             area=r.get("area"),
                             volume=r.get("Volume"),
                             perimeter=r.get("Perimeter"),
-                            perimeter_convex=r.get("Perimeter_convex"),
+                            perimeter_outer_envelope=r.get("Closed-envelopePerimeter"),
                             lgi=r.get("LGI"),
                             File=r.get("File", f"index_{idx}"),
                             SulciCount=r.get("SulciCount"),
@@ -1897,9 +1937,9 @@ class MeasurementDispatcher:
             self.mw._set_current("image", str(First))
 
             print("[Hausdorff] The Hausdorff distance results:")
-            print(f"Between {basename1} and {basename2}: {d12} {u1}")
-            print(f"Between {basename2} and {basename1}: {d21} {u1}")
-            print(f"Maximum distance: {hd} {u1}")
+            print(f"\tBetween {basename1} and {basename2}: {d12} {u1}")
+            print(f"\tBetween {basename2} and {basename1}: {d21} {u1}")
+            print(f"\tMaximum distance: {hd} {u1}")
             
             self.mw.statusBar().showMessage("Use Ctrl+M and Ctrl+Shift+M to switch between images.")
 

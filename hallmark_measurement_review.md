@@ -625,96 +625,28 @@ to the reference.
 | **P2** | Apply `approxPolyDP(epsilon ≈ 0.5)` before perimeter calculation, OR switch to Crofton perimeter | Removes ~few % positive bias in P |
 | **P3** | Persist a method-signature hash in every Excel header | Makes reference comparison reproducible |
 | **P3** | Make `BINARY_THRESHOLD_*` Otsu-adaptive | Removes render-color brittleness |
-| **P3** | Rename `perimeter_convex` → `perimeter_outer_envelope` | Code clarity |
-
-The current pipeline is internally consistent and the formulas
-(area, perimeter, defect depth, isoperimetric quotient,
-sulcus-fraction classification) are mathematically defensible for
-fetal-brain morphometry once their assumptions are made explicit.
-The two areas where the math is provably biased are **surface area**
-(stack-of-slabs under-estimate) and **LGI** (kernel-size dependence
-on resolution). Fixing those — with the P0/P1 items above — would
-make the totals genuinely comparable across cohorts and remove the
-need for the `compactness > 1` warning.
+| **P3** | Rename `perimeter_convex` → `Closed-envelope perimeter` | Code clarity |
 
 
+## Changes include
+- Replace `perimeter_convex_sum = 1` and `mm_per_px = 1.0` fallbacks with `None` / NaN 
+- Define `kernel_size` in millimetres, convert to pixels per call 
+- Force `parallel_projection = True` before each PyVista screenshot 
+- Upgrade volume/ Surface integration to Simpson's rule
+- Include surface cups (up and buttom surfaces) -> Eliminates the compactness >1
+- Include cavity option with threshould on inner areas
+- Make the filttered threshould in mm instade of pixels
+- Apply `approxPolyDP(epsilon ≈ 0.5)` before perimeter calculation, OR switch to Crofton perimeter as an optional setting
+- Make `BINARY_THRESHOLD_*` Otsu-adaptive
+- Rename `perimeter_convex` → `perimeter_outer_envelope`
 
-Phase 1 — Foundations & Correctness Blockers
-1. Make kernel_size a millimetre quantity end-to-end
-
-constants.py — Add DEFAULT_KERNEL_SIZE_MM = 5.0; keep DEFAULT_KERNEL_SIZE as a derived legacy value.
-managers/settings_manager.py — Replace self.kernel_size: int with self.kernel_size_mm: float; add a kernel_size_px(pixel_size_mm) accessor.
-widgets/kernel_size.py — Update dialog to read/write in mm (range 0.5–25 mm, step 0.5).
-compute_image_allmarks, compute_stl_allmarks, compute_vtk_allmarks, compute_nifti_allmarks, process_on_images_batch — Change parameter from kernel_size to kernel_size_mm: float; add _to_kernel_px() helper at the top of each function. For STL/VTK, do the conversion inside the loop after mm_per_px = calc_scale(...).
-managers/measurement_dispatcher.py — All call sites: replace kernel_size=self.mw.kernel_size with kernel_size_mm=self.mw.settings.kernel_size_mm.
-Every Excel exporter — Log both Kernel size (mm) and Kernel size (px); add a Kernel_px per-slice column for STL/VTK.
-Examples/gestational_week_reference.csv — Run the one-shot migration script (scripts/migrate_reference_kernel.py) to add a kernel_size_mm column.
-helpers/gestational_week_profile.py — Update to read the new kernel_size_mm column.
-
-2. Replace silent-fallback magic values with None / NaN
-
-helpers/helpers.py (lines 515–533) — Change return 1.0 (when no red contour found) to return None.
-functions/measurements_image.py (lines 131–132) — Change perimeter_convex_sum = 1 to perimeter_convex_sum = None; add None-guard before computing perimeter_Rate and comp.
-functions/measurements_stl.py (~line 196) — After mm_per_px = calc_scale(...), add a None check and continue (skip the slice) instead of silently proceeding with mm_per_px = 1.0.
-
-3. Use exact mesh volume and area (PyVista) for STL/VTK totals
-
-functions/measurements_stl.py (lines 307–311) — Replace the stack-of-slabs brain_volume/Area with mesh.volume / 1000 and mesh.area / 100.
-functions/measurements_vtk.py (lines 290–294) — Same, but apply the appropriate scale_factor and in_plane_scale to convert from model units to mm before dividing.
-functions/measurements_stl.py (lines 362–365) — Delete the if compactness > 1.0 warning block once the fix is verified.
-
-4. NIfTI surface area via marching cubes
-
-functions/measurements_nifti.py (lines 252–258) — Replace Area = sum_inner · pixel_size_y / 100 with a marching-cubes calculation using skimage.measure.marching_cubes on the full 3-D brain_mask.
-requirements.txt — Add scikit-image if not already present.
+## Changes planned
+- Persist a method-signature hash in every Excel header | Makes reference comparison reproducible
 
 
-Phase 2 — Calibration Bias
-5. Force orthographic projection on every PyVista screenshot
+## Changes ignored
+- Use `mesh.area` / `mesh.volume` in STL & VTK for the totals 
+- NIfTI surface area via marching cubes
+- Propagate anisotropic mm-per-px (Equation in Section 5) to image / STL / VTK depth conversion
+- Replace stack-of-slabs S with frustum integration when a mesh isn't available -> The results genertaed not correct
 
-functions/measurements_stl.py (lines 171–172) — Add p.parallel_projection = True after every p = pv.Plotter(...) instantiation.
-functions/measurements_vtk.py (lines 140–141) — Same.
-
-
-Phase 3 — Refinements
-6. Frustum integration for slice-area sanity check (NIfTI fallback, skip if item 4 is done)
-
-functions/measurements_nifti.py (~line 257) — Replace the stack-of-slabs area estimate with frustum integration using the slant-height formula.
-
-7. Simpson's rule for slice-integrated volume
-
-Wherever sum_area * slice_thickness_eff appears as a secondary volume calculation — replace with a simpson() helper using Simpson's 1/3 rule.
-
-8. Reduce contour-polygon perimeter bias
-
-measurements_image.py, measurements_stl.py, measurements_vtk.py, measurement_batch.py — Option (a): insert cv2.approxPolyDP(c, epsilon=0.5, closed=True) after each findContours → filter block.
-measurements_nifti.py — Option (b): replace the per-slice inner perimeter calculation with skimage.measure.perimeter_crofton(inner_mask_only, directions=4) * pixel_size_x.
-
-
-Phase 4 — Reproducibility & Polish
-9. Method-signature hash in every results Excel
-
-helpers/results_excel_format.py — Add method_signature: str | None = None field to ResultsSheet; render it in row 4 of the sheet header.
-helpers/method_signature.py (new file) — Create a method_signature() function that hashes key algorithm parameters into a short SHA-1 hex string; define FETOMORPH_METHOD_VERSION = "2026.06".
-measurements_*.py, metrics_store.py, gasp_export.py — Plumb the signature into every Excel caller.
-Examples/gestational_week_reference.csv — Add a method_signature column.
-Bump FETOMORPH_METHOD_VERSION whenever any Phase 1–3 algorithm change lands.
-
-10. Otsu-adaptive binary thresholds
-
-functions/measurements_image.py (line 74), functions/measurements_stl.py (line 207), and other files using cv2.threshold — Replace cv2.threshold(im_bw, BINARY_THRESHOLD_DEFAULT, 255, 1) with cv2.threshold(im_bw, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU).
-functions/measurements_vtk.py (line 180) — Replace cv2.threshold(gray, BINARY_THRESHOLD_VTK, 255, 0) with cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU).
-constants.py (lines 10–11) — Delete BINARY_THRESHOLD_VTK = 150 and BINARY_THRESHOLD_DEFAULT = 200.
-
-11. Rename perimeter_convex → perimeter_outer_envelope
-
-functions/measurements_image.py — Rename local variables perimeter_convex and perimeter_convex_sum.
-helpers/gasp_export.py — Update any header keys referencing the old name.
-managers/metrics_store.py — Rename the "Perimeter_convex" key in ensure_metric_row.
-Examples/gestational_week_reference.csv — Rename the column header; keep perimeter_convex as a deprecated alias for one release.
-
-
-Out of Scope (isotropy hint only — not code logic)
-
-managers/file_manager.py — Add a one-line print warning about non-square pixels in load_image / import_image.
-helpers/results_excel_format.py — Add an italic footer note: "Assumes isotropic pixels (px_x == px_y). Non-isotropic input must be resampled before measuring."

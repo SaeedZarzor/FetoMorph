@@ -43,6 +43,7 @@ RESULTS_COLUMNS: tuple[str, ...] = (
     "Section",
     "Area",
     "Perimeter",
+    "Perimeter_interior",
     "LGI",
     "Compactness",
     "PrimarySulciCount",
@@ -97,6 +98,14 @@ class ResultsSheet:
     # dropped from the Parameters block (skipping the block entirely if
     # nothing is left). ``Section`` is always preserved.
     drop_empty_columns: bool = False
+    # Header for the first (row-label) column. Defaults to "Section"; the
+    # cross-measurement dock export sets it to "File name".
+    section_header: str = "Section"
+    # File kind (e.g. "Area", "Volume"). When set, the header row shows a
+    # single "kind" field in place of the File name / Folder pair — used by
+    # the cross-measurement dock export, where each sheet is one kind and the
+    # per-file name / folder live in the table below.
+    kind: str | None = None
 
 
 def subtype_mean(direct_mean: Any, v_values: Iterable[Any]) -> float | None:
@@ -114,6 +123,38 @@ def subtype_mean(direct_mean: Any, v_values: Iterable[Any]) -> float | None:
     if not floats:
         return None
     return sum(floats) / len(floats)
+
+
+def build_measurement_sheet(
+    file_path: str,
+    hallmark: str,
+    rows: list[dict[str, Any]],
+    parameters: dict[str, Any] | None = None,
+    totals: dict[str, Any] | None = None,
+    *,
+    extra_columns: tuple[str, ...] = (),
+    totals_notes: dict[str, Any] | None = None,
+) -> "ResultsSheet":
+    """Build a spec-layout ``ResultsSheet`` for a single measurement tool.
+
+    Gives the standalone Area / Volume / LGI / Sulci / Compactness exports the
+    same Excel style as All-hallmarks. ``hallmark`` (e.g. "Area", "Volume",
+    "All") is written as the first entry of the Totals block ("Hallmark
+    computed"). Empty columns are dropped automatically.
+    """
+    totals_out: dict[str, Any] = {"Hallmark computed": hallmark}
+    totals_out.update(totals or {})
+    return ResultsSheet(
+        sheet_name=os.path.basename(file_path) or "Results",
+        file_name=os.path.basename(file_path) or None,
+        folder=os.path.dirname(file_path) or None,
+        parameters=parameters or {},
+        rows=rows or [],
+        extra_columns=tuple(extra_columns),
+        totals=totals_out,
+        totals_notes=totals_notes or {},
+        drop_empty_columns=True,
+    )
 
 
 def gi_3d_note(gi_3d: Any) -> str:
@@ -175,6 +216,7 @@ def read_results_sheet(
     out: dict[str, Any] = {
         "file_name": None,
         "folder": None,
+        "kind": None,
         "user": None,
         "date": None,
         "parameters": {},
@@ -214,6 +256,13 @@ def read_results_sheet(
             out["folder"] = raw[4] if len(raw) > 4 else None
             out["user"] = raw[6] if len(raw) > 6 else None
             out["date"] = raw[8] if len(raw) > 8 else None
+            continue
+
+        # Dock-export variant: "kind" replaces the File name / Folder pair.
+        if _stringly_equals(raw[1] if len(raw) > 1 else None, "kind"):
+            out["kind"] = raw[2] if len(raw) > 2 else None
+            out["user"] = raw[4] if len(raw) > 4 else None
+            out["date"] = raw[6] if len(raw) > 6 else None
             continue
 
         if section == "parameters":
@@ -264,24 +313,37 @@ SECTION_LINK_KEY = "_section_link"
 
 # One-line explanation rendered in the cell next to each totals value. Matched
 # by substring against the totals key (which carries units), most-specific first
-# so e.g. "GI_3D" wins over "GI".
+# so e.g. "GI 3D" wins over "GI" and "LGI". Keep these in sync with the totals
+# labels produced by the measurement exporters (VTK is the canonical style).
 _TOTAL_NOTES = (
-    ("GI_3D", "3-D gyrification index = exact mesh surface ÷ convex-hull (smooth envelope) surface."),
-    ("Convex_hull_area", "Surface area of the mesh's convex hull (the smooth outer envelope)."),
-    ("Total_to_lateral_surface_ratio", "Exact mesh surface ÷ lateral estimate (diagnostic; ≈1 is ideal)."),
-    ("Area_lateral_surface", "Lateral surface = ∫ inner perimeter dh (Simpson), no end caps."),
-    ("Surface_area_caps", "Top + bottom end-face areas, added to the lateral surface."),
-    ("surface_connected_cavity_area", "Area of surface-connected (open) cavities removed from the volume."),
-    ("n_surface_connected_cavities", "Open cavities corrected: area removed from volume, walls added to surface."),
-    ("n_enclosed_cavities", "Fully-enclosed voids left as solid (not corrected)."),
-    ("cavity_area_threshold", "Minimum cavity area considered by the cavity correction."),
-    ("cavity_correction", "Whether the surface-connected cavity correction was applied."),
+    # --- gyrification (3-D) ---
+    ("GI 3D", "3-D gyrification index = exact mesh surface ÷ convex-hull (smooth envelope) surface."),
+    ("Convex hull area", "Surface area of the mesh's convex hull (the smooth outer envelope)."),
+    # --- surface-area breakdown (lowercase 'area' is never caught by 'Surface Area') ---
+    ("Area lateral surface", "Lateral surface = ∫ exterior perimeter dh (Simpson), excluding end caps."),
+    ("Surface area lateral", "Lateral surface = ∫ exterior perimeter dh (Simpson), excluding end caps."),
+    ("Surface area caps", "Top + bottom end-face (cap) areas, added to the lateral surface."),
     ("Surface Area", "Total 3-D surface area = lateral (∫ perimeter dh) + top & bottom caps."),
+    # --- volume ---
     ("Volume", "Tissue volume = ∫ cross-section area dh (Simpson integration over slices)."),
+    # --- compactness (batch 2-D mean before the generic 3-D note) ---
+    ("Compactness (mean across images)", "Mean 2-D compactness (4π·A ÷ P²) across all processed images."),
     ("Compactness", "3-D compactness / sphericity = 36π·V² ÷ S³ (1 = a perfect sphere)."),
+    # --- cavity correction ---
+    ("Surface connected cavity area", "Area of surface-connected (open) cavities removed from the volume."),
+    ("Cavity area removed", "Area of surface-connected (open) cavities removed from the volume."),
+    ("Cavity wall surface", "Wall area of open cavities, added to the 3-D surface area."),
+    ("Cavity wall perimeter added", "Wall perimeter of open cavities, added to the lateral surface."),
+    ("Number of surface-connected cavities", "Open cavities corrected: area removed from volume, walls added to surface."),
+    ("Number of enclosed cavities", "Fully-enclosed voids left as solid (not corrected)."),
+    # --- sulci ---
     ("Total sulci count", "Number of detected sulci (convexity defects passing the depth filter)."),
+    ("Min sulci depth", "Smallest depth among all detected sulci."),
+    ("Max sulci depth", "Largest depth among all detected sulci."),
     ("Mean sulci depth", "Mean depth across all detected sulci."),
-    ("GI", "Gyrification index = Σ inner (cortical) perimeter ÷ Σ outer (closing) perimeter."),
+    # --- gyrification (2-D perimeter ratio; keep last so 'GI 3D' / 'LGI' win) ---
+    ("LGI (mean across images)", "Mean local gyrification index (exterior ÷ closed-envelope perimeter) across all images."),
+    ("GI", "Gyrification index = Σ exterior (cortical) perimeter ÷ Σ closed-envelope perimeter."),
 )
 
 
@@ -311,13 +373,22 @@ def _render_sheet(wb, ws, sheet: ResultsSheet, used_names: set[str],
     ws.merge_cells(start_row=1, start_column=2,
                    end_row=1, end_column=last_col)
 
-    # Row 3 — File name / Folder / User / Date
-    pairs = (
-        ("File name", file_name),
-        ("Folder", folder),
-        ("User", user),
-        ("Date", date_str),
-    )
+    # Row 3 — metadata pairs. When a kind is set (cross-measurement dock
+    # export) the header reads "kind" and the per-file name / folder are
+    # carried by the table below; otherwise it keeps File name / Folder.
+    if sheet.kind:
+        pairs = (
+            ("kind", sheet.kind),
+            ("User", user),
+            ("Date", date_str),
+        )
+    else:
+        pairs = (
+            ("File name", file_name),
+            ("Folder", folder),
+            ("User", user),
+            ("Date", date_str),
+        )
     col = 2
     for label, value in pairs:
         c = ws.cell(row=3, column=col, value=label)
@@ -371,7 +442,7 @@ def _render_sheet(wb, ws, sheet: ResultsSheet, used_names: set[str],
     # set ``extra_columns``) sit between Section and the metric columns
     # so each measurement's adjustment parameters travel next to its row.
     extras = tuple(sheet.extra_columns or ())
-    column_names = (RESULTS_COLUMNS[:1] + extras + RESULTS_COLUMNS[1:])
+    column_names = ((sheet.section_header,) + extras + RESULTS_COLUMNS[1:])
     if sheet.drop_empty_columns:
         column_names = _filter_populated_columns(column_names, sheet.rows)
     for i, name in enumerate(column_names, start=2):
@@ -390,12 +461,12 @@ def _render_sheet(wb, ws, sheet: ResultsSheet, used_names: set[str],
         link_target = r.get(SECTION_LINK_KEY)
         for i, name in enumerate(column_names, start=2):
             cell = ws.cell(row=row, column=i, value=_to_cell(r.get(name)))
-            if name == "Section" and link_target:
+            if name == sheet.section_header and link_target:
                 _wire_section_link(
                     wb, cell, link_target,
                     main_sheet=ws,
                     main_sheet_name=ws.title,
-                    section_value=r.get("Section"),
+                    section_value=r.get(sheet.section_header),
                     used_names=used_names,
                     embed_images=sheet.embed_section_images,
                     image_max_width=sheet.image_max_width,
@@ -502,8 +573,8 @@ def _filter_populated_columns(column_names: tuple[str, ...],
     if not rows:
         return column_names
     kept: list[str] = []
-    for name in column_names:
-        if name == "Section":
+    for idx, name in enumerate(column_names):
+        if idx == 0:  # row-label column (Section / File name) is always kept
             kept.append(name)
             continue
         if any(_is_populated(r.get(name)) for r in rows):

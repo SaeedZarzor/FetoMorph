@@ -7,8 +7,11 @@ references the same values and they can be tuned in one place.
 # ---------------------------------------------------------------------------
 # Image processing thresholds
 # ---------------------------------------------------------------------------
-BINARY_THRESHOLD_VTK = 150       # cv2.threshold value for VTK screenshots (lighter background)
-BINARY_THRESHOLD_DEFAULT = 200   # cv2.threshold value for STL / image / NIfTI renders
+# Measurement masks are binarised with Otsu's method (cv2.THRESH_OTSU), which
+# picks the cut automatically per image. These BINARY_THRESHOLD_* values are no
+# longer used as the cut (kept only as legacy call-site arguments).
+BINARY_THRESHOLD_VTK = 150       # (legacy) former VTK-screenshot threshold
+BINARY_THRESHOLD_DEFAULT = 200   # (legacy) former STL / image / NIfTI threshold
 
 # ---------------------------------------------------------------------------
 # Red reference-cube colour detection (RGB space)

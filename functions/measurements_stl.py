@@ -21,6 +21,7 @@ from helpers.helpers import (
     contours_exclude,
     fill_section_polydata,
     split_inner_and_internal_contours,
+    threshold_binary,
     calc_scale_with_metadata,
     get_red_rect_offset,
     make_scale_cube,
@@ -200,7 +201,7 @@ def compute_stl_allmarks(
         return 0.0, [], []
 
     slice_thickness_eff = brain_dim[sd["axis_index"]] / N
-    print(f"[STL All Hallmarks] Effective slice thickness (mm): {slice_thickness_eff}")
+    print(f"[STL All Hallmarks] Effective slice thickness: {slice_thickness_eff} mm")
 
     # --- Outputs
     os.makedirs(out_dir, exist_ok=True)
@@ -289,7 +290,7 @@ def compute_stl_allmarks(
         # as internal contours for the cavity correction; the top-level outer
         # contours match the previous RETR_EXTERNAL + contours_exclude result so
         # GI/perimeter are unchanged.
-        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+        bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
         contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -365,7 +366,7 @@ def compute_stl_allmarks(
                                     bgr = cv2.circle(bgr, far, radius_px, marker_color, -1)
 
         depth = flatten_depth_sets(depth_sets)
-        print(f"[STL allmarks] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")
+        print(f"[STL All Hallmarks] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
         if use_percent_filter:
@@ -447,16 +448,14 @@ def compute_stl_allmarks(
     # The exact mesh.volume is kept only for verification.
     brain_volume = volume_simpson(volume_samples) / 1000.0
     _mesh_volume_cm3 = abs(float(mesh.volume)) / 1000.0
-    print(f"[STL All Hallmarks] Volume: Simpson={brain_volume:.3f} cm³ "
-          f"(verify mesh.volume={_mesh_volume_cm3:.3f} cm³)")
-    # Surface area = Simpson lateral (∫ inner perimeter dh) + top & bottom caps.
+    print(f"[STL All Hallmarks] Volume={brain_volume:.3f} cm³")
+    # Surface area = Simpson lateral (∫ exterior perimeter dh) + top & bottom caps.
     # The exact mesh.area (mm²) is kept only for verification.
     total_area_mm2, inner_area_slice_sum_mm2, caps_area_mm2 = total_surface_area_simpson(
         lateral_samples, volume_samples)
     mesh_area_mm2 = float(mesh.area)
     Area = total_area_mm2 / 100.0
-    print(f"[STL All Hallmarks] Surface area: Simpson lateral+caps={Area:.3f} cm² "
-          f"(verify mesh.area={mesh_area_mm2 / 100.0:.3f} cm²)")
+    print(f"[STL All Hallmarks] Surface area: lateral+caps={Area:.3f} cm²")
     if cavity_correction_enabled:
         print(f"[STL All Hallmarks] Cavity correction: "
               f"{cavity_corr.n_surface_connected} surface-connected, "
@@ -502,10 +501,10 @@ def compute_stl_allmarks(
             d = dsets if isinstance(dsets, dict) else {}
             results_rows.append({
                 "Section": idx,
-                "Kernel_px": int(kernel_px),
-                "cube_len_mm": cal_meta.get("cube_len_mm"),
-                "detected_cube_size_px": cal_meta.get("detected_cube_size_px"),
-                "computed_mm_per_px": cal_meta.get("computed_mm_per_px"),
+                "Kernel px": int(kernel_px),
+                "Cube length (mm)": cal_meta.get("cube_len_mm"),
+                "Detected cube size (px)": cal_meta.get("detected_cube_size_px"),
+                "Computed mm per px": cal_meta.get("computed_mm_per_px"),
                 "Area": area_mm,
                 "Perimeter": inner_perim_mm,
                 "LGI": lgi,
@@ -535,31 +534,32 @@ def compute_stl_allmarks(
             "Slice thickness": float(slice_thickness),
             "Filtered threshold (mm²)": float(min_contour_area),
             "Slice direction": Slice_direction,
-            "PERIMETER METHOD": perimeter_method,
-            "contour_simplification_enabled": bool(simplify_contours_for_perimeter),
-            "contour_simplification_epsilon": float(contour_simplify_epsilon),
-            "cavity_correction": "on" if cavity_correction_enabled else "off",
+            "Length unit": "cm",
+            "Perimeter method": perimeter_method,
+            "Contour simplification enabled": bool(simplify_contours_for_perimeter),
+            "Contour simplification epsilon": float(contour_simplify_epsilon),
+            "Cavity correction": "on" if cavity_correction_enabled else "off",
         }
         if cavity_correction_enabled:
-            parameters["cavity_area_threshold_mm2"] = float(cavity_area_threshold_mm2)
+            parameters["Cavity area threshold (mm²)"] = float(cavity_area_threshold_mm2)
         totals = {
-            "Volume (cm^3)": round(float(brain_volume), 2),
-            "Surface Area (cm^2)": round(float(Area), 2),
+            "Volume (cm^3)": round(float(brain_volume), 4),
+            "Surface Area (cm^2)": round(float(Area), 4),
+            "Area lateral surface (cm^2)": round(inner_area_slice_sum_mm2 / 100, 4),
+            "Surface area caps (cm^2)": round(caps_area_mm2 / 100, 4),
             "GI": round(float(GI_total), 4),
-            "GI_3D (convex hull)": (round(float(gi_3d), 4) if gi_3d is not None else None),
-            "Convex_hull_area_cm2": (round(hull_area_mm2 / 100, 4) if hull_area_mm2 else None),
+            "GI 3D (convex hull)": (round(float(gi_3d), 4) if gi_3d is not None else None),
+            "Convex hull area (cm^2)": (round(hull_area_mm2 / 100, 4) if hull_area_mm2 else None),
             "Compactness": round(float(comp_3D), 4),
             "Total sulci count": int(overall_n),
-            "Mean sulci depth (mm)": (round(float(overall_mean), 3)
+            "Mean sulci depth (mm)": (round(float(overall_mean), 4)
                                        if overall_mean is not None else None),
-            "Area_lateral_surface_cm2": round(inner_area_slice_sum_mm2 / 100, 4),
-            "Surface_area_caps_cm2": round(caps_area_mm2 / 100, 4),
         }
         if cavity_correction_enabled:
             totals.update({
-                "n_surface_connected_cavities": int(cavity_corr.n_surface_connected),
-                "n_enclosed_cavities": int(cavity_corr.n_enclosed),
-                "surface_connected_cavity_area_cm2": round(cavity_corr.total_cavity_area_mm2 / 100, 4),
+                "Number of surface-connected cavities": int(cavity_corr.n_surface_connected),
+                "Number of enclosed cavities": int(cavity_corr.n_enclosed),
+                "Surface connected cavity area (cm^2)": round(cavity_corr.total_cavity_area_mm2 / 100, 4),
             })
         sheet = ResultsSheet(
             sheet_name=os.path.basename(file_path) or "Results",
@@ -568,14 +568,14 @@ def compute_stl_allmarks(
             parameters=parameters,
             rows=results_rows,
             extra_columns=(
-                "Kernel_px",
-                "cube_len_mm",
-                "detected_cube_size_px",
-                "computed_mm_per_px",
+                "Kernel px",
+                "Cube length (mm)",
+                "Detected cube size (px)",
+                "Computed mm per px",
             ),
             totals=totals,
             totals_notes={
-                "GI_3D (convex hull)": gi_3d_note(gi_3d),
+                "GI 3D (convex hull)": gi_3d_note(gi_3d),
             },
             drop_empty_columns=True,
         )
@@ -605,7 +605,7 @@ def compute_stl_lGI(
 ):
     """Compute the gyrification index (GI) from an STL mesh via slice rendering.
 
-    GI = total inner perimeter / total outer perimeter across all Y slices.
+    GI = total exterior perimeter / total closed-envelope perimeter across all Y slices.
     Optionally builds an extruded 3-D solid from the outer contours.
 
     Args:
@@ -654,7 +654,7 @@ def compute_stl_lGI(
         return dic["label"],[],0,[],[]
 
     slice_thickness_eff = brain_dim[sd["axis_index"]] / N
-    print(f"[STL lGI] Effective slice thickness (mm): {slice_thickness_eff}")
+    print(f"[STL lGI] Effective slice thickness: {slice_thickness_eff} mm")
 
     # --- Outputs
     os.makedirs(out_dir, exist_ok=True)
@@ -675,7 +675,7 @@ def compute_stl_lGI(
     sections_list: list[pv.PolyData] = []
     sum_inner_mm = 0.0
     sum_outer_mm = 0.0
-    lateral_samples: list[tuple[float, float]] = []  # (position mm, inner perimeter mm)
+    lateral_samples: list[tuple[float, float]] = []  # (position mm, exterior perimeter mm)
 
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
@@ -720,7 +720,7 @@ def compute_stl_lGI(
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         # Binary for contours
-        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+        bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -762,7 +762,7 @@ def compute_stl_lGI(
         sum_outer_mm += outer_perim_mm
         lateral_samples.append((float(k), inner_perim_mm))
         GI_slice = (inner_perim_mm / outer_perim_mm) if outer_perim_mm > 0 else 0.0
-        rows.append([idx, len(inner_filtered), kernel_size_px, inner_perim_mm, outer_perim_mm, GI_slice])
+        rows.append([idx, len(inner_filtered), kernel_size_px, inner_perim_mm, outer_perim_mm, GI_slice, scale_meta])
 
         # Save annotated slice
         slice_path = os.path.join(out_dir_slices, f"slice_{idx:03d}.png")
@@ -796,7 +796,7 @@ def compute_stl_lGI(
     GI_total = (sum_inner_mm / sum_outer_mm) if sum_outer_mm > 0 else 0.0
     print(f"[STL lGI] GI_total = {GI_total:.6f}")
 
-    # Lateral surface area = ∫ inner perimeter dh via Simpson's rule.
+    # Lateral surface area = ∫ exterior perimeter dh via Simpson's rule.
     inner_area_slice_sum_mm2 = lateral_area_simpson(lateral_samples)
     # 3-D area-based GI = exact mesh surface ÷ convex-hull surface.
     gi_3d, _gi3d_area, hull_area_mm2 = area_based_gi_3d(mesh)
@@ -809,16 +809,37 @@ def compute_stl_lGI(
     else:
         all_slices_mesh = pv.PolyData()
 
-    # Save per-slice + total to Excel
+    # Save per-slice + total to Excel (spec layout, like All-hallmarks).
     try:
-        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", "Kernel_px", "Inner_Perimeter_mm", "Outer_Perimeter_mm", "GI"])
-        df.insert(0, "Kernel_size_mm", float(kernel_size_mm))
-        df.loc[len(df)] = [float(kernel_size_mm), "GI", None, None, None, None, round(GI_total, 3)]
-        df.loc[len(df)] = [float(kernel_size_mm), "GI_3D_convexhull", None, None, None, None, (round(float(gi_3d), 4) if gi_3d is not None else None)]
-        df.loc[len(df)] = [float(kernel_size_mm), "Convex_hull_area_cm2", None, None, None, None, (round(hull_area_mm2 / 100, 4) if hull_area_mm2 else None)]
-        df.loc[len(df)] = [float(kernel_size_mm), "Area_lateral_surface_cm2", None, None, None, None, round(inner_area_slice_sum_mm2 / 100, 4)]
+        from helpers.results_excel_format import (
+            build_measurement_sheet, write_results_workbook, gi_3d_note)
+        results_rows = [{
+            "Section": r[0], "Contours": r[1], "Kernel px": r[2],
+            "Cube length (mm)": r[-1].get("cube_len_mm"),
+            "Detected cube size (px)": r[-1].get("detected_cube_size_px"),
+            "Computed mm per px": r[-1].get("computed_mm_per_px"),
+            "Perimeter": r[3], "Closed-envelope perimeter": r[4], "LGI": r[5],
+        } for r in rows]
+        parameters = {
+            "Kernel size (mm)": float(kernel_size_mm),
+            "Slice thickness": float(slice_thickness),
+            "Slice direction": Slice_direction,
+            "Filtered threshold (mm²)": float(min_contour_area),
+        }
+        totals = {
+            "GI": round(float(GI_total), 4),
+            "GI 3D (convex hull)": (round(float(gi_3d), 4) if gi_3d is not None else None),
+            "Convex hull area (cm^2)": (round(hull_area_mm2 / 100, 4) if hull_area_mm2 else None),
+            "Area lateral surface (cm^2)": round(inner_area_slice_sum_mm2 / 100, 4),
+        }
+        sheet = build_measurement_sheet(
+            file_path, "LGI", results_rows, parameters, totals,
+            extra_columns=("Contours", "Kernel px", "Cube length (mm)",
+                           "Detected cube size (px)", "Computed mm per px",
+                           "Closed-envelope perimeter"),
+            totals_notes={"GI 3D (convex hull)": gi_3d_note(gi_3d)})
         xlsx_path = os.path.join(out_dir, "STL_lGI.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
         print(f"[STL lGI] Saved Excel → {xlsx_path}")
     except Exception as ex:
         print(f"[STL lGI] WARN: could not save Excel: {ex}")
@@ -905,7 +926,7 @@ def compute_stl_volume(
         return dic["label"],[],0,[],[]
 
     slice_thickness_eff = brain_dim[sd["axis_index"]] / N
-    print(f"[STL Volume] Effective slice thickness (mm): {slice_thickness_eff}")
+    print(f"[STL Volume] Effective slice thickness: {slice_thickness_eff} mm")
 
     # --- Outputs
     os.makedirs(out_dir, exist_ok=True)
@@ -973,7 +994,7 @@ def compute_stl_volume(
         # Binary for contours. RETR_CCOMP so holes are detected as internal
         # contours for the surface-connected cavity correction; the top-level
         # contours match the previous RETR_EXTERNAL result so area is unchanged.
-        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+        bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
         contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -988,7 +1009,7 @@ def compute_stl_volume(
         area_px  = sum(cv2.contourArea(c)     for c in inner_filtered)
         area_mm  = area_px * (mm_per_px ** 2)
 
-        rows.append([idx, len(inner_filtered), area_mm])
+        rows.append([idx, len(inner_filtered), area_mm, scale_meta])
         # Accumulate
         sum_area     += area_mm
         raw_volume.append((idx, float(k), area_mm))
@@ -1040,8 +1061,7 @@ def compute_stl_volume(
     # Exact mesh.volume kept only for verification.
     brain_volume = volume_simpson(volume_samples) / 1000.0
     _mesh_volume_cm3 = abs(float(mesh.volume)) / 1000.0
-    print(f"[STL Volume] Simpson={brain_volume:.3f} cm³ "
-          f"(verify mesh.volume={_mesh_volume_cm3:.3f} cm³)")
+    print(f"[STL Volume] Volume={brain_volume:.3f} cm³")
     if cavity_correction_enabled:
         print(f"[STL Volume] Cavity correction: "
               f"{cavity_corr.n_surface_connected} surface-connected, "
@@ -1055,20 +1075,37 @@ def compute_stl_volume(
     else:
         all_slices_mesh = pv.PolyData()
         
-    # Save per-slice + total to Excel
+    # Save per-slice + total to Excel (spec layout, like All-hallmarks).
     try:
-        rows.append(["Volume cm^3",round(brain_volume,2)])
-        rows.append(["cavity_correction", "on" if cavity_correction_enabled else "off"])
+        from helpers.results_excel_format import build_measurement_sheet, write_results_workbook
+        results_rows = [{
+            "Section": r[0], "Contours": r[1],
+            "Cube length (mm)": r[-1].get("cube_len_mm"),
+            "Detected cube size (px)": r[-1].get("detected_cube_size_px"),
+            "Computed mm per px": r[-1].get("computed_mm_per_px"),
+            "Area": r[2],
+        } for r in rows]
+        parameters = {
+            "Slice thickness": float(slice_thickness),
+            "Slice direction": Slice_direction,
+            "Filtered threshold (mm²)": float(min_contour_area),
+            "Cavity correction": "on" if cavity_correction_enabled else "off",
+        }
         if cavity_correction_enabled:
-            rows.append(["n_surface_connected_cavities", cavity_corr.n_surface_connected])
-            rows.append(["n_enclosed_cavities", cavity_corr.n_enclosed])
-            rows.append(["cavity_area_removed_mm2", round(float(cavity_corr.total_cavity_area_mm2), 4)])
-
-        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", "Inner_area_mm^2"])
-
-
+            parameters["Cavity area threshold (mm²)"] = float(cavity_area_threshold_mm2)
+        totals = {"Volume (cm^3)": round(float(brain_volume), 4)}
+        if cavity_correction_enabled:
+            totals.update({
+                "Number of surface-connected cavities": int(cavity_corr.n_surface_connected),
+                "Number of enclosed cavities": int(cavity_corr.n_enclosed),
+                "Cavity area removed (mm²)": round(float(cavity_corr.total_cavity_area_mm2), 4),
+            })
+        sheet = build_measurement_sheet(
+            file_path, "Volume", results_rows, parameters, totals,
+            extra_columns=("Contours", "Cube length (mm)",
+                           "Detected cube size (px)", "Computed mm per px"))
         xlsx_path = os.path.join(out_dir, "Mesh_Volume.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
         print(f"[STL Volume] Saved Excel → {xlsx_path}")
     except Exception as ex:
         print(f"[STL Volume] WARN: could not save Excel: {ex}")
@@ -1093,7 +1130,7 @@ def compute_stl_area(
     cavity_area_threshold_mm2: float = DEFAULT_CAVITY_AREA_THRESHOLD_MM2):
     """Compute brain surface area (cm²) from an STL mesh.
 
-    Sums inner-contour perimeters across Y slices and multiplies by
+    Sums exterior-contour perimeters across Y slices and multiplies by
     effective slice thickness.
 
     Args:
@@ -1140,7 +1177,7 @@ def compute_stl_area(
         return dic["label"],[],0,[],[]
 
     slice_thickness_eff = brain_dim[sd["axis_index"]] / N
-    print(f"[STL Area] Effective slice thickness (mm): {slice_thickness_eff}")
+    print(f"[STL Area] Effective slice thickness: {slice_thickness_eff} mm")
 
     # --- Outputs
     os.makedirs(out_dir, exist_ok=True)
@@ -1210,7 +1247,7 @@ def compute_stl_area(
         # Binary for contours. RETR_CCOMP so holes are detected as internal
         # contours for the surface-connected cavity correction; the top-level
         # contours match the previous RETR_EXTERNAL result so perimeter is unchanged.
-        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+        bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
         contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -1233,7 +1270,7 @@ def compute_stl_area(
             inner_perim_mm = inner_perim_px * mm_per_px
         inner_area_mm = sum(cv2.contourArea(c) for c in inner_filtered) * (mm_per_px ** 2)
 
-        rows.append([idx, len(inner_filtered), inner_perim_mm])
+        rows.append([idx, len(inner_filtered), inner_perim_mm, scale_meta])
         # Accumulate
         sum_inner_mm += inner_perim_mm
         raw_lateral.append((idx, float(k), inner_perim_mm))
@@ -1293,8 +1330,7 @@ def compute_stl_area(
         lateral_samples, volume_samples)
     mesh_area_mm2 = float(mesh.area)
     Area = total_area_mm2 / 100
-    print(f"[STL Area] Surface area: Simpson lateral+caps={Area:.3f} cm² "
-          f"(verify mesh.area={mesh_area_mm2 / 100:.3f} cm²)")
+    print(f"[STL Area] Surface area: lateral+caps={Area:.3f} cm²")
     if cavity_correction_enabled:
         print(f"[STL Area] Cavity correction: "
               f"{cavity_corr.n_surface_connected} surface-connected, "
@@ -1308,22 +1344,43 @@ def compute_stl_area(
     else:
         all_slices_mesh = pv.PolyData()
         
-    # Save per-slice + total to Excel
+    # Save per-slice + total to Excel (spec layout, like All-hallmarks).
     try:
-        rows.append(["Surface Area cm^2",round(Area,2)])
-        rows.append(["surface_area_method", "simpson_lateral+caps"])
-        rows.append(["surface_area_lateral_cm2", round(lateral_mm2 / 100, 4)])
-        rows.append(["surface_area_caps_cm2", round(caps_mm2 / 100, 4)])
-        rows.append(["surface_area_mesh_verify_cm2", round(mesh_area_mm2 / 100, 4)])
-        rows.append(["cavity_correction", "on" if cavity_correction_enabled else "off"])
+        from helpers.results_excel_format import build_measurement_sheet, write_results_workbook
+        results_rows = [{
+            "Section": r[0], "Contours": r[1],
+            "Cube length (mm)": r[-1].get("cube_len_mm"),
+            "Detected cube size (px)": r[-1].get("detected_cube_size_px"),
+            "Computed mm per px": r[-1].get("computed_mm_per_px"),
+            "Perimeter": r[2],
+        } for r in rows]
+        parameters = {
+            "Slice thickness": float(slice_thickness),
+            "Slice direction": Slice_direction,
+            "Filtered threshold (mm²)": float(min_contour_area),
+            "Perimeter method": perimeter_method,
+            "Surface area method": "lateral + caps",
+            "Cavity correction": "on" if cavity_correction_enabled else "off",
+        }
         if cavity_correction_enabled:
-            rows.append(["n_surface_connected_cavities", cavity_corr.n_surface_connected])
-            rows.append(["n_enclosed_cavities", cavity_corr.n_enclosed])
-            rows.append(["cavity_wall_perim_added_mm", round(float(cavity_corr.total_wall_perim_mm), 4)])
-        df = pd.DataFrame(rows, columns=["Slice","Count_of_cont.", "Inner_Perimeter_mm"])
-
+            parameters["Cavity area threshold (mm²)"] = float(cavity_area_threshold_mm2)
+        totals = {
+            "Surface Area (cm^2)": round(float(Area), 4),
+            "Surface area lateral (cm^2)": round(lateral_mm2 / 100, 4),
+            "Surface area caps (cm^2)": round(caps_mm2 / 100, 4),
+        }
+        if cavity_correction_enabled:
+            totals.update({
+                "Number of surface-connected cavities": int(cavity_corr.n_surface_connected),
+                "Number of enclosed cavities": int(cavity_corr.n_enclosed),
+                "Cavity wall perimeter added (mm)": round(float(cavity_corr.total_wall_perim_mm), 4),
+            })
+        sheet = build_measurement_sheet(
+            file_path, "Area", results_rows, parameters, totals,
+            extra_columns=("Contours", "Cube length (mm)",
+                           "Detected cube size (px)", "Computed mm per px"))
         xlsx_path = os.path.join(out_dir, "Mesh_Area.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
         print(f"[STL Area] Saved Excel → {xlsx_path}")
     except Exception as ex:
         print(f"[STL Area] WARN: could not save Excel: {ex}")
@@ -1387,7 +1444,7 @@ def compute_stl_sulci_depth(
         return dic["label"],[],[],[],[]
 
     slice_thickness_eff = brain_dim[sd["axis_index"]] / N
-    print(f"[STL Sulci depth] Effective slice thickness (mm): {slice_thickness_eff}")
+    print(f"[STL Sulci depth] Effective slice thickness: {slice_thickness_eff} mm")
 
     # --- Outputs
     os.makedirs(out_dir, exist_ok=True)
@@ -1449,7 +1506,7 @@ def compute_stl_sulci_depth(
         thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         # Binary for contours
-        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+        bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
         contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -1494,7 +1551,7 @@ def compute_stl_sulci_depth(
                                     bgr = cv2.circle(bgr, far, radius_px, marker_color, -1)
 
         depth = flatten_depth_sets(depth_sets)
-        print(f"[STL sulci] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")
+        print(f"[STL Sulci depth] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")
         mean_depth = (sum(depth)/len(depth)) if depth else None
         total_depth.extend(depth)
         if use_percent_filter:
@@ -1510,6 +1567,7 @@ def compute_stl_sulci_depth(
             (max(depth) if depth else None),    # max_depth_mm
             mean_depth,                         # mean_depth_mm
             *per_class_cells,
+            scale_meta,                         # calibration metadata (last)
         ])
 
 
@@ -1535,43 +1593,47 @@ def compute_stl_sulci_depth(
     else:
         all_slices_mesh = pv.PolyData()
         
-    # Save per-slice + total to Excel
+    # Save per-slice + total to Excel (spec layout, like All-hallmarks).
     try:
-        per_class_cols = sulcus_export_columns("mm")
-        base_cols = [
-            "Slice", "SliceKind", "Count_of_cont.", "Sulci_count",
-            "min_depth_mm", "max_depth_mm", "mean_depth_mm",
-        ]
-        total_width = len(base_cols) + len(per_class_cols)
-
-        overall_depth_sets = empty_depth_sets()
-        for dsets in slice_class_data:
-            if dsets is None:
-                continue
-            for k in SULCUS_CLASSES:
-                overall_depth_sets[k].extend(dsets.get(k, []))
-
+        from helpers.results_excel_format import (
+            build_measurement_sheet, write_results_workbook, subtype_mean)
+        results_rows = []
+        for r, dsets in zip(rows, slice_class_data):
+            d = dsets if isinstance(dsets, dict) else {}
+            results_rows.append({
+                "Section": r[0],
+                "Contours": r[2],
+                "Cube length (mm)": r[-1].get("cube_len_mm"),
+                "Detected cube size (px)": r[-1].get("detected_cube_size_px"),
+                "Computed mm per px": r[-1].get("computed_mm_per_px"),
+                "PrimarySulciCount": len(d.get("primary", []) or []),
+                "SecondarySulciCount": len(d.get("secondary", []) or []),
+                "TertiarySulciCount": len(d.get("tertiary", []) or []),
+                "UnclassifiedSulciCount": len(d.get("unclassified", []) or []),
+                "PrimaryMeanDepth": subtype_mean(None, d.get("primary", []) or []),
+                "SecondaryMeanDepth": subtype_mean(None, d.get("secondary", []) or []),
+                "TertiaryMeanDepth": subtype_mean(None, d.get("tertiary", []) or []),
+                "UnclassifiedMeanDepth": subtype_mean(None, d.get("unclassified", []) or []),
+            })
         overall_n = len(total_depth)
-        overall_min = min(total_depth) if total_depth else None
-        overall_max = max(total_depth) if total_depth else None
         overall_mean = (sum(total_depth) / overall_n) if overall_n else None
-
-        summary_base = [None] * len(base_cols)
-        summary_base[0] = "Sulci_overall_summary"
-        summary_base[base_cols.index("Sulci_count")]   = overall_n
-        summary_base[base_cols.index("min_depth_mm")]  = overall_min
-        summary_base[base_cols.index("max_depth_mm")]  = overall_max
-        summary_base[base_cols.index("mean_depth_mm")] = overall_mean
-        rows.append(pad_row(
-            [*summary_base, *sulcus_export_cells(overall_depth_sets)],
-            total_width,
-        ))
-
-        df = pd.DataFrame(rows, columns=[*base_cols, *per_class_cols])
-        df = drop_empty_columns(df)
-
+        parameters = {
+            "Slice thickness": float(slice_thickness),
+            "Slice direction": Slice_direction,
+            "Filtered threshold (mm²)": float(min_contour_area),
+        }
+        totals = {
+            "Total sulci count": int(overall_n),
+            "Min sulci depth (mm)": (round(float(min(total_depth)), 4) if total_depth else None),
+            "Max sulci depth (mm)": (round(float(max(total_depth)), 4) if total_depth else None),
+            "Mean sulci depth (mm)": (round(float(overall_mean), 4) if overall_mean is not None else None),
+        }
+        sheet = build_measurement_sheet(
+            file_path, "Sulci depth", results_rows, parameters, totals,
+            extra_columns=("Contours", "Cube length (mm)",
+                           "Detected cube size (px)", "Computed mm per px"))
         xlsx_path = os.path.join(out_dir, "Mesh_Sulci_depth.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
         print(f"[STL Sulci depth] Saved Excel → {xlsx_path}")
     except Exception as ex:
         print(f"[STL Sulci depth] WARN: could not save Excel: {ex}")
@@ -1587,7 +1649,9 @@ def compute_compactness_stl(
     out_dir: str,
     min_contour_area: float = 20.0,
     slice_thickness: float = 0.5,
-    Slice_direction: str = "Y"):
+    Slice_direction: str = "Y",
+    cavity_correction_enabled: bool = DEFAULT_CAVITY_CORRECTION_ENABLED,
+    cavity_area_threshold_mm2: float = DEFAULT_CAVITY_AREA_THRESHOLD_MM2):
     """Compute 3D compactness (sphericity) from an STL mesh.
 
     Uses the exact STL ``mesh.volume`` and ``mesh.area`` totals, then applies
@@ -1636,7 +1700,7 @@ def compute_compactness_stl(
         return dic["label"], [], 0, [], []
 
     slice_thickness_eff = brain_dim[sd["axis_index"]] / N
-    print(f"[STL Compactness] Effective slice thickness (mm): {slice_thickness_eff}")
+    print(f"[STL Compactness] Effective slice thickness: {slice_thickness_eff} mm")
 
     # --- Outputs
     os.makedirs(out_dir, exist_ok=True)
@@ -1656,8 +1720,12 @@ def compute_compactness_stl(
     sections_list: list[pv.PolyData] = []
     sum_area_mm2 = 0.0
     sum_inner_mm = 0.0
-    volume_samples: list[tuple[float, float]] = []   # (position mm, cross-section area mm²)
-    lateral_samples: list[tuple[float, float]] = []  # (position mm, inner perimeter mm)
+    # Raw per-slice data for the surface-connected cavity correction (applied
+    # after the loop) so compactness mirrors the Area/Volume tools.
+    raw_lateral: list[tuple[int, float, float]] = []   # (idx, pos mm, inner_perim_mm)
+    raw_volume: list[tuple[int, float, float]] = []    # (idx, pos mm, inner_area_mm)
+    slice_records: list[SliceRecord] = []
+    slice_png_by_idx: dict[int, tuple[str, int]] = {}  # idx -> (png path, line thickness)
 
     p = pv.Plotter(off_screen=True, window_size=window_size)
     p.set_background("white")
@@ -1698,18 +1766,19 @@ def compute_compactness_stl(
         h_img, w_img = bgr.shape[:2]
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        # Binary for contours
-        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
-        contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Binary for contours. RETR_CCOMP so holes feed the cavity correction;
+        # top-level contours match the previous RETR_EXTERNAL result.
+        bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
+        contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
 
-        # Inner contours: exclude red ref + area filter
-        inner_candidates = contours_exclude(contours, red_rect, bw.shape)
-        inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) * (mm_per_px ** 2) > float(min_contour_area)]
+        inner_filtered, internal_filtered = split_inner_and_internal_contours(
+            contours, hierarchy, red_rect, bw.shape, float(min_contour_area) / (mm_per_px ** 2),
+        )
         cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
-        # Convert pixel measurements to physical units
+        # Convert pixel measurements to physical units (holes-filled outer region).
         area_px = sum(cv2.contourArea(c) for c in inner_filtered)
         inner_perim_px = sum(cv2.arcLength(c, True) for c in inner_filtered)
         area_mm2 = area_px * (mm_per_px ** 2)
@@ -1719,21 +1788,55 @@ def compute_compactness_stl(
         # Accumulate
         sum_area_mm2 += area_mm2
         sum_inner_mm += inner_perim_mm
-        volume_samples.append((float(k), area_mm2))
-        lateral_samples.append((float(k), inner_perim_mm))
+        raw_lateral.append((idx, float(k), inner_perim_mm))
+        raw_volume.append((idx, float(k), area_mm2))
+        if cavity_correction_enabled:
+            center_px = get_red_rect_offset(img_rgb)
+            slice_records.append(SliceRecord(
+                idx=idx, position_mm=float(k),
+                cavities=[make_slice_cavity(c, mm_per_px, center_px) for c in internal_filtered],
+                outer_polys_mm=[contour_to_mm(c, mm_per_px, center_px) for c in inner_filtered],
+                hole_polys_mm=[contour_to_mm(c, mm_per_px, center_px) for c in internal_filtered],
+            ))
 
         # Save annotated slice
         slice_path = os.path.join(out_dir_slices, f"slice_{idx:03d}.png")
         cv2.imwrite(slice_path, bgr)
         saved_pngs.append(slice_path)
+        slice_png_by_idx[idx] = (slice_path, thickness)
         valid_slices.append(idx)
-        rows.append([idx, len(inner_filtered), comp_2D])
+        rows.append([idx, len(inner_filtered), comp_2D, scale_meta])
         plane["slice_idx"] = np.full(plane.n_points, idx, dtype=np.int32)
         section["slice_idx"] = np.full(section.n_points, idx, dtype=np.int32)
         sections_list.append(section)
         sections_list.append(plane)
 
     # ---- end of slice loop ----
+
+    # Surface-connected cavity correction (mirrors the Area/Volume tools): wall
+    # perimeter added to the surface lateral, open-cavity area subtracted from
+    # volume + caps. Enclosed voids stay solid; yellow-outline open cavities.
+    if cavity_correction_enabled:
+        cavity_corr = cavity_correction_tracking(
+            slice_records, area_threshold_mm2=float(cavity_area_threshold_mm2))
+        lateral_samples = [(pos, perim + cavity_corr.perim_add(idx))
+                           for (idx, pos, perim) in raw_lateral]
+        volume_samples = [(pos, max(0.0, area - cavity_corr.area_subtract(idx)))
+                          for (idx, pos, area) in raw_volume]
+        for c_idx, c_contours in cavity_corr.surface_connected_by_idx.items():
+            png_thick = slice_png_by_idx.get(c_idx)
+            if png_thick is None:
+                continue
+            png_path, line_thick = png_thick
+            img = cv2.imread(png_path)
+            if img is None:
+                continue
+            cv2.drawContours(img, c_contours, -1, (0, 255, 255), int(max(1, line_thick)))
+            cv2.imwrite(png_path, img)
+    else:
+        cavity_corr = CavityCorrection.empty()
+        lateral_samples = [(pos, perim) for (_idx, pos, perim) in raw_lateral]
+        volume_samples = [(pos, area) for (_idx, pos, area) in raw_volume]
 
     # Totals (mm → cm conversions). Volume = ∫ area dh via Simpson's rule;
     # exact mesh.volume kept only for verification.
@@ -1743,10 +1846,8 @@ def compute_compactness_stl(
     _total_area_mm2, _lat_mm2, _caps_mm2 = total_surface_area_simpson(
         lateral_samples, volume_samples)
     Area = _total_area_mm2 / 100.0                        # cm²
-    print(f"[STL Compactness] Volume: Simpson={Volume:.3f} cm³ "
-          f"(verify mesh.volume={_mesh_volume_cm3:.3f} cm³); "
-          f"Surface: Simpson lateral+caps={Area:.3f} cm² "
-          f"(verify mesh.area={float(mesh.area) / 100.0:.3f} cm²)")
+    print(f"[STL Compactness] Volume={Volume:.3f} cm³ "
+          f"Surface area: lateral+caps={Area:.3f} cm²")
     comp_3D = compactness_3D(Volume, Area)
 
     if sections_list:
@@ -1756,15 +1857,40 @@ def compute_compactness_stl(
     else:
         all_slices_mesh = pv.PolyData()
 
-    # Save per-slice + total to Excel
+    # Save per-slice + total to Excel (spec layout, like All-hallmarks).
     try:
-        rows.append(["Compactness", round(comp_3D, 2)])
-        rows.append([f"Volume cm^3", round(Volume, 2)])
-        rows.append([f"Area cm^2", round(Area, 2)])
-        df = pd.DataFrame(rows, columns=["Slice", "Count_of_cont.", "Slice_compactness"])
-
+        from helpers.results_excel_format import build_measurement_sheet, write_results_workbook
+        results_rows = [{
+            "Section": r[0], "Contours": r[1],
+            "Cube length (mm)": r[-1].get("cube_len_mm"),
+            "Detected cube size (px)": r[-1].get("detected_cube_size_px"),
+            "Computed mm per px": r[-1].get("computed_mm_per_px"),
+            "Compactness": r[2],
+        } for r in rows]
+        parameters = {
+            "Slice thickness": float(slice_thickness),
+            "Slice direction": Slice_direction,
+            "Filtered threshold (mm²)": float(min_contour_area),
+            "Cavity correction": "on" if cavity_correction_enabled else "off",
+        }
+        if cavity_correction_enabled:
+            parameters["Cavity area threshold (mm²)"] = float(cavity_area_threshold_mm2)
+        totals = {
+            "Compactness": round(float(comp_3D), 4),
+            "Volume (cm^3)": round(float(Volume), 4),
+            "Surface Area (cm^2)": round(float(Area), 4),
+        }
+        if cavity_correction_enabled:
+            totals.update({
+                "Number of surface-connected cavities": int(cavity_corr.n_surface_connected),
+                "Number of enclosed cavities": int(cavity_corr.n_enclosed),
+            })
+        sheet = build_measurement_sheet(
+            file_path, "Compactness", results_rows, parameters, totals,
+            extra_columns=("Contours", "Cube length (mm)",
+                           "Detected cube size (px)", "Computed mm per px"))
         xlsx_path = os.path.join(out_dir, "Mesh_Compactness.xlsx")
-        df.to_excel(xlsx_path, index=False)
+        write_results_workbook(xlsx_path, [sheet])
         print(f"[STL Compactness] Saved Excel → {xlsx_path}")
     except Exception as ex:
         print(f"[STL Compactness] WARN: could not save Excel: {ex}")

@@ -19,7 +19,7 @@ from deps import *
 from PIL import Image
 from scipy.spatial.distance import directed_hausdorff, cdist
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-from helpers.helpers import image_annotation_style
+from helpers.helpers import image_annotation_style, threshold_binary
 
 
 def _to_xy2(a: np.ndarray) -> np.ndarray:
@@ -88,7 +88,7 @@ def convert_image(
     im_bw = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
     
     # Apply threshold
-    (thresh, im_bw) = cv2.threshold(im_bw, 200, 255, 1)
+    im_bw = threshold_binary(im_bw, 200, invert=True)
     
     # Display binary/threshold image
 #    cv2.namedWindow('Binary Image', cv2.WINDOW_NORMAL)

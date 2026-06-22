@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from deps import *
 from typing import TYPE_CHECKING
-from constants import DEFAULT_PERIMETER_METHOD
 
 if TYPE_CHECKING:
     from FetoMorph import MainWindow
@@ -152,7 +151,6 @@ class MetricsStore:
                 "KernelSizeMm": kernel_size_mm if kernel_size_mm is not None else (last.get("KernelSizeMm") if last else None),
                 "KernelSizePx": kernel_size_px if kernel_size_px is not None else (last.get("KernelSizePx") if last else None),
                 "KernelSize": kernel_size_mm if kernel_size_mm is not None else (last.get("KernelSize") if last else None),
-                "DefaultPerimeterMethod": DEFAULT_PERIMETER_METHOD,
                 "PerimeterMethod": perimeter_method if perimeter_method is not None else (last.get("PerimeterMethod") if last else None),
                 "LengthUnit": unit if unit is not None else (last.get("LengthUnit") if last else None),
                 "SliceThickness": slice_thickness if slice_thickness is not None else (last.get("SliceThickness") if last else None),
@@ -166,7 +164,7 @@ class MetricsStore:
                 "Height(IS)": None,
                 "Volume": None,
                 "Perimeter": None,
-                "Perimeter_convex": None,
+                "Closed-envelopePerimeter": None,
                 "SliceKind": None,
                 "SulciCount": None,
                 "PrimarySulciCount": None,
@@ -199,7 +197,6 @@ class MetricsStore:
             last["KernelSize"] = kernel_size_mm
         if kernel_size_px is not None:
             last["KernelSizePx"] = kernel_size_px
-        last["DefaultPerimeterMethod"] = DEFAULT_PERIMETER_METHOD
         if perimeter_method is not None:
             last["PerimeterMethod"] = perimeter_method
         if unit is not None:
@@ -292,8 +289,8 @@ class MetricsStore:
             "area": "Area",
             "volume": "Volume",
             "perimeter": "Perimeter",
-            "perimeter_internal": "Perimeter_internal",
-            "perimeter_convex": "Perimeter_convex",
+            "perimeter_internal": "InteriorPerimeter",
+            "perimeter_outer_envelope": "Closed-envelopePerimeter",
             "lgi": "LGI",
             "compactness": "Compactness",
         }
@@ -312,8 +309,8 @@ class MetricsStore:
         return [
             "File", "Kind", "Label", "Annotation", "Source", "SliceDirection",
             "PixelSize", "PixelSizeUnits", "KernelSizeMm", "KernelSizePx", "KernelSize", "LengthUnit", "SliceThickness",
-            "DefaultPerimeterMethod", "PerimeterMethod", "ContourMode", "Length(PA)", "Width(LR)", "Height(IS)", "SliceKind",
-            "Area", "Volume", "Perimeter", "Perimeter_convex",
+            "PerimeterMethod", "ContourMode", "Length(PA)", "Width(LR)", "Height(IS)", "SliceKind",
+            "Area", "Volume", "Perimeter", "Closed-envelopePerimeter",
             "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
             "TertiarySulciCount", "UnclassifiedSulciCount",
             "PrimaryMeanDepth", "SecondaryMeanDepth", "TertiaryMeanDepth",
@@ -441,27 +438,41 @@ class MetricsStore:
             ResultsSheet, write_results_workbook,
         )
 
+        # EVERY result column a measurement can populate (keep in sync with
+        # record_metric_for). A file is exported if ANY of these is non-empty
+        # for at least one of its rows — so Volume-only / Sulci-depth-only /
+        # perimeter-only measurements are no longer silently dropped.
         metric_keys = (
-            "Area", "Perimeter", "LGI", "Compactness",
+            "Area", "Volume", "Perimeter", "InteriorPerimeter",
+            "Closed-envelopePerimeter", "LGI", "Compactness",
+            "SulciCount", "MinDepth", "MaxDepth", "MeanDepth",
             "PrimarySulciCount", "SecondarySulciCount",
             "TertiarySulciCount", "UnclassifiedSulciCount",
             "PrimaryMeanDepth", "SecondaryMeanDepth",
             "TertiaryMeanDepth", "UnclassifiedMeanDepth",
         )
+        # Result columns above that the spec layout's RESULTS_COLUMNS does not
+        # already render (Area/Perimeter/LGI/Compactness/per-class sulci are
+        # rendered automatically). These are added to extra_columns so their
+        # values actually appear; drop_empty_columns hides the unused ones.
+        extra_metric_columns = (
+            "Volume", "InteriorPerimeter", "Closed-envelopePerimeter",
+            "SulciCount", "MinDepth", "MaxDepth", "MeanDepth",
+        )
         # Adjustment parameters that may differ across measurement runs
         # of the same file. Each becomes a per-row column so the values
         # used for each measurement are visible inline.
         extra_columns = (
+            "Folder",
             "Kernel size (mm)",
             "Kernel size (px)",
-            "DEFAULT_PERIMETER_METHOD",
             "PERIMETER METHOD",
             "Pixel spacing",
             "Slice thickness",
             "Contour mode",
             "Slice direction",
             "Length unit",
-        )
+        ) + extra_metric_columns
 
         def _pixel_spacing(r: dict) -> str | None:
             v = r.get("PixelSize")
@@ -470,26 +481,31 @@ class MetricsStore:
             u = r.get("PixelSizeUnits") or r.get("LengthUnit") or ""
             return f"{v} {u}/pixel".strip()
 
-        sheets: list[ResultsSheet] = []
+        # Group every recorded measurement row by file KIND → one sheet per
+        # kind (a new kind starts a new sheet). Each row is one measurement and
+        # its row-label column is the source file name. Distinct file name /
+        # parameter / setting / annotation / label values already produce
+        # distinct rows in the store, so they appear as separate rows within
+        # the kind's sheet.
+        grouped: dict[str, list[dict]] = {}
         for path, rows in self.metrics.items():
             if not rows:
                 continue
             if isinstance(rows, dict):
                 rows = [rows]
-            non_empty = [r for r in rows if isinstance(r, dict)
-                         and any(r.get(k) is not None for k in metric_keys)]
-            if not non_empty:
-                continue
-
-            results_rows = []
-            for i, r in enumerate(non_empty, start=1):
-                section = (r.get("Annotation") or r.get("Source")
-                           or r.get("Label") or f"Row {i}")
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                if not any(r.get(k) is not None for k in metric_keys):
+                    continue
+                kind = str(r.get("Kind") or "Results")
+                file_name = r.get("File") or (os.path.basename(path) if path else "—")
+                folder = r.get("Folder") or (os.path.dirname(path) if path else "")
                 row_dict = {
-                    "Section": section,
+                    "File name": file_name,
+                    "Folder": folder,
                     "Kernel size (mm)": r.get("KernelSizeMm", r.get("KernelSize")),
                     "Kernel size (px)": r.get("KernelSizePx"),
-                    "DEFAULT_PERIMETER_METHOD": r.get("DefaultPerimeterMethod", DEFAULT_PERIMETER_METHOD),
                     "PERIMETER METHOD": r.get("PerimeterMethod"),
                     "Pixel spacing": _pixel_spacing(r),
                     "Slice thickness": r.get("SliceThickness"),
@@ -499,23 +515,26 @@ class MetricsStore:
                 }
                 for k in metric_keys:
                     row_dict[k] = r.get(k)
-                results_rows.append(row_dict)
+                grouped.setdefault(kind, []).append(row_dict)
 
-            sheet_name = os.path.basename(path) if path else "Results"
-            # The top Parameters block is left intentionally empty for
-            # the cross-measurement dock export: the per-row columns
-            # below carry the authoritative per-run values, and a
-            # single summary block at the top would silently hide rows
-            # whose parameters differ from the first one.
-            sheets.append(ResultsSheet(
-                sheet_name=sheet_name,
-                file_name=os.path.basename(path) if path else None,
-                folder=(os.path.dirname(path) if path else None) or None,
+        # The top Parameters block is left intentionally empty for the
+        # cross-measurement dock export: the per-row columns below carry the
+        # authoritative per-run values, and a single summary block at the top
+        # would silently hide rows whose parameters differ from the first one.
+        sheets: list[ResultsSheet] = [
+            ResultsSheet(
+                sheet_name=kind,
+                file_name=None,
+                folder=None,
+                kind=kind,
                 parameters={},
                 rows=results_rows,
                 extra_columns=extra_columns,
                 drop_empty_columns=True,
-            ))
+                section_header="File name",
+            )
+            for kind, results_rows in grouped.items()
+        ]
 
         if not sheets:
             QMessageBox.information(

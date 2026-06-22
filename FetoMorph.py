@@ -19,6 +19,7 @@ from constants import (DEFAULT_NIFTI_REGIONS, WINDOW_WIDTH, WINDOW_HEIGHT,
                        CONSOLE_MAX_BLOCKS)
 from functions.nifti_to_image import nifti_slice_to_image
 from functions.hausdorff import convert_image
+from functions.measurements_image import put_label_on_bgr
 from functions.nii_extractor import nifti_extractor
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.vtk_viewer import VTKViewer
@@ -572,6 +573,7 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Adjustments", self.act_perimeter_options)
         self.ribbon.add_action("Adjustments", self.act_slice_thickness)
         self.ribbon.add_action("Adjustments", self.act_cnt_threshold)
+        self.ribbon.add_action("Adjustments", self.act_cavity_options)
         self.ribbon.add_action("Adjustments", self.act_annotate_square)
         self.ribbon.add_action("Adjustments", self.act_choose_regions)
         self.ribbon.add_action("Adjustments", self.act_set_physical_dim)
@@ -820,6 +822,12 @@ class MainWindow(QMainWindow):
         self._update_process_actions()
 
 
+    def _set_contour_accounting_enabled(self, flag: bool) -> None:
+        """Enable/disable the Contour Accounting radio actions together."""
+        for a in (self.act_contour_outer, self.act_contour_subtract,
+                  self.act_contour_internal_only):
+            a.setEnabled(flag)
+
     def _update_process_actions(self):
         """Enable or disable Process/Analysis menu actions based on the current file type.
 
@@ -827,6 +835,18 @@ class MainWindow(QMainWindow):
         subset of measurements; this method keeps the UI consistent.
         """
         kind = self.current_kind
+
+        # Contour Accounting applies only to the 2-D image pipeline — single
+        # images and planar meshes (which route through it); the image batch
+        # loads its first image first, so that case is covered by the "image"
+        # branch. Off by default (nothing applicable loaded); enabled per-kind
+        # below. True 3-D STL/VTK and NIfTI keep it disabled.
+        self._set_contour_accounting_enabled(False)
+
+        # Surface-connected cavity correction applies to 3-D geometry only
+        # (STL/VTK volumetric slicing and NIfTI); off by default and for 2-D
+        # images / planar meshes.
+        self.act_cavity_options.setEnabled(False)
 
         if kind == "stl" or (kind is not None and kind.startswith("vtk")):
             is_planar = self._flat_axis is not None
@@ -841,6 +861,9 @@ class MainWindow(QMainWindow):
             self.act_meas_curvature.setEnabled(False)
             self.act_meas_curve.setEnabled(False)
             self.act_slice_thickness.setEnabled(True)
+            self.act_cavity_options.setEnabled(not is_planar)
+            # 3-D slicing ignores contour_mode; planar meshes use the image path.
+            self._set_contour_accounting_enabled(is_planar)
             self.act_set_image_scale.setEnabled(False)
             self.act_niftiextractor.setEnabled(False)
             self.act_set_scale.setEnabled(False)
@@ -864,6 +887,8 @@ class MainWindow(QMainWindow):
             self.act_meas_allmarks.setEnabled(True)
             self.act_choose_regions.setEnabled(True)
             self.label_overlay_enabled = True
+            self.act_cavity_options.setEnabled(True)
+            self._set_contour_accounting_enabled(False)
             self.act_nitfi2png.setEnabled(True)
             self.act_meas_curvature.setEnabled(False)
             self.act_meas_curve.setEnabled(False)
@@ -883,6 +908,7 @@ class MainWindow(QMainWindow):
                 w.setVisible(True)
 
         elif kind == "image":
+            self._set_contour_accounting_enabled(True)
             self.act_meas_area.setEnabled(True)
             self.act_meas_perimeter.setEnabled(True)
             self.act_meas_compactness.setEnabled(True)
