@@ -117,7 +117,7 @@ def compute_image_allmarks(
     filtered_contours = inner_filtered  # sulci defects + GI operate on the brain boundary
 
     annotated = image.copy()
-    W, H = annotated.shape[:2]
+    H, W = annotated.shape[:2]
     thickness, font_scale, radius_px = image_annotation_style(H, W, style="thin")
 
     # If the input is a full MRI slice (sagittal/coronal/axial), depth defects
@@ -252,16 +252,30 @@ def compute_image_allmarks(
                         # text); the marker circle is still drawn.
                         if pixel_size <= MIN_PIXEL_SIZE_FOR_DEPTH_LABELS:
                             label = f"{depth_value:.2f} {unit}"
-                            tx = min(max(0, int(far[0] + radius_px + 4)), max(0, W - 1))
-                            ty = min(max(0, int(far[1] - radius_px - 4)), max(0, H - 1))
+                            label_scale = font_scale * float(_get_viz().sulcus_label_scale_multiplier)
+                            label_thickness = max(1, thickness - 1)
+                            (label_w, label_h), _ = cv2.getTextSize(
+                                label, cv2.FONT_HERSHEY_SIMPLEX, label_scale, label_thickness
+                            )
+                            # Place the label on the same side of the image as the
+                            # sulcus: right half -> text to the right of the marker,
+                            # left half -> text to the left (grows outward).
+                            if far[0] >= W / 2:
+                                tx = int(far[0] + radius_px + 4)
+                            else:
+                                tx = int(far[0] - radius_px - 4 - label_w)
+                            ty = int(far[1] - radius_px - 4)
+                            # Clamp so the whole text box stays inside the image.
+                            tx = min(max(0, tx), max(0, W - label_w))
+                            ty = min(max(label_h, ty), max(label_h, H - 1))
                             cv2.putText(
                                 annotated,
                                 label,
                                 (tx, ty),
                                 cv2.FONT_HERSHEY_SIMPLEX,
-                                font_scale * float(_get_viz().sulcus_label_scale_multiplier),
+                                label_scale,
                                 marker_color,
-                                max(1, thickness - 1),
+                                label_thickness,
                                 cv2.LINE_AA,
                             )
 
@@ -324,7 +338,7 @@ def compute_image_perimeter(
     inner_filtered, internal_filtered = _split_contours_for_mode(bw, cnt_threshold, pixel_size)
 
     annotated = image.copy()
-    W, H = annotated.shape[:2]
+    H, W = annotated.shape[:2]
     thickness, font_scale, _ = image_annotation_style(H, W, style="regular")
 
     if inner_filtered and contour_mode != "internal_only":
@@ -402,7 +416,7 @@ def compute_image_area(
     inner_filtered, internal_filtered = _split_contours_for_mode(bw, cnt_threshold, pixel_size)
 
     annotated = image.copy()
-    W, H = annotated.shape[:2]
+    H, W = annotated.shape[:2]
     thickness, _, _ = image_annotation_style(H, W, style="regular")
 
     if inner_filtered and contour_mode != "internal_only":
@@ -485,7 +499,7 @@ def compute_image_lGI(
     filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) * (pixel_size ** 2) > cnt_threshold]
    
     annotated = image.copy()
-    W, H = annotated.shape[:2]
+    H, W = annotated.shape[:2]
     thickness, _, _ = image_annotation_style(H, W, style="regular")
     
     if filtered_contours:
@@ -598,7 +612,7 @@ def compute_image_sulci_depth(
     filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) * (pixel_size ** 2) > cnt_threshold]
    
     annotated = image.copy()
-    W, H = annotated.shape[:2]
+    H, W = annotated.shape[:2]
     thickness, font_scale, radius_px = image_annotation_style(H, W, style="bold")
 
     # See compute_image_allmarks: full MRI slices use a percent window;
@@ -661,16 +675,30 @@ def compute_image_sulci_depth(
                         # text); the marker circle is still drawn.
                         if pixel_size <= MIN_PIXEL_SIZE_FOR_DEPTH_LABELS:
                             label = f"{depth_value:.2f} {unit}"
-                            tx = min(max(0, int(far[0] + radius_px + 4)), max(0, W - 1))
-                            ty = min(max(0, int(far[1] - radius_px - 4)), max(0, H - 1))
+                            label_scale = font_scale * float(_get_viz().sulcus_label_scale_multiplier)
+                            label_thickness = max(1, thickness - 1)
+                            (label_w, label_h), _ = cv2.getTextSize(
+                                label, cv2.FONT_HERSHEY_SIMPLEX, label_scale, label_thickness
+                            )
+                            # Place the label on the same side of the image as the
+                            # sulcus: right half -> text to the right of the marker,
+                            # left half -> text to the left (grows outward).
+                            if far[0] >= W / 2:
+                                tx = int(far[0] + radius_px + 4)
+                            else:
+                                tx = int(far[0] - radius_px - 4 - label_w)
+                            ty = int(far[1] - radius_px - 4)
+                            # Clamp so the whole text box stays inside the image.
+                            tx = min(max(0, tx), max(0, W - label_w))
+                            ty = min(max(label_h, ty), max(label_h, H - 1))
                             cv2.putText(
                                 annotated,
                                 label,
                                 (tx, ty),
                                 cv2.FONT_HERSHEY_SIMPLEX,
-                                font_scale * float(_get_viz().sulcus_label_scale_multiplier),
+                                label_scale,
                                 marker_color,
-                                max(1, thickness - 1),
+                                label_thickness,
                                 cv2.LINE_AA,
                             )
 
@@ -697,7 +725,7 @@ def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0, pixel_si
     filtered = [c for c in contours if cv2.contourArea(c) * (pixel_size ** 2) > cnt_threshold]
 
     annotated = image.copy()
-    W, H = annotated.shape[:2]
+    H, W = annotated.shape[:2]
     thickness, _, _ = image_annotation_style(H, W, style="regular")
     
     if filtered:
@@ -766,7 +794,7 @@ def compute_image_curved_length(
     filtered = [c for c in contours if cv2.contourArea(c) * (pixel_size ** 2) > cnt_threshold]
 
     annotated = image.copy()
-    W, H = annotated.shape[:2]
+    H, W = annotated.shape[:2]
     thickness, _, _ = image_annotation_style(H, W, style="regular")
 
     # if filtered:

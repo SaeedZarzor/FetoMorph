@@ -285,6 +285,21 @@ def image_annotation_style(
     radius_px = max(1, int(round(radius_px * float(vs.marker_radius_multiplier))))
     return thickness, font_scale, radius_px
 
+def _content_bbox(bgr: np.ndarray, thresh: int = 8) -> tuple[int, int, int, int] | None:
+    """Bounding box ``(x0, y0, x1, y1)`` of non-background (non-black) pixels.
+
+    Used to keep the values box off the annotated brain by detecting where the
+    drawn content actually lives. Returns ``None`` if the image is empty.
+    """
+    if bgr is None or not isinstance(bgr, np.ndarray) or bgr.ndim != 3:
+        return None
+    mask = bgr.max(axis=2) > thresh
+    if not mask.any():
+        return None
+    ys, xs = np.where(mask)
+    return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+
+
 def draw_hallmarks_values_on_image(
     bgr: np.ndarray,
     thickness: int | None = None,
@@ -409,6 +424,26 @@ def draw_hallmarks_values_on_image(
         x1, y1 = int(round(w * rx)), int(round(h * ry))
     x1 = min(max(0, x1), max(0, w - box_w))
     y1 = min(max(0, y1), max(0, h - box_h))
+
+    # Keep the values box off the annotated brain: if the box at the requested
+    # position overlaps the drawn content, slide it into the wider side margin
+    # (left or right), staying inside the image.
+    content = _content_bbox(out)
+    if content is not None:
+        cx0, cy0, cx1, cy1 = content
+        overlaps = not (x1 + box_w <= cx0 or x1 >= cx1
+                        or y1 + box_h <= cy0 or y1 >= cy1)
+        if overlaps:
+            left_space = cx0
+            right_space = w - cx1
+            if right_space >= left_space and right_space >= box_w + margin:
+                x1 = w - box_w - margin
+            elif left_space >= box_w + margin:
+                x1 = margin
+            else:
+                # Neither side margin fits; pick the roomier one and clamp.
+                x1 = (w - box_w - margin) if right_space >= left_space else margin
+            x1 = min(max(0, x1), max(0, w - box_w))
 
     cv2.rectangle(out, (x1, y1), (x1 + box_w, y1 + box_h), (0, 0, 0), -1)
     text_color = tuple(_get_viz().hallmark_text_color_bgr)

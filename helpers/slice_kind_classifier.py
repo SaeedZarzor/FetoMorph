@@ -53,6 +53,40 @@ def _get_session():
     return _session
 
 
+def _reframe_to_training_layout(gray: np.ndarray) -> np.ndarray:
+    """Tight-crop to the brain and pad to a centered square.
+
+    Training images are white-background, ~square frames with the brain filling
+    most of the canvas. Exported renders can instead be very wide, with black
+    letterbox bars and a small brain inside large white margins. Resizing such a
+    frame straight to 128x128 squishes the brain and feeds the model an
+    out-of-distribution layout. This reframes any input to match training:
+
+      1. isolate the brain as pixels that are neither near-white (background)
+         nor near-black (letterbox bars / scale bar / text),
+      2. crop to that bounding box,
+      3. pad to a centered square with the white background value.
+
+    Falls back to the original image when no clear foreground is found.
+    """
+    fg = (gray > 12) & (gray < 244)
+    if int(fg.sum()) < int(0.001 * gray.size):
+        return gray  # no distinct brain region; classify the frame as-is
+    ys, xs = np.where(fg)
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    crop = gray[y0:y1, x0:x1]
+    h, w = crop.shape[:2]
+    side = max(h, w)
+    top = (side - h) // 2
+    left = (side - w) // 2
+    # Pad with white (255) to match the white-background training frames.
+    return cv2.copyMakeBorder(
+        crop, top, side - h - top, left, side - w - left,
+        cv2.BORDER_CONSTANT, value=255,
+    )
+
+
 def classify_slice_kind(image_bgr: np.ndarray) -> tuple[SliceKind, float]:
     """Classify a single 2-D image.
 
@@ -76,6 +110,7 @@ def classify_slice_kind(image_bgr: np.ndarray) -> tuple[SliceKind, float]:
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     else:
         gray = image_bgr
+    gray = _reframe_to_training_layout(gray)
     resized = cv2.resize(gray, (_INPUT_SIZE, _INPUT_SIZE), interpolation=cv2.INTER_AREA)
     x = (resized.astype(np.float32) / 255.0)[None, None, :, :]  # 1x1xHxW
 
