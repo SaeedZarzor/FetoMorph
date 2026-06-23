@@ -39,6 +39,11 @@ Thumbs.db
 .vscode/
 .idea/
 
+# iCloud sync-conflict duplicates (e.g. "foo 2.py", "bar 2.bak")
+* [0-9].*
+*\ [0-9]
+*.icloud
+
 # Local env/log/temp
 .env
 .env.*

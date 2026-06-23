@@ -57,8 +57,8 @@ def set_icons(ui, assets: Path) -> None:
         "act_meas_compactness": "icons/compactness.png",
         "act_meas_curve":       "icons/curve.png",
         "act_similarity_profile": "icons/transparency.png",
-        "act_cavity_options" : "icons/cube-3d.png"
-
+        "act_cavity_options" : "icons/cube-3d.png",
+        "act_perimeter_options" : "icons/select.png",
     }
 
     for attr, rel in icons.items():

@@ -342,13 +342,13 @@ class MainWindow(QMainWindow):
         
         self.menu_recent = file_menu.addMenu("Recent")
         populate_recent_menu(self.menu_recent, self.recent, self.file_mgr.open_path)
-        self.act_show_results = QAction("Show Results…", self); self.act_show_results.triggered.connect(self.metrics_store.show_results_dock); file_menu.addAction(self.act_show_results)
-        self.act_save = QAction("Save View As…", self); self.act_save.setShortcut(QKeySequence("Ctrl+V")); self.act_save.triggered.connect(self.file_mgr.save_view); file_menu.addAction(self.act_save)
+        self.act_show_results = QAction("Show Results…", self); self.act_show_results.setShortcut(QKeySequence("Ctrl+Shift+R")); self.act_show_results.triggered.connect(self.metrics_store.show_results_dock); file_menu.addAction(self.act_show_results)
+        self.act_save = QAction("Save View As…", self); self.act_save.setShortcut(QKeySequence("Ctrl+S")); self.act_save.triggered.connect(self.file_mgr.save_view); file_menu.addAction(self.act_save)
         self.act_save_data = QAction("Save Data As…", self); self.act_save_data.setShortcut(QKeySequence.SaveAs); self.act_save_data.triggered.connect(self.file_mgr.save_data_as); file_menu.addAction(self.act_save_data)
         self.act_export_metrics = QAction("Export Metrics to Excel…", self); self.act_export_metrics.setShortcut(QKeySequence("Ctrl+E")); self.act_export_metrics.triggered.connect(self.metrics_store.export_metrics_excel); file_menu.addAction(self.act_export_metrics)
         self.act_Reset= QAction("Reset view…", self); self.act_Reset.setShortcut(QKeySequence("Ctrl+R")); self.act_Reset.setToolTip("Return to original view and clear on-screen annotations"); self.act_Reset.triggered.connect(self.reset_view); file_menu.addAction(self.act_Reset)
         self.act_close = QAction("Close", self); self.act_close.setShortcut(QKeySequence.Close); self.act_close.triggered.connect(self.file_mgr.close_current); file_menu.addAction(self.act_close)
-        
+
         file_menu.addSeparator()
         self.act_quit = QAction("Quit", self); self.act_quit.setShortcut(QKeySequence.Quit); self.act_quit.setMenuRole(QAction.MenuRole.QuitRole); self.act_quit.triggered.connect(self.quit_app); file_menu.addAction(self.act_quit)
 

@@ -3,9 +3,9 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
-A desktop application for morphometric analysis of fetal brain data. FetoMorph supports multiple imaging modalities — 2D histological slices, 3D volumetric scans (NIfTI), and surface meshes (STL/VTK) — and provides a comprehensive set of measurement, visualization, and optimization tools.
+A desktop application for morphometric analysis of fetal brain data. FetoMorph supports multiple imaging modalities — 2D histological slices, 3D volumetric scans (NIfTI), and surface meshes (STL/VTK) — and provides a comprehensive set of measurement, classification, visualization, and optimization tools.
 
-Built with PySide6 (Qt6), VTK, and OpenCV.
+Built with PySide6 (Qt6), VTK, OpenCV, and an ONNX deep-learning model for slice-kind classification.
 
 ---
 
@@ -16,14 +16,21 @@ Built with PySide6 (Qt6), VTK, and OpenCV.
 - [Supported File Formats](#supported-file-formats)
 - [Major Features](#major-features)
   - [2D Image Measurements](#2d-image-measurements)
+  - [Sulci Classification](#sulci-classification)
+  - [Slice-Kind Classifier (Deep Learning)](#slice-kind-classifier-deep-learning)
   - [3D Volumetric Measurements (NIfTI)](#3d-volumetric-measurements-nifti)
   - [Surface Mesh Measurements (STL/VTK)](#surface-mesh-measurements-stlvtk)
+  - [Cavity Correction](#cavity-correction)
+  - [Perimeter Estimation Methods](#perimeter-estimation-methods)
+  - [Compactness](#compactness)
   - [Curvature Analysis](#curvature-analysis)
   - [Hausdorff Distance](#hausdorff-distance)
+  - [GASP — Gestational Age Similarity Profile](#gasp--gestational-age-similarity-profile)
   - [Batch Processing](#batch-processing)
   - [Multi-Objective Optimization](#multi-objective-optimization)
   - [FreeSurfer Integration](#freesurfer-integration)
   - [Visualization](#visualization)
+  - [Preferences](#preferences)
   - [Scale and Unit Configuration](#scale-and-unit-configuration)
   - [Export](#export)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
@@ -77,12 +84,18 @@ Built with PySide6 (Qt6), VTK, and OpenCV.
 | scipy | Scientific computing and optimization |
 | opencv-python | Image processing and contour analysis |
 | nibabel | NIfTI and FreeSurfer file I/O |
-| trimesh | Triangle mesh manipulation |
+| trimesh / numpy-stl | Triangle / STL mesh manipulation |
 | matplotlib | Plotting (curvature profiles, optimization results) |
-| pandas | Tabular data handling |
+| pandas | Tabular data and reference-profile handling |
 | openpyxl | Excel export |
 | scikit-image | Image processing algorithms (marching cubes) |
+| scikit-learn | Reference-profile statistics and ML utilities |
+| pymoo | NSGA-II / NSGA-III multi-objective optimization |
+| onnxruntime / onnx | Slice-kind CNN inference |
+| torch | Slice-kind CNN training (offline scripts) |
 | pillow | Additional image format support |
+
+> **Note:** `onnxruntime` is required only for slice-kind classification and is loaded lazily. If it (or the model file) is missing, the app still runs — image slices simply fall back to the fixed sulci-depth rule. `torch` is needed only for re-training the model under `scripts/`.
 
 ---
 
@@ -92,7 +105,7 @@ Built with PySide6 (Qt6), VTK, and OpenCV.
 python FetoMorph.py
 ```
 
-The main window opens at 1200x900 with a ribbon toolbar, menu bar, 2D/3D viewer, and a results dock panel.
+The main window opens at 1200×900 with a ribbon toolbar, a menu bar (File, Measures, Analysis, Process, Adjustments, FreeSurfer, Examples, Settings), a 2D/3D viewer, an embedded output console, and a results dock panel.
 
 ---
 
@@ -112,7 +125,7 @@ The main window opens at 1200x900 with a ribbon toolbar, menu bar, 2D/3D viewer,
 
 | Format | Content |
 |--------|---------|
-| Excel (`.xlsx`) | Measurement metrics |
+| Excel (`.xlsx`) | Measurement metrics, per-class sulci tables, GASP reports |
 | PNG / JPEG | Annotated images, screenshots, plots |
 | NIfTI (`.nii.gz`) | Extracted label regions |
 | STL | Converted pial surfaces |
@@ -126,31 +139,45 @@ The main window opens at 1200x900 with a ribbon toolbar, menu bar, 2D/3D viewer,
 Compute morphometric hallmarks from brain slice images:
 
 - **Area** — cross-sectional area in physical units
-- **Perimeter** — boundary length of the brain contour
+- **Perimeter** — boundary length of the brain contour (arc-length or Crofton)
 - **Convex Perimeter** — outer perimeter after morphological closing
+- **Curve Length** / **Straight** — measured along or across the contour
 - **LGI (Local Gyrification Index)** — ratio of inner to outer perimeter
+- **Compactness** — how closely the shape approaches the most space-efficient form
 - **Sulci Depth** — min, max, and mean depth of convexity defects
-- **Sulci Count** — number of detected sulcal folds
+- **Sulci Count** — number of detected sulcal folds, split per class
 
-The processing pipeline uses binary thresholding, OpenCV contour detection, morphological closing with a configurable elliptical kernel, and convexity defect analysis.
+The pipeline binarises each mask with **Otsu's method** (automatic per-image threshold), detects contours with OpenCV, applies morphological closing with a configurable elliptical kernel (default 5 mm diameter), and analyses convexity defects. Kernel size, contour-area threshold, and perimeter method are all user-configurable from the **Adjustments** menu.
 
-Perimeter measurement defaults to OpenCV `cv2.arcLength`, a polygonal contour
-length that preserves the legacy behavior. For NIfTI and 2D binary image masks,
-`Adjustments -> Perimeter Method...` can opt into a 4-direction Crofton
-perimeter estimator. Crofton measures the filled binary mask after local
-2D isotropic resampling, reducing curvature and pixel-grid bias for noisy
-rasterized boundaries. It can under-estimate straight axis-aligned edges, so
-the same method is applied to both LGI perimeter legs; the GI ratio is usually
-similar, while absolute surface area and compactness benefit most. STL/VTK
-workflows keep `arcLength` because their dominant error comes from rendered
-screenshot resolution.
+### Sulci Classification
+
+Each detected sulcus is binned by its depth as a fraction of the brain's slice length into four colour-coded classes:
+
+| Class | Depth (% of slice length) | Default colour |
+|-------|---------------------------|----------------|
+| Primary | 15–50% | red |
+| Secondary | 5–15% | gold/orange |
+| Tertiary | 1.5–5% | cyan |
+| Unclassified | outside all ranges | light gray |
+
+Per-class counts and depth statistics (count, raw values, min/max/mean) are written to the Excel export, and markers are drawn on the annotated image in the class colour (colours are user-customisable in **Preferences**).
+
+### Slice-Kind Classifier (Deep Learning)
+
+A tiny ONNX convolutional neural network (`models/slice_kind_cnn.onnx`) labels each 2D image as a full MRI slice — **sagittal**, **coronal**, or **axial** — or as a cropped sub-slice band (`not_full_slice`). The classifier:
+
+- reframes each input (tight-crops the brain, pads to a centred square) to match the training layout, so wide letterboxed renders are not distorted;
+- decides whether the sulci-depth filter uses the fixed 0.5 mm rule (cropped bands) or a percent-of-slice-length rule (full slices);
+- is loaded lazily and degrades gracefully — if `onnxruntime` or the model file is unavailable, images are treated as `not_full_slice`.
+
+Training, evaluation, and cross-validation scripts live in `scripts/` (`train_slice_kind_cnn.py`, `eval_slice_kind_cnn.py`, `cv_slice_kind_cnn.py`).
 
 ### 3D Volumetric Measurements (NIfTI)
 
 Load NIfTI segmentation volumes and compute:
 
-- **Volume** (cm^3) — integrated across all slices
-- **Surface Area** (cm^2) — sum of per-slice areas
+- **Volume** (cm³) — integrated across all slices
+- **Surface Area** (cm²) — sum of per-slice areas
 - **Dimensions** — physical lengths along PA, LR, and IS axes
 - **LGI** — global gyrification index
 - **Sulci Depth Statistics** — aggregated across the volume
@@ -166,7 +193,24 @@ Slice through surface meshes along configurable axes and compute:
 - **Physical Dimension Scaling** — define real-world X/Y/Z dimensions
 - **Automatic Scale Calibration** — red reference cube detection for mm/px conversion
 
-VTK meshes support configurable slice direction (X, Y, or Z axis).
+VTK meshes support a configurable slice direction (X, Y, or Z axis). Thin surface meshes (e.g. FreeSurfer pial) can be **filled at render time** (`vtkStripper` + `vtkContourTriangulator`) so each cross-section reads as a solid region rather than a hollow boundary curve, while concavities and genuine enclosed voids are preserved.
+
+### Cavity Correction
+
+A surface-connected cavity (a hole that opens onto the outside of the brain) is corrected during slice-by-slice 3D integration:
+
+- its area is **subtracted** from the cross-section before the volume integral, and
+- its wall perimeter is **added** to the 3D surface area.
+
+Fully-enclosed internal voids are left untouched (treated as solid). Surface-connectivity is recovered exactly for NIfTI (`scipy.ndimage.binary_fill_holes`) and by cross-slice cavity tracking in physical-mm coordinates for STL/VTK. GI/LGI is deliberately unchanged — cavity walls never enter the gyrification perimeter sums. Enable/disable and set an area threshold from **Adjustments → Cavity correction options**.
+
+### Perimeter Estimation Methods
+
+Perimeter defaults to a 4-direction **Crofton** estimator (`Adjustments → Perimeter Method…`), which measures the filled binary mask after local 2D isotropic resampling, reducing curvature and pixel-grid bias for noisy rasterized boundaries. The legacy OpenCV `cv2.arcLength` polygonal length is also available. Crofton can under-estimate straight axis-aligned edges, so it is applied to both LGI perimeter legs; the GI ratio stays similar, while absolute surface area and compactness benefit most. STL/VTK workflows keep `arcLength` because their dominant error comes from rendered screenshot resolution.
+
+### Compactness
+
+A 2D shape-compactness metric (area vs. perimeter) quantifying how closely a cross-section approaches the most space-efficient form. Available from the **Analysis** menu and included in the all-hallmarks export.
 
 ### Curvature Analysis
 
@@ -184,16 +228,26 @@ Compare two contours with:
 - **Alignment modes**: right-bottom, left-top, or centroid
 - Output: annotated comparison image
 
+### GASP — Gestational Age Similarity Profile
+
+GASP compares a brain's morphometrics (area, perimeter, LGI, compactness, sulci counts, and per-class sulcus values) against reference statistics for each gestational week (24–38) and axis (axial / coronal / sagittal), returning a per-week similarity score that may help estimate developmental age.
+
+- **Reference profiles** are loaded from `Examples/gestational_week_reference.csv` (one row per week × axis, with n / mean / std / min / max per metric).
+- **Scoring** supports a Gaussian (weighted-mean of per-metric similarities) or Mahalanobis (weighted squared z-scores) model, with an optional out-of-range penalty.
+- **Configurable** per-metric weights and penalty behaviour via **Adjustments → GASP Options**.
+- **Manual entry** dialog lets you run GASP from hand-entered hallmark values without re-measuring.
+- **Output**: a per-run results folder with a similarity-score-per-week Excel report and the source image.
+
 ### Batch Processing
 
 - Select a folder of 2D slices for automated processing
-- All hallmark measurements computed per image
+- All hallmark measurements (including per-class sulci) computed per image
 - Dynamic threshold adjustment when LGI falls below 1
-- Annotated output images and Excel summary generated automatically
+- Annotated output images and an Excel summary generated automatically
 
 ### Multi-Objective Optimization
 
-NSGA-II / NSGA-III optimization over slice measurement data:
+NSGA-II / NSGA-III optimization (via **pymoo**) over slice measurement data:
 
 - **Objectives**: LGI, max/min/mean sulci depth, area, cell density
 - **Per-objective direction**: maximize or minimize
@@ -211,9 +265,9 @@ NSGA-II / NSGA-III optimization over slice measurement data:
 ### Visualization
 
 #### 2D Viewer
-- Aspect-preserving image display with zoom
+- Aspect-preserving image display with zoom controls
 - Contour overlays (red: brain boundary, green: convex hull)
-- Sulci depth markers with color-coded indicators
+- Class-coloured sulci depth markers
 - Interactive line drawing for scale-bar calibration
 - Rectangle ROI selection with auto-save
 
@@ -234,19 +288,28 @@ NSGA-II / NSGA-III optimization over slice measurement data:
 - Scatter plots for optimization Pareto fronts
 - Curvature profile line charts
 
+### Preferences
+
+A tabbed **Preferences** dialog (Settings menu) centralises visualization settings, applied live and persisted between sessions:
+
+- **Text and Sizes** — contour thickness, text scale, and marker-radius multipliers
+- **Colors** — boundary, convex-hull, and per-class sulcus marker colours (named or custom)
+- **View** — 3-D viewer toggles and display options
+
 ### Scale and Unit Configuration
 
-- **Manual entry**: set unit (mm, um, cm, m, in, or custom) and pixel size
+- **Manual entry**: set unit (mm, µm, cm, m, in, or custom) and pixel size
 - **Scale-bar calibration**: draw a line on the image and enter the physical length
 - **Mesh dimensions dialog**: define real-world X/Y/Z sizes for VTK meshes with live 3D preview
 - Per-file scale tracking
 
 ### Export
 
-- **Excel**: all metrics in a multi-row spreadsheet with metadata columns (file path, parameters, unit, annotation)
+- **Excel**: all metrics in a multi-row spreadsheet with metadata columns (file path, parameters, unit, annotation) plus per-class sulci tables, shared across every exporter
 - **View screenshot**: PNG or JPEG of the current display (2D or 3D)
 - **Data export**: copy result folders or individual files to a chosen destination
 - **NIfTI region extraction**: save filtered label masks as compressed `.nii.gz`
+- **GASP report**: per-week similarity scores and source image in a dedicated results folder
 
 ---
 
@@ -264,11 +327,13 @@ NSGA-II / NSGA-III optimization over slice measurement data:
 | Ctrl+R | Reset view |
 | Ctrl+W | Close current file |
 | Ctrl+Q | Quit |
-| Ctrl+T | Set contour threshold |
+| Ctrl+T | Set filtered threshold |
 | Ctrl+Shift+A | Annotation (rectangle ROI) |
 | Ctrl+Shift+R | ROI region selection |
 | Ctrl+M | Next result image |
 | Ctrl+Shift+M | Previous result image |
+| Shift+Alt+E | Resume / re-run last action |
+| Ctrl+, (⌘+,) | Open Preferences |
 | Ctrl+Alt+F | Example: filled 2D sections |
 | Ctrl+Alt+C | Example: cropped 2D sections |
 
@@ -278,51 +343,86 @@ NSGA-II / NSGA-III optimization over slice measurement data:
 
 ```
 FetoMorph/
-├── FetoMorph.py              # Main application entry point
+├── FetoMorph.py              # Main application window and menu wiring
 ├── deps.py                   # Centralized dependency imports
 ├── constants.py              # Application constants and defaults
 ├── icons.py                  # Icon loader
 ├── ribbon.py                 # Office-style ribbon toolbar
 ├── requirements.txt          # Pinned Python dependencies
 │
+├── managers/                 # Application controllers (separation of concerns)
+│   ├── file_manager.py             # Import, load, save, close operations
+│   ├── measurement_dispatcher.py   # All measurement / processing operations
+│   ├── metrics_store.py            # Metrics storage, table display, Excel export
+│   ├── settings_manager.py         # Calibration, units, processing parameters
+│   ├── view_manager.py             # Display, slice navigation, pixmap carousel
+│   └── visualization_settings.py   # User-tunable text/colors/sizes/view toggles
+│
 ├── widgets/                  # Custom UI dialogs and components
-│   ├── scaled_image_label.py       # 2D image viewer with measurements
-│   ├── VTK_Viewer.py               # 3D VTK rendering widget
-│   ├── Contour_threshold.py        # Contour threshold dialog
-│   ├── Kernel_size.py              # Morphology kernel size dialog
-│   ├── Slice_thickness.py          # Slice thickness dialog
-│   ├── Unit_scale.py               # Unit and pixel size dialog
-│   ├── Scalebar_set_scale.py       # Scale-bar calibration dialog
-│   ├── OptionsDialog.py            # Processing options dialog
-│   ├── GeometryDialog.py           # 3D mesh dimension editor
-│   ├── RegionDock.py               # NIfTI region selection dock
-│   ├── GestationalWeeksDialog.py   # Gestational week and axis selector
-│   ├── ImageBrowserDialog.py       # Thumbnail image browser
+│   ├── scaled_image_label.py       # 2D image viewer with measurement modes
+│   ├── vtk_viewer.py               # Embeddable 3D VTK rendering widget
+│   ├── zoom_controls.py            # Reusable zoom controls
+│   ├── contour_threshold.py        # Contour area threshold dialog
+│   ├── kernel_size.py              # Morphology kernel size dialog
+│   ├── perimeter_options.py        # Perimeter method dialog
+│   ├── cavity_options.py           # Cavity-correction options dialog
+│   ├── slice_thickness.py          # Slice thickness dialog
+│   ├── unit_scale.py               # Unit and pixel size dialog
+│   ├── scalebar_set_scale.py       # Scale-bar calibration dialog
+│   ├── options_dialog.py           # Image processing options dialog
+│   ├── geometry_dialog.py          # 3D mesh dimension editor (live preview)
+│   ├── region_dock.py              # NIfTI region selection dock
+│   ├── gestational_weeks_dialog.py # Gestational week and axis selector
+│   ├── image_browser_dialog.py     # Thumbnail image browser
 │   ├── optimization_widgets.py     # Optimization configuration dialog
-│   └── Recent_paths.py             # Recent file management
+│   ├── manual_gasp_dialog.py       # Manual GASP data-entry dialog
+│   ├── preferences_dialog.py       # Tabbed Preferences + GASP Options dialogs
+│   └── recent_paths.py             # Recent file management
 │
 ├── functions/                # Measurement and processing algorithms
 │   ├── measurements_image.py       # 2D image morphometrics
-│   ├── measurements_Nifti.py       # NIfTI volumetric analysis
+│   ├── measurements_nifti.py       # NIfTI volumetric analysis
 │   ├── measurements_stl.py         # STL mesh measurements
 │   ├── measurements_vtk.py         # VTK mesh measurements
-│   ├── measurement_Batch.py        # Batch image processing
+│   ├── measurement_batch.py        # Batch image processing
 │   ├── curvature.py                # Curvature profiling
 │   ├── hausdorff.py                # Hausdorff distance computation
-│   ├── Nifti2image.py              # NIfTI to PNG slice extraction
-│   ├── Nifti2Stl.py                # NIfTI to STL conversion
+│   ├── nifti_to_image.py           # NIfTI to PNG slice extraction
+│   ├── nifti_to_stl.py             # NIfTI to STL conversion
 │   ├── pial_to_stl.py              # FreeSurfer pial to STL
 │   ├── nii_extractor.py            # FreeSurfer region extraction
+│   ├── validation.py               # QC plotting for NIfTI results
 │   └── optimization.py             # NSGA-II/III optimization
 │
 ├── helpers/                  # Utility modules
-│   ├── Helpers.py                  # Common helper functions
-│   └── Read_Excel.py               # Excel file reading
+│   ├── helpers.py                  # Shared measurement / annotation helpers
+│   ├── cavities.py                 # Surface-connected cavity correction
+│   ├── check_mesh.py               # Heuristic brain-mesh classifier
+│   ├── slice_kind_classifier.py    # ONNX slice-kind inference wrapper
+│   ├── slice_state.py              # Slice geometry state along an axis
+│   ├── gestational_week_profile.py # Reference-statistics registry + GASP scoring
+│   ├── gasp_export.py              # GASP results-folder builder
+│   ├── results_excel_format.py     # Shared result Excel reader/writer
+│   └── read_excel.py               # Excel ingestion for optimization
+│
+├── models/                   # Trained models
+│   ├── slice_kind_cnn.onnx         # Slice-kind CNN (ONNX)
+│   └── slice_kind_cnn_report.md    # Training report
+│
+├── scripts/                  # Offline ML / data scripts
+│   ├── train_slice_kind_cnn.py     # Train the slice-kind CNN
+│   ├── eval_slice_kind_cnn.py      # Evaluate the trained model
+│   ├── cv_slice_kind_cnn.py        # Leave-weeks-out cross-validation
+│   └── migrate_reference_kernel.py # Add kernel_size_mm to the reference CSV
+│
+├── tests/
+│   └── test_mask_perimeter.py      # Crofton vs. arc-length perimeter tests
 │
 ├── assets/
 │   └── icons/                # UI icons (PNG)
 │
 └── Examples/                 # Sample fetal brain data
-    ├── full_slices/                # Full anatomical sections by week
-    └── cropped_slices/             # Cropped sections by week
+    ├── gestational_week_reference.csv  # GASP per-week reference statistics
+    ├── full_slices/                    # Full anatomical sections by week
+    └── cropped_slices/                 # Cropped sections by week
 ```
