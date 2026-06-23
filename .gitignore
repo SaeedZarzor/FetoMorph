@@ -5,6 +5,7 @@ venv/
 .venv/
 env/
 ENV/
+.vscode/
 
 # Project-specific generated folders
 assets/
