@@ -73,6 +73,213 @@ class ColorButton(QPushButton):
 
 
 # ---------------------------------------------------------------------------
+# GASP options dialog
+# ---------------------------------------------------------------------------
+
+class GASPOptionsDialog(QDialog):
+    """Standalone options dialog for Gestational Age Similarity Profile."""
+
+    def __init__(
+        self,
+        viz: VisualizationSettings,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Gestational Age Similarity Profile Options")
+        self.setModal(True)
+        self.viz = viz
+        self._snapshot = viz.snapshot()
+
+        self._build_ui()
+        self._populate_from(viz)
+
+    @staticmethod
+    def _add_row(lay: QFormLayout, label: str, widget: QWidget, tip: str) -> None:
+        widget.setToolTip(tip)
+        lay.addRow(label, widget)
+        lbl = lay.labelForField(widget)
+        if lbl is not None:
+            lbl.setToolTip(tip)
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+
+        lay = QFormLayout()
+        lay.setLabelAlignment(Qt.AlignRight)
+
+        self.cmb_gasp_method = QComboBox()
+        self.cmb_gasp_method.addItem("Metric-level Gaussian Similarity GASP", "gaussian")
+        self.cmb_gasp_method.addItem("Global Distance GASP", "mahalanobis")
+        self.cmb_gasp_method.addItem("Both methods", "both")
+        self._add_row(lay, "Method used:", self.cmb_gasp_method,
+            "Gaussian: averages per-metric similarities. "
+            "Global Distance: sums squared z-scores. "
+            "Both: shows both side by side.")
+
+        self.cmb_gasp_range_penalty = QComboBox()
+        for v in (0.5, 0.25, 0.0):
+            self.cmb_gasp_range_penalty.addItem(f"{v:g}", v)
+        self._add_row(lay, "Range penalty (λ):", self.cmb_gasp_range_penalty,
+            "Gaussian only. Multiplier on per-metric similarity when the "
+            "value lies outside the reference [min, max]. Lower = stronger penalty.")
+
+        self.cmb_gasp_oor_beta = QComboBox()
+        for v in (0.5, 1.0, 2.0):
+            self.cmb_gasp_oor_beta.addItem(f"{v:g}", v)
+        self._add_row(lay, "Out-of-range β:", self.cmb_gasp_oor_beta,
+            "Global Distance only. Additive distance penalty per out-of-range "
+            "metric. Higher = stronger penalty.")
+
+        self.chk_gasp_apply_penalty = QCheckBox()
+        self._add_row(lay, "Apply OOR penalty:", self.chk_gasp_apply_penalty,
+            "Master toggle. When off, λ and β are ignored.")
+
+        self.chk_gasp_weighted_global = QCheckBox()
+        self._add_row(lay, "Weighted Global Distance:", self.chk_gasp_weighted_global,
+            "Use per-metric weights in the Global Distance GASP method.")
+
+        self.btn_gasp_weights = QPushButton("Edit metric weights…")
+        self.btn_gasp_weights.clicked.connect(self._open_weights_dialog)
+        self._add_row(lay, "Metric weights:", self.btn_gasp_weights,
+            "Open a popup to define per-metric weights for both methods.")
+
+        self._lbl_range_penalty = lay.labelForField(self.cmb_gasp_range_penalty)
+        self._lbl_oor_beta = lay.labelForField(self.cmb_gasp_oor_beta)
+        self._lbl_gasp_weights = lay.labelForField(self.btn_gasp_weights)
+
+        self.chk_gasp_apply_penalty.toggled.connect(self._sync_penalty_enabled)
+        self.chk_gasp_weighted_global.toggled.connect(self._sync_weights_enabled)
+
+        root.addLayout(lay)
+
+        bb = QDialogButtonBox(self)
+        self.btn_defaults = bb.addButton("Restore Defaults", QDialogButtonBox.ResetRole)
+        bb.addButton(QDialogButtonBox.Cancel)
+        bb.addButton(QDialogButtonBox.Apply)
+        bb.addButton(QDialogButtonBox.Ok)
+        bb.accepted.connect(self._on_ok)
+        bb.rejected.connect(self._on_cancel)
+        bb.button(QDialogButtonBox.Apply).clicked.connect(self._on_apply)
+        self.btn_defaults.clicked.connect(self._on_restore_defaults)
+        root.addWidget(bb)
+
+    def _sync_penalty_enabled(self, on: bool) -> None:
+        self.cmb_gasp_range_penalty.setEnabled(on)
+        self.cmb_gasp_oor_beta.setEnabled(on)
+        if self._lbl_range_penalty is not None:
+            self._lbl_range_penalty.setEnabled(on)
+        if self._lbl_oor_beta is not None:
+            self._lbl_oor_beta.setEnabled(on)
+
+    def _sync_weights_enabled(self, on: bool) -> None:
+        self.btn_gasp_weights.setEnabled(on)
+        if self._lbl_gasp_weights is not None:
+            self._lbl_gasp_weights.setEnabled(on)
+
+    def _open_weights_dialog(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("GASP — Metric Weights")
+        dlg.setModal(True)
+        lay = QFormLayout(dlg)
+        lay.setLabelAlignment(Qt.AlignRight)
+
+        metric_rows = [
+            ("Area", "_w_area"),
+            ("Perimeter", "_w_perimeter"),
+            ("LGI", "_w_lgi"),
+            ("Compactness", "_w_compactness"),
+            ("Primary sulci count", "_w_primary_count"),
+            ("Secondary sulci count", "_w_secondary_count"),
+            ("Tertiary sulci count", "_w_tertiary_count"),
+            ("Primary mean sulcal depth", "_w_primary_sulcus_values"),
+            ("Secondary mean sulcal depth", "_w_secondary_sulcus_values"),
+            ("Tertiary mean sulcal depth", "_w_tertiary_sulcus_values"),
+        ]
+        spinboxes: dict[str, QDoubleSpinBox] = {}
+        for label, suffix in metric_rows:
+            sb = QDoubleSpinBox()
+            sb.setRange(0.0, 10.0)
+            sb.setSingleStep(0.1)
+            sb.setDecimals(2)
+            sb.setValue(float(getattr(self, suffix, 1.0)))
+            lay.addRow(label + ":", sb)
+            spinboxes[suffix] = sb
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        lay.addRow(bb)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+
+        if dlg.exec() == QDialog.Accepted:
+            for suffix, sb in spinboxes.items():
+                setattr(self, suffix, float(sb.value()))
+
+    def _populate_from(self, vs) -> None:
+        gasp = str(getattr(vs, "gasp_method", "gaussian"))
+        gi = self.cmb_gasp_method.findData(gasp)
+        self.cmb_gasp_method.setCurrentIndex(max(gi, 0))
+
+        rp = float(getattr(vs, "gasp_range_penalty", 0.0))
+        ri = self.cmb_gasp_range_penalty.findData(rp)
+        if ri < 0:
+            ri = self.cmb_gasp_range_penalty.findData(0.0)
+        self.cmb_gasp_range_penalty.setCurrentIndex(max(ri, 0))
+
+        bv = float(getattr(vs, "gasp_oor_beta", 1.0))
+        bi = self.cmb_gasp_oor_beta.findData(bv)
+        if bi < 0:
+            bi = self.cmb_gasp_oor_beta.findData(1.0)
+        self.cmb_gasp_oor_beta.setCurrentIndex(max(bi, 0))
+
+        self.chk_gasp_apply_penalty.setChecked(bool(getattr(vs, "gasp_apply_penalty", True)))
+        self.chk_gasp_weighted_global.setChecked(bool(getattr(vs, "gasp_weighted_global", True)))
+        self._sync_penalty_enabled(self.chk_gasp_apply_penalty.isChecked())
+        self._sync_weights_enabled(self.chk_gasp_weighted_global.isChecked())
+
+        for suffix in (
+            "_w_area", "_w_perimeter", "_w_lgi", "_w_compactness",
+            "_w_primary_count", "_w_secondary_count", "_w_tertiary_count",
+            "_w_primary_sulcus_values", "_w_secondary_sulcus_values",
+            "_w_tertiary_sulcus_values",
+        ):
+            setattr(self, suffix, float(getattr(vs, "gasp" + suffix, 1.0)))
+
+    def _collect(self) -> dict:
+        return {
+            "gasp_method": str(self.cmb_gasp_method.currentData() or "gaussian"),
+            "gasp_range_penalty": float(self.cmb_gasp_range_penalty.currentData() or 0.0),
+            "gasp_oor_beta": float(self.cmb_gasp_oor_beta.currentData() or 1.0),
+            "gasp_apply_penalty": bool(self.chk_gasp_apply_penalty.isChecked()),
+            "gasp_weighted_global": bool(self.chk_gasp_weighted_global.isChecked()),
+            "gasp_w_area": float(getattr(self, "_w_area", 1.0)),
+            "gasp_w_perimeter": float(getattr(self, "_w_perimeter", 0.0)),
+            "gasp_w_lgi": float(getattr(self, "_w_lgi", 2.0)),
+            "gasp_w_compactness": float(getattr(self, "_w_compactness", 1.0)),
+            "gasp_w_primary_count": float(getattr(self, "_w_primary_count", 1.5)),
+            "gasp_w_secondary_count": float(getattr(self, "_w_secondary_count", 1.5)),
+            "gasp_w_tertiary_count": float(getattr(self, "_w_tertiary_count", 1.0)),
+            "gasp_w_primary_sulcus_values": float(getattr(self, "_w_primary_sulcus_values", 1.5)),
+            "gasp_w_secondary_sulcus_values": float(getattr(self, "_w_secondary_sulcus_values", 1.5)),
+            "gasp_w_tertiary_sulcus_values": float(getattr(self, "_w_tertiary_sulcus_values", 1.0)),
+        }
+
+    def _on_apply(self) -> None:
+        self.viz.apply(self._collect())
+        self.viz.save()
+
+    def _on_ok(self) -> None:
+        self._on_apply()
+        self.accept()
+
+    def _on_cancel(self) -> None:
+        self.viz.restore(self._snapshot)
+        self.reject()
+
+    def _on_restore_defaults(self) -> None:
+        self._populate_from(defaults())
+
+
+# ---------------------------------------------------------------------------
 # Preferences dialog
 # ---------------------------------------------------------------------------
 
@@ -90,15 +297,12 @@ class PreferencesDialog(QDialog):
         self.viz = viz
         self._snapshot = viz.snapshot()
 
-        # The parent (MainWindow) owns ``draw_hallmarks_on_image`` and
-        # ``contour_mode`` via property delegates to SettingsManager. Snapshot
-        # both so Cancel can roll them back if the user changes them and aborts.
+        # The parent (MainWindow) owns ``draw_hallmarks_on_image`` via a
+        # property delegate to SettingsManager. Snapshot it so Cancel can roll
+        # it back if the user changes it and aborts.
         self._draw_hallmarks_snapshot = bool(
             getattr(parent, "draw_hallmarks_on_image", True)
         ) if parent is not None else True
-        self._contour_mode_snapshot = str(
-            getattr(parent, "contour_mode", "outer")
-        ) if parent is not None else "outer"
 
         self._build_ui()
         self._populate_from(viz)
@@ -274,18 +478,6 @@ class PreferencesDialog(QDialog):
         self._add_row(lay, "Draw hallmarks on image:", self.chk_draw_hallmarks,
             "When on, the Area / Perimeter / lGI text block is drawn in the corner of annotated images.")
 
-        self.cmb_contour_mode = QComboBox()
-        # itemData carries the canonical mode string; itemText is the label
-        self.cmb_contour_mode.addItem("Outer contours only", "outer")
-        self.cmb_contour_mode.addItem("Subtract internal contours", "subtract")
-        self.cmb_contour_mode.addItem("Internal contours only", "internal_only")
-        self._add_row(lay, "Contour accounting:", self.cmb_contour_mode,
-            "How VTK Area / Volume / Compactness use nested contours (e.g. ventricles). "
-            "`Outer only` measures the brain outline (default). `Subtract internal` subtracts "
-            "the area of qualifying internal contours from the brain area. `Internal only` "
-            "measures only the internal contours. Internal contours must still pass the "
-            "filtered-area threshold.")
-
         self.chk_label_overlay = QCheckBox()
         self._add_row(lay, "Show label overlay:", self.chk_label_overlay,
             "When on, NIfTI region labels are blended as colored overlays onto 2-D slices.")
@@ -322,20 +514,14 @@ class PreferencesDialog(QDialog):
 
         # Mirror the live ``draw_hallmarks_on_image`` from the main window.
         # On Restore Defaults (vs is a VizDefaults instance) fall back to the
-        # factory defaults: draw_hallmarks=on, contour_mode="outer".
+        # factory default: draw_hallmarks=on.
         if not isinstance(vs, type(defaults())):
             parent = self.parent()
             self.chk_draw_hallmarks.setChecked(
                 bool(getattr(parent, "draw_hallmarks_on_image", True))
             )
-            mode = str(getattr(parent, "contour_mode", "outer"))
         else:
             self.chk_draw_hallmarks.setChecked(True)
-            mode = "outer"
-        idx = self.cmb_contour_mode.findData(mode)
-        if idx < 0:
-            idx = 0  # fall back to first item ("outer")
-        self.cmb_contour_mode.setCurrentIndex(idx)
 
     def _collect(self) -> dict:
         return {
@@ -361,35 +547,12 @@ class PreferencesDialog(QDialog):
 
     # ----- button slots -----
 
-    @staticmethod
-    def _sync_contour_mode_menu(parent, mode: str) -> None:
-        """Tick the matching radio in the Adjustments contour-mode submenu."""
-        attr = {
-            "outer":         "act_contour_outer",
-            "subtract":      "act_contour_subtract",
-            "internal_only": "act_contour_internal_only",
-        }.get(mode)
-        if attr is None:
-            return
-        group = getattr(parent, "contour_mode_group", None)
-        act = getattr(parent, attr, None)
-        if group is not None:
-            group.blockSignals(True)
-        if act is not None:
-            act.setChecked(True)
-        if group is not None:
-            group.blockSignals(False)
-
     def _on_apply(self) -> None:
         self.viz.apply(self._collect())
         self.viz.save()
         parent = self.parent()
         if parent is not None and hasattr(parent, "draw_hallmarks_on_image"):
             parent.draw_hallmarks_on_image = bool(self.chk_draw_hallmarks.isChecked())
-        if parent is not None and hasattr(parent, "contour_mode"):
-            new_mode = str(self.cmb_contour_mode.currentData() or "outer")
-            parent.contour_mode = new_mode
-            self._sync_contour_mode_menu(parent, new_mode)
 
     def _on_ok(self) -> None:
         self._on_apply()
@@ -400,9 +563,6 @@ class PreferencesDialog(QDialog):
         parent = self.parent()
         if parent is not None and hasattr(parent, "draw_hallmarks_on_image"):
             parent.draw_hallmarks_on_image = self._draw_hallmarks_snapshot
-        if parent is not None and hasattr(parent, "contour_mode"):
-            parent.contour_mode = self._contour_mode_snapshot
-            self._sync_contour_mode_menu(parent, self._contour_mode_snapshot)
         self.reject()
 
     def _on_restore_defaults(self) -> None:

@@ -50,6 +50,25 @@ class VizDefaults:
     vtk_background_rgbf: tuple = (0.07, 0.07, 0.07)
     vtk_surface_rgbf: tuple = (0.69, 0.77, 0.87)
 
+    # --- Gestational Age Similarity Profile (GASP) ---
+    gasp_method: str = "gaussian"  # gaussian | mahalanobis | both
+    gasp_range_penalty: float = 0.0  # λ for Gaussian: 0 / 0.25 / 0.5
+    gasp_oor_beta: float = 1.0  # β for Mahalanobis: 0.5 / 1.0 / 2.0
+    gasp_apply_penalty: bool = True  # master toggle for OOR penalty
+    gasp_weighted_global: bool = True  # use weights in Global Distance GASP
+
+    # --- GASP per-metric weights ---
+    gasp_w_area: float = 1.0
+    gasp_w_perimeter: float = 0.0
+    gasp_w_lgi: float = 2.0
+    gasp_w_compactness: float = 1.0
+    gasp_w_primary_count: float = 1.5
+    gasp_w_secondary_count: float = 1.5
+    gasp_w_tertiary_count: float = 1.0
+    gasp_w_primary_sulcus_values: float = 1.5
+    gasp_w_secondary_sulcus_values: float = 1.5
+    gasp_w_tertiary_sulcus_values: float = 1.0
+
 
 _DEFAULTS = VizDefaults()
 _DEFAULTS_DICT = asdict(_DEFAULTS)

@@ -90,10 +90,12 @@ class MetricsStore:
         *,
         pixel_size: float | None = None,
         pixel_size_units: str | None = None,
-        kernel_size: float | None = None,
+        kernel_size_mm: float | None = None,
+        kernel_size_px: int | None = None,
         unit: str | None = None,
         slice_thickness: float | None = None,
         contour_mode: str | None = None,
+        perimeter_method: str | None = None,
         new_on_param_change: bool = False,
     ):
         """Ensure a metrics row exists for a given (path, annotation) pair.
@@ -125,11 +127,13 @@ class MetricsStore:
             or (new_on_param_change and any([
                 differs("PixelSize", pixel_size),
                 differs("PixelSizeUnits", pixel_size_units),
-                differs("KernelSize", kernel_size),
+                differs("KernelSizeMm", kernel_size_mm),
+                differs("KernelSizePx", kernel_size_px),
                 differs("SliceThickness", slice_thickness),
                 differs("LengthUnit", unit),
                 differs("SliceDirection", direction),
                 differs("ContourMode", contour_mode),
+                differs("PerimeterMethod", perimeter_method),
             ]))
         )
 
@@ -144,7 +148,10 @@ class MetricsStore:
                 "Area": None,
                 "PixelSize": pixel_size if pixel_size is not None else (last.get("PixelSize") if last else None),
                 "PixelSizeUnits": pixel_size_units if pixel_size_units is not None else (last.get("PixelSizeUnits") if last else None),
-                "KernelSize": kernel_size if kernel_size is not None else (last.get("KernelSize") if last else None),
+                "KernelSizeMm": kernel_size_mm if kernel_size_mm is not None else (last.get("KernelSizeMm") if last else None),
+                "KernelSizePx": kernel_size_px if kernel_size_px is not None else (last.get("KernelSizePx") if last else None),
+                "KernelSize": kernel_size_mm if kernel_size_mm is not None else (last.get("KernelSize") if last else None),
+                "PerimeterMethod": perimeter_method if perimeter_method is not None else (last.get("PerimeterMethod") if last else None),
                 "LengthUnit": unit if unit is not None else (last.get("LengthUnit") if last else None),
                 "SliceThickness": slice_thickness if slice_thickness is not None else (last.get("SliceThickness") if last else None),
                 "ContourMode": (
@@ -157,13 +164,16 @@ class MetricsStore:
                 "Height(IS)": None,
                 "Volume": None,
                 "Perimeter": None,
-                "Perimeter_convex": None,
+                "Closed-envelopePerimeter": None,
                 "SliceKind": None,
                 "SulciCount": None,
                 "PrimarySulciCount": None,
                 "SecondarySulciCount": None,
                 "TertiarySulciCount": None,
                 "UnclassifiedSulciCount": None,
+                "PrimaryMeanDepth": None,
+                "SecondaryMeanDepth": None,
+                "TertiaryMeanDepth": None,
                 "MinDepth": None,
                 "MaxDepth": None,
                 "MeanDepth": None,
@@ -182,8 +192,13 @@ class MetricsStore:
             last["PixelSize"] = pixel_size
         if pixel_size_units is not None:
             last["PixelSizeUnits"] = pixel_size_units
-        if kernel_size is not None:
-            last["KernelSize"] = kernel_size
+        if kernel_size_mm is not None:
+            last["KernelSizeMm"] = kernel_size_mm
+            last["KernelSize"] = kernel_size_mm
+        if kernel_size_px is not None:
+            last["KernelSizePx"] = kernel_size_px
+        if perimeter_method is not None:
+            last["PerimeterMethod"] = perimeter_method
         if unit is not None:
             last["LengthUnit"] = unit
         if slice_thickness is not None:
@@ -203,20 +218,26 @@ class MetricsStore:
 
         psize = vals.pop("pixel_size", None)
         punit = vals.pop("pixel_size_units", None)
-        ksize = vals.pop("kernel_size", None)
+        ksize_mm = vals.pop("kernel_size_mm", vals.pop("kernel_size", None))
+        ksize_px = vals.pop("kernel_size_px", None)
         thicsl = vals.pop("slice_thickness", None)
         direction = vals.pop("direction", None)
         uni = vals.pop("unit", None)
         cmode = vals.pop("contour_mode", None)
+        pmethod = vals.pop("perimeter_method", None)
+        if pmethod is None and kind in {"image", "nifti"}:
+            pmethod = getattr(getattr(self.mw, "settings", None), "perimeter_method", None)
         row = self.ensure_metric_row(
             path, kind, label, annotation,
             source, direction,
             pixel_size=psize,
             pixel_size_units=punit,
-            kernel_size=ksize,
+            kernel_size_mm=ksize_mm,
+            kernel_size_px=ksize_px,
             unit=uni,
             slice_thickness=thicsl,
             contour_mode=cmode,
+            perimeter_method=pmethod,
             new_on_param_change=True,
         )
 
@@ -240,10 +261,16 @@ class MetricsStore:
 
         sds = vals.pop("sulci_depth_sets", None)
         if sds is not None and isinstance(sds, dict):
-            row["PrimarySulciCount"] = len(sds.get("primary", []))
-            row["SecondarySulciCount"] = len(sds.get("secondary", []))
-            row["TertiarySulciCount"] = len(sds.get("tertiary", []))
-            row["UnclassifiedSulciCount"] = len(sds.get("unclassified", []))
+            for key, row_key, mean_key in (
+                ("primary", "PrimarySulciCount", "PrimaryMeanDepth"),
+                ("secondary", "SecondarySulciCount", "SecondaryMeanDepth"),
+                ("tertiary", "TertiarySulciCount", "TertiaryMeanDepth"),
+                ("unclassified", "UnclassifiedSulciCount", None),
+            ):
+                vals_list = sds.get(key, [])
+                row[row_key] = len(vals_list)
+                if mean_key is not None:
+                    row[mean_key] = (sum(vals_list) / len(vals_list)) if vals_list else None
 
         ld = vals.pop("dimensions", None)
         if ld is not None:
@@ -262,7 +289,8 @@ class MetricsStore:
             "area": "Area",
             "volume": "Volume",
             "perimeter": "Perimeter",
-            "perimeter_convex": "Perimeter_convex",
+            "perimeter_internal": "InteriorPerimeter",
+            "perimeter_outer_envelope": "Closed-envelopePerimeter",
             "lgi": "LGI",
             "compactness": "Compactness",
         }
@@ -280,13 +308,14 @@ class MetricsStore:
         """Return the ordered list of column header strings."""
         return [
             "File", "Kind", "Label", "Annotation", "Source", "SliceDirection",
-            "PixelSize", "PixelSizeUnits", "KernelSize", "LengthUnit", "SliceThickness",
-            "ContourMode", "Length(PA)", "Width(LR)", "Height(IS)", "SliceKind",
-            "Area", "Volume", "Perimeter", "Perimeter_convex",
+            "PixelSize", "PixelSizeUnits", "KernelSizeMm", "KernelSizePx", "KernelSize", "LengthUnit", "SliceThickness",
+            "PerimeterMethod", "ContourMode", "Length(PA)", "Width(LR)", "Height(IS)", "SliceKind",
+            "Area", "Volume", "Perimeter", "Closed-envelopePerimeter",
             "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
             "TertiarySulciCount", "UnclassifiedSulciCount",
+            "PrimaryMeanDepth", "SecondaryMeanDepth", "TertiaryMeanDepth",
             "MinDepth", "MaxDepth", "MeanDepth",
-            "LGI", "Compactness", 
+            "LGI", "Compactness",
         ]
 
     def show_results_dock(self) -> None:
@@ -394,76 +423,130 @@ class MetricsStore:
     # ------------------------------------------------------------------
 
     def export_metrics_excel(self) -> None:
-        """Export all collected metrics to an Excel .xlsx file."""
+        """Export collected metrics to an Excel workbook with one
+        spec-layout sheet per source file. Each per-measurement row
+        carries the adjustment parameters that were active when that
+        row was recorded, so re-measuring the same file with different
+        kernel size / pixel size / threshold / contour mode produces
+        rows that reflect those changes."""
         mw = self.mw
         if not self.metrics:
             QMessageBox.information(mw, "Export Metrics", "No metrics to export yet.")
             return
 
-        base_cols = ["File", "Kind"]
-        metric_cols = [
-            "Label", "Annotation", "Source", "SliceDirection",
-            "PixelSize", "PixelSizeUnits", "KernelSize", "LengthUnit", "SliceThickness",
-            "ContourMode", "Length(PA)", "Width(LR)", "Height(IS)", "SliceKind",
-            "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
-            "TertiarySulciCount", "UnclassifiedSulciCount",
-            "MinDepth", "MaxDepth", "MeanDepth",
-            "LGI", "Compactness", 
-        ]
-        cols = base_cols + metric_cols
+        from helpers.results_excel_format import (
+            ResultsSheet, write_results_workbook,
+        )
 
-        flat_rows = []
-        for _path, rows in self.metrics.items():
-            if rows is None:
+        # EVERY result column a measurement can populate (keep in sync with
+        # record_metric_for). A file is exported if ANY of these is non-empty
+        # for at least one of its rows — so Volume-only / Sulci-depth-only /
+        # perimeter-only measurements are no longer silently dropped.
+        metric_keys = (
+            "Area", "Volume", "Perimeter", "InteriorPerimeter",
+            "Closed-envelopePerimeter", "LGI", "Compactness",
+            "SulciCount", "MinDepth", "MaxDepth", "MeanDepth",
+            "PrimarySulciCount", "SecondarySulciCount",
+            "TertiarySulciCount", "UnclassifiedSulciCount",
+            "PrimaryMeanDepth", "SecondaryMeanDepth",
+            "TertiaryMeanDepth", "UnclassifiedMeanDepth",
+        )
+        # Result columns above that the spec layout's RESULTS_COLUMNS does not
+        # already render (Area/Perimeter/LGI/Compactness/per-class sulci are
+        # rendered automatically). These are added to extra_columns so their
+        # values actually appear; drop_empty_columns hides the unused ones.
+        extra_metric_columns = (
+            "Volume", "InteriorPerimeter", "Closed-envelopePerimeter",
+            "SulciCount", "MinDepth", "MaxDepth", "MeanDepth",
+        )
+        # Adjustment parameters that may differ across measurement runs
+        # of the same file. Each becomes a per-row column so the values
+        # used for each measurement are visible inline.
+        extra_columns = (
+            "Folder",
+            "Kernel size (mm)",
+            "Kernel size (px)",
+            "PERIMETER METHOD",
+            "Pixel spacing",
+            "Slice thickness",
+            "Contour mode",
+            "Slice direction",
+            "Length unit",
+        ) + extra_metric_columns
+
+        def _pixel_spacing(r: dict) -> str | None:
+            v = r.get("PixelSize")
+            if v in (None, ""):
+                return None
+            u = r.get("PixelSizeUnits") or r.get("LengthUnit") or ""
+            return f"{v} {u}/pixel".strip()
+
+        # Group every recorded measurement row by file KIND → one sheet per
+        # kind (a new kind starts a new sheet). Each row is one measurement and
+        # its row-label column is the source file name. Distinct file name /
+        # parameter / setting / annotation / label values already produce
+        # distinct rows in the store, so they appear as separate rows within
+        # the kind's sheet.
+        grouped: dict[str, list[dict]] = {}
+        for path, rows in self.metrics.items():
+            if not rows:
                 continue
             if isinstance(rows, dict):
                 rows = [rows]
-            for row in rows:
-                flat_rows.append({c: row.get(c) for c in cols})
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                if not any(r.get(k) is not None for k in metric_keys):
+                    continue
+                kind = str(r.get("Kind") or "Results")
+                file_name = r.get("File") or (os.path.basename(path) if path else "—")
+                folder = r.get("Folder") or (os.path.dirname(path) if path else "")
+                row_dict = {
+                    "File name": file_name,
+                    "Folder": folder,
+                    "Kernel size (mm)": r.get("KernelSizeMm", r.get("KernelSize")),
+                    "Kernel size (px)": r.get("KernelSizePx"),
+                    "PERIMETER METHOD": r.get("PerimeterMethod"),
+                    "Pixel spacing": _pixel_spacing(r),
+                    "Slice thickness": r.get("SliceThickness"),
+                    "Contour mode": r.get("ContourMode"),
+                    "Slice direction": r.get("SliceDirection"),
+                    "Length unit": r.get("LengthUnit"),
+                }
+                for k in metric_keys:
+                    row_dict[k] = r.get(k)
+                grouped.setdefault(kind, []).append(row_dict)
 
-        if not flat_rows:
-            QMessageBox.information(mw, "Export Metrics", "No metrics to export yet.")
-            return
-
-        try:
-            import pandas as pd
-        except Exception:
-            QMessageBox.critical(
-                mw, "Export Metrics",
-                "Pandas is required to export to Excel.\nInstall with:\n  pip install pandas openpyxl",
+        # The top Parameters block is left intentionally empty for the
+        # cross-measurement dock export: the per-row columns below carry the
+        # authoritative per-run values, and a single summary block at the top
+        # would silently hide rows whose parameters differ from the first one.
+        sheets: list[ResultsSheet] = [
+            ResultsSheet(
+                sheet_name=kind,
+                file_name=None,
+                folder=None,
+                kind=kind,
+                parameters={},
+                rows=results_rows,
+                extra_columns=extra_columns,
+                drop_empty_columns=True,
+                section_header="File name",
             )
-            return
-
-        df = pd.DataFrame(flat_rows, columns=cols)
-
-        real_metric_cols = [
-            "PixelSize", "KernelSize", "SliceThickness",
-            "Length(PA)", "Width(LR)", "Height(IS)",
-            "Area", "Volume", "Perimeter", "Perimeter_convex",
-            "SulciCount", "PrimarySulciCount", "SecondarySulciCount",
-            "TertiarySulciCount", "UnclassifiedSulciCount",
-            "MinDepth", "MaxDepth", "MeanDepth",
-            "LGI", "Compactness",
+            for kind, results_rows in grouped.items()
         ]
-        has_any_metric = df[real_metric_cols].notna().any(axis=1)
-        df = df.loc[has_any_metric].copy()
 
-        if df.empty:
-            QMessageBox.information(mw, "Export Metrics", "No non-empty metrics to export yet.")
+        if not sheets:
+            QMessageBox.information(
+                mw, "Export Metrics",
+                "No non-empty metrics to export yet.")
             return
-
-        drop_all_null = [
-            c for c in real_metric_cols + ["Label", "Annotation", "Source", "SliceDirection", "LengthUnit", "PixelSizeUnits"]
-            if c in df.columns and df[c].isna().all()
-        ]
-        if drop_all_null:
-            df.drop(columns=drop_all_null, inplace=True)
 
         last_dir = getattr(self.mw, "last_dir", os.getcwd())
         default_name = os.path.join(last_dir, "metrics.xlsx")
         path, _ = QFileDialog.getSaveFileName(
-            mw, "Export Metrics to Excel…", default_name, "Excel Workbook (*.xlsx)",
+            mw, "Export Metrics to Excel…", default_name,
+            "Excel Workbook (*.xlsx)",
         )
         if not path:
             return
@@ -483,19 +566,23 @@ class MetricsStore:
                     print(f"Created folder: {folder}")
                 except Exception as ex:
                     logger.error("Error creating folder: %s", ex)
-                    QMessageBox.critical(mw, "Export Failed", f"Could not create folder:\n{ex}")
+                    QMessageBox.critical(
+                        mw, "Export Failed",
+                        f"Could not create folder:\n{ex}")
                     return
             else:
                 return
 
         try:
-            df.to_excel(path, index=False)
+            write_results_workbook(path, sheets)
             print(f"Exported metrics to: {path}")
             if folder:
                 self.mw.last_dir = folder
         except Exception as ex:
             logger.error("Error exporting metrics: %s", ex)
-            QMessageBox.critical(mw, "Export Failed", f"{type(ex).__name__}: {ex}")
+            QMessageBox.critical(
+                mw, "Export Failed",
+                f"{type(ex).__name__}: {ex}")
 
     # ------------------------------------------------------------------
     # Utilities

@@ -19,6 +19,7 @@ from constants import (DEFAULT_NIFTI_REGIONS, WINDOW_WIDTH, WINDOW_HEIGHT,
                        CONSOLE_MAX_BLOCKS)
 from functions.nifti_to_image import nifti_slice_to_image
 from functions.hausdorff import convert_image
+from functions.measurements_image import put_label_on_bgr
 from functions.nii_extractor import nifti_extractor
 from widgets.scaled_image_label import ScaledImageLabel
 from widgets.vtk_viewer import VTKViewer
@@ -36,7 +37,7 @@ from managers.file_manager import FileManager
 from managers.view_manager import ViewManager
 from managers.measurement_dispatcher import MeasurementDispatcher
 from managers.visualization_settings import VisualizationSettings, set_active as set_active_viz
-from widgets.preferences_dialog import PreferencesDialog
+from widgets.preferences_dialog import GASPOptionsDialog, PreferencesDialog
 
 import logging
 
@@ -210,6 +211,7 @@ class MainWindow(QMainWindow):
     image_scale_from_scalebar = _settings_prop("image_scale_from_scalebar")
     draw_hallmarks_on_image   = _settings_prop("draw_hallmarks_on_image")
     cnt_threshold      = _settings_prop("cnt_threshold")
+    kernel_size_mm     = _settings_prop("kernel_size_mm")
     kernel_size        = _settings_prop("kernel_size")
     contour_mode               = _settings_prop("contour_mode")
     slice_thickness    = _settings_prop("slice_thickness")
@@ -360,13 +362,13 @@ class MainWindow(QMainWindow):
         self.act_meas_curve = QAction("Curve Length", self); self.act_meas_curve.triggered.connect(self.dispatcher.on_measure_curve_length); measures_menu.addAction(self.act_meas_curve)
         self.act_meas_stright = QAction("Straight", self); self.act_meas_stright.triggered.connect(self.dispatcher.on_measure_straight); measures_menu.addAction(self.act_meas_stright)
         self.act_meas_sulci = QAction("Sulci Depth", self); self.act_meas_sulci.triggered.connect(self.dispatcher.on_measure_sulci_depth); measures_menu.addAction(self.act_meas_sulci)
-        process_menu.addSeparator()
         
         analysis_menu = process_menu.addMenu("Analysis")
         self.act_meas_lgi = QAction("LGI", self); self.act_meas_lgi.triggered.connect(self.dispatcher.on_measure_lgi); analysis_menu.addAction(self.act_meas_lgi); self.act_meas_lgi.setToolTip("Compute Local Gyrification Index")
         self.act_meas_curvature = QAction("Curvature", self); self.act_meas_curvature.triggered.connect(self.dispatcher.on_measure_curvature); analysis_menu.addAction(self.act_meas_curvature)
         self.act_meas_compactness = QAction("Compactness", self); self.act_meas_compactness.triggered.connect(self.dispatcher.on_measure_compactness); analysis_menu.addAction(self.act_meas_compactness); self.act_meas_compactness.setToolTip("Measure of how closely a shape approaches the most space-efficient form")
         self.act_hausdorf = QAction("Hausdorff distance", self); self.act_hausdorf.triggered.connect(self.dispatcher.on_measure_hausdorff); analysis_menu.addAction(self.act_hausdorf)
+        self.act_similarity_profile = QAction("Similarity Profile", self); self.act_similarity_profile.triggered.connect(self.dispatcher.on_measure_similarity_profile); analysis_menu.addAction(self.act_similarity_profile); self.act_similarity_profile.setToolTip("Gestational Age Similarity Profile (GASP) compares the current brain's morphometrics to reference profiles for each gestational week, returning a similarity score that may help estimate the brain's developmental age.")
         process_menu.addSeparator()
         
         self.act_img_batch = QAction("Process images batch", self); self.act_img_batch.triggered.connect(self.dispatcher.on_process_batch); process_menu.addAction(self.act_img_batch)
@@ -382,11 +384,13 @@ class MainWindow(QMainWindow):
         self.act_set_scale = QAction("Set Scale From Scalebar…", self);self.act_set_scale.triggered.connect(self.settings.set_scale_from_scalebar);
         Adjustments_menu.addAction(self.act_set_scale)
         self.act_kernel_size = QAction("Set Kernel Size…", self); self.act_kernel_size.triggered.connect(self.settings.set_kernel_dialog); Adjustments_menu.addAction(self.act_kernel_size)
+        self.act_perimeter_options = QAction("Perimeter Method…", self); self.act_perimeter_options.triggered.connect(self.settings.set_perimeter_options_dialog); Adjustments_menu.addAction(self.act_perimeter_options)
         self.act_slice_thickness = QAction("Set Slice Thickness…", self); self.act_slice_thickness.triggered.connect(self.settings.set_slice_thickness_dialog); Adjustments_menu.addAction(self.act_slice_thickness); self.act_slice_thickness.setToolTip("Set the distance between slices")
         self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.settings.set_cnt_threshold_dialog); Adjustments_menu.addAction(self.act_cnt_threshold)
+        self.act_gasp_options = QAction("GASP Options", self); self.act_gasp_options.triggered.connect(self._open_gasp_options); Adjustments_menu.addAction(self.act_gasp_options)
         # Contour-accounting mode: 3-way exclusive submenu under Adjustments.
         from PySide6.QtGui import QActionGroup
-        contour_mode_menu = Adjustments_menu.addMenu("Contour accounting")
+        contour_mode_menu = Adjustments_menu.addMenu("Contour Accounting")
         self.contour_mode_group = QActionGroup(self)
         self.contour_mode_group.setExclusive(True)
 
@@ -424,6 +428,15 @@ class MainWindow(QMainWindow):
             if mode:
                 self.contour_mode = mode
         self.contour_mode_group.triggered.connect(_on_contour_mode_changed)
+
+        # Surface-connected cavity correction (volume / surface area) — enable
+        # toggle + area threshold combined in one dialog.
+        self.act_cavity_options = QAction("Surface-Connected Cavities…", self)
+        self.act_cavity_options.setToolTip(
+            "Enable/disable the surface-connected cavity correction and set its area threshold.")
+        self.act_cavity_options.triggered.connect(self.settings.set_cavity_options_dialog)
+        Adjustments_menu.addAction(self.act_cavity_options)
+
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Adjustments_menu.addAction(self.act_annotate_square)
         self.act_choose_regions = QAction("ROI selection…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Adjustments_menu.addAction(self.act_choose_regions)
         self.act_set_physical_dim = QAction("Mesh dimensions…", self);self.act_set_physical_dim.setToolTip("Define the physical dimensions of the VTK mesh."); self.act_set_physical_dim.triggered.connect(self.settings.load_mesh_and_ask_geometry);Adjustments_menu.addAction(self.act_set_physical_dim)
@@ -468,6 +481,7 @@ class MainWindow(QMainWindow):
             self.act_set_image_scale,
             self.act_set_scale,
             self.act_kernel_size,
+            self.act_perimeter_options,
             self.act_cnt_threshold,
             self.act_set_custom_label,
             self.act_meas_allmarks,
@@ -492,7 +506,7 @@ class MainWindow(QMainWindow):
         vtk_output = QtVTKOutputWindow(self._qt_console); vtkOutputWindow.SetInstance(vtk_output)
         print("Application started. Progress output will appear here.")
 
-        self.all_actions = {self.act_show_results, self.act_Reset, self.act_close, self.act_quit, self.act_imp_img, self.act_imp_vtk, self.act_imp_stl, self.act_imp_nii, self.act_save, self.act_save_data, self.act_export_metrics, self.act_meas_allmarks, self.act_meas_perimeter, self.act_meas_area, self.act_meas_volumes, self.act_meas_lgi, self.act_meas_sulci, self.act_meas_curvature, self.act_meas_compactness, self.act_hausdorf, self.act_set_custom_label,  self.act_set_image_scale, self.act_set_scale,  self.act_kernel_size, self.act_slice_thickness,  self.act_cnt_threshold, self.act_contour_outer, self.act_contour_subtract, self.act_contour_internal_only, self.act_annotate_square, self.act_choose_regions, self.act_optimization, self.act_nitfi2png, self.act_niftiextractor, self.act_pial_to_stl, self.act_pial_merge, self.act_img_batch, self.act_set_physical_dim}
+        self.all_actions = {self.act_show_results, self.act_Reset, self.act_close, self.act_quit, self.act_imp_img, self.act_imp_vtk, self.act_imp_stl, self.act_imp_nii, self.act_save, self.act_save_data, self.act_export_metrics, self.act_meas_allmarks, self.act_meas_perimeter, self.act_meas_area, self.act_meas_volumes, self.act_meas_lgi, self.act_meas_sulci, self.act_meas_curvature, self.act_meas_compactness, self.act_hausdorf, self.act_set_custom_label,  self.act_set_image_scale, self.act_set_scale,  self.act_kernel_size, self.act_perimeter_options, self.act_slice_thickness,  self.act_cnt_threshold, self.act_contour_outer, self.act_contour_subtract, self.act_contour_internal_only, self.act_cavity_options, self.act_annotate_square, self.act_choose_regions, self.act_optimization, self.act_nitfi2png, self.act_niftiextractor, self.act_pial_to_stl, self.act_pial_merge, self.act_img_batch, self.act_set_physical_dim}
         self._update_process_actions()
     
 
@@ -544,6 +558,7 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Analysis", self.act_meas_curvature)
         self.ribbon.add_action("Analysis", self.act_meas_compactness)
         self.ribbon.add_action("Analysis", self.act_hausdorf)
+        self.ribbon.add_action("Analysis", self.act_similarity_profile)
         
         self.ribbon.add_action("Process", self.act_img_batch)
         self.ribbon.add_action("Process", self.act_optimization)
@@ -555,8 +570,10 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Adjustments", self.act_set_image_scale)
         self.ribbon.add_action("Adjustments", self.act_set_scale)
         self.ribbon.add_action("Adjustments", self.act_kernel_size)
+        self.ribbon.add_action("Adjustments", self.act_perimeter_options)
         self.ribbon.add_action("Adjustments", self.act_slice_thickness)
         self.ribbon.add_action("Adjustments", self.act_cnt_threshold)
+        self.ribbon.add_action("Adjustments", self.act_cavity_options)
         self.ribbon.add_action("Adjustments", self.act_annotate_square)
         self.ribbon.add_action("Adjustments", self.act_choose_regions)
         self.ribbon.add_action("Adjustments", self.act_set_physical_dim)
@@ -621,6 +638,11 @@ class MainWindow(QMainWindow):
     def _open_preferences(self):
         """Show the visualization preferences dialog."""
         dlg = PreferencesDialog(self.viz, self)
+        dlg.exec()
+
+    def _open_gasp_options(self):
+        """Show Gestational Age Similarity Profile options."""
+        dlg = GASPOptionsDialog(self.viz, self)
         dlg.exec()
 
     def _on_viz_settings_changed(self):
@@ -778,6 +800,7 @@ class MainWindow(QMainWindow):
                 self.act_show_results,
                 self.act_Reset,
                 self.act_kernel_size,
+                self.act_perimeter_options,
                 self.act_cnt_threshold,
                 self.act_set_custom_label,
                 self.act_set_image_scale,
@@ -799,6 +822,12 @@ class MainWindow(QMainWindow):
         self._update_process_actions()
 
 
+    def _set_contour_accounting_enabled(self, flag: bool) -> None:
+        """Enable/disable the Contour Accounting radio actions together."""
+        for a in (self.act_contour_outer, self.act_contour_subtract,
+                  self.act_contour_internal_only):
+            a.setEnabled(flag)
+
     def _update_process_actions(self):
         """Enable or disable Process/Analysis menu actions based on the current file type.
 
@@ -806,6 +835,18 @@ class MainWindow(QMainWindow):
         subset of measurements; this method keeps the UI consistent.
         """
         kind = self.current_kind
+
+        # Contour Accounting applies only to the 2-D image pipeline — single
+        # images and planar meshes (which route through it); the image batch
+        # loads its first image first, so that case is covered by the "image"
+        # branch. Off by default (nothing applicable loaded); enabled per-kind
+        # below. True 3-D STL/VTK and NIfTI keep it disabled.
+        self._set_contour_accounting_enabled(False)
+
+        # Surface-connected cavity correction applies to 3-D geometry only
+        # (STL/VTK volumetric slicing and NIfTI); off by default and for 2-D
+        # images / planar meshes.
+        self.act_cavity_options.setEnabled(False)
 
         if kind == "stl" or (kind is not None and kind.startswith("vtk")):
             is_planar = self._flat_axis is not None
@@ -820,6 +861,9 @@ class MainWindow(QMainWindow):
             self.act_meas_curvature.setEnabled(False)
             self.act_meas_curve.setEnabled(False)
             self.act_slice_thickness.setEnabled(True)
+            self.act_cavity_options.setEnabled(not is_planar)
+            # 3-D slicing ignores contour_mode; planar meshes use the image path.
+            self._set_contour_accounting_enabled(is_planar)
             self.act_set_image_scale.setEnabled(False)
             self.act_niftiextractor.setEnabled(False)
             self.act_set_scale.setEnabled(False)
@@ -828,6 +872,7 @@ class MainWindow(QMainWindow):
             self.view_mode.setEnabled(False)
             self.act_set_image_scale.setEnabled(False)
             self.act_set_scale.setEnabled(False)
+            self.act_perimeter_options.setEnabled(False)
             self.nav_tb.hide()
             self.view.set_zoom_controls_visible(False)
 
@@ -842,6 +887,8 @@ class MainWindow(QMainWindow):
             self.act_meas_allmarks.setEnabled(True)
             self.act_choose_regions.setEnabled(True)
             self.label_overlay_enabled = True
+            self.act_cavity_options.setEnabled(True)
+            self._set_contour_accounting_enabled(False)
             self.act_nitfi2png.setEnabled(True)
             self.act_meas_curvature.setEnabled(False)
             self.act_meas_curve.setEnabled(False)
@@ -854,12 +901,14 @@ class MainWindow(QMainWindow):
             self.view_mode.setEnabled(True)
             self.act_set_image_scale.setEnabled(False)
             self.act_set_scale.setEnabled(False)
+            self.act_perimeter_options.setEnabled(True)
             self.nav_tb.show()
             self.view.set_zoom_controls_visible(False)
             for w in (self.orient_combo, self.view_mode, self.slice_caption, self.slice_slider, self.slice_value_label):
                 w.setVisible(True)
 
         elif kind == "image":
+            self._set_contour_accounting_enabled(True)
             self.act_meas_area.setEnabled(True)
             self.act_meas_perimeter.setEnabled(True)
             self.act_meas_compactness.setEnabled(True)
@@ -881,6 +930,7 @@ class MainWindow(QMainWindow):
             self.view_mode.setEnabled(False)
             self.act_set_image_scale.setEnabled(True)
             self.act_set_scale.setEnabled(True)
+            self.act_perimeter_options.setEnabled(True)
             self.nav_tb.show()
             for w in (self.orient_combo, self.view_mode, self.slice_caption, self.slice_slider, self.slice_value_label):
                 w.setVisible(False)
@@ -1244,7 +1294,7 @@ class MainWindow(QMainWindow):
         Used during batch processing and Hausdorff workflows so the user
         can adjust the image before confirming with Shift+Alt+E.
         """
-        allow = { self.act_annotate_square, self.act_cnt_threshold, self.act_set_scale, self.act_set_image_scale, self.act_set_custom_label, self.act_kernel_size}
+        allow = { self.act_annotate_square, self.act_cnt_threshold, self.act_set_scale, self.act_set_image_scale, self.act_set_custom_label, self.act_kernel_size, self.act_perimeter_options}
 
         for a in self.all_actions:
             if a in allow:

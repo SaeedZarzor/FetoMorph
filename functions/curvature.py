@@ -82,18 +82,22 @@ def compute_curvature(point: np.ndarray, i: int, contour: np.ndarray, window_siz
     # Return the mean curvature for the central point
     return np.mean(curvature)
 
-def filter_contours_by_area(mask: np.ndarray, min_area: float = 500) -> list[np.ndarray]:
-    """Return contours whose enclosed polygon area exceeds *min_area*."""
+def filter_contours_by_area(mask: np.ndarray, min_area: float = 500, pixel_size: float = 1.0) -> list[np.ndarray]:
+    """Return contours whose enclosed polygon area exceeds *min_area* (mm²).
+
+    ``pixel_size`` (mm/px) converts the polygon's pixel area to mm² so the
+    threshold is physical, matching the rest of the filtered-threshold setting.
+    """
     contours = measure.find_contours(mask, 0.5)
     filtered = []
     for c in contours:
         if len(c) >= 3:  # must form a polygon
             poly = Polygon(c[:, ::-1])  # swap to (x, y)
-            if poly.area >= min_area:
+            if poly.area * (pixel_size ** 2) >= min_area:
                 filtered.append(c)
     return filtered
 
-def compute_curvature_profile(path: str, window_size_ratio: int = 5, second_derivative: bool = True, min_area: float = 20) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[int]]:
+def compute_curvature_profile(path: str, window_size_ratio: int = 5, second_derivative: bool = True, min_area: float = 20, pixel_size: float = 1.0) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[int]]:
     """Compute curvature at every contour point in a brain-slice image.
 
     Args:
@@ -101,16 +105,17 @@ def compute_curvature_profile(path: str, window_size_ratio: int = 5, second_deri
         window_size_ratio: Contour length is divided by this to set the
             neighbourhood window size.
         second_derivative: Unused (kept for API compatibility).
-        min_area: Minimum polygon area for contour filtering.
+        min_area: Minimum polygon area (mm²) for contour filtering.
+        pixel_size: Physical size of one pixel (mm/px) for the area conversion.
 
     Returns:
         Tuple of ``(mask, edge_pixels, curvature_values, curvature_signs)``.
     """
-    
+
     img = cv2.imread(str(path))
     mask = rgb_to_bw_mask(img)
-    
-    contours = filter_contours_by_area(mask, min_area)
+
+    contours = filter_contours_by_area(mask, min_area, pixel_size)
 
     # Initialize arrays to store the curvature information for each edge pixel
     curvature_values = []

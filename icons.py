@@ -55,7 +55,9 @@ def set_icons(ui, assets: Path) -> None:
         "act_view_morph_map":   "icons/morph_map.png",
         "act_meas_stright":     "icons/length.png",
         "act_meas_compactness": "icons/compactness.png",
-        "act_meas_curve": "icons/curve.png",
+        "act_meas_curve":       "icons/curve.png",
+        "act_similarity_profile": "icons/transparency.png",
+        "act_cavity_options" : "icons/cube-3d.png"
 
     }
 

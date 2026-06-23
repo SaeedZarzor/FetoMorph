@@ -21,6 +21,19 @@ from constants import (
 logger = logging.getLogger(__name__)
 
 
+def threshold_binary(gray, fixed_value=None, *, invert: bool = False):
+    """Binarise ``gray`` to a 0/255 mask using Otsu's method.
+
+    The cut is chosen automatically per image via ``cv2.THRESH_OTSU``, so
+    ``fixed_value`` is ignored (kept only for call-site compatibility).
+    ``invert=True`` selects ``THRESH_BINARY_INV`` (dark foreground on a light
+    background).
+    """
+    base = cv2.THRESH_BINARY_INV if invert else cv2.THRESH_BINARY
+    _, bw = cv2.threshold(gray, 0, 255, base + cv2.THRESH_OTSU)
+    return bw
+
+
 def _get_viz():
     """Lazy import to break the helpers ↔ managers circular dependency at load time."""
     from managers.visualization_settings import get_active
@@ -272,6 +285,21 @@ def image_annotation_style(
     radius_px = max(1, int(round(radius_px * float(vs.marker_radius_multiplier))))
     return thickness, font_scale, radius_px
 
+def _content_bbox(bgr: np.ndarray, thresh: int = 8) -> tuple[int, int, int, int] | None:
+    """Bounding box ``(x0, y0, x1, y1)`` of non-background (non-black) pixels.
+
+    Used to keep the values box off the annotated brain by detecting where the
+    drawn content actually lives. Returns ``None`` if the image is empty.
+    """
+    if bgr is None or not isinstance(bgr, np.ndarray) or bgr.ndim != 3:
+        return None
+    mask = bgr.max(axis=2) > thresh
+    if not mask.any():
+        return None
+    ys, xs = np.where(mask)
+    return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+
+
 def draw_hallmarks_values_on_image(
     bgr: np.ndarray,
     thickness: int | None = None,
@@ -279,6 +307,7 @@ def draw_hallmarks_values_on_image(
     *,
     area: float | None = None,
     perimeter: float | None = None,
+    perimeter_internal: float | None = None,
     curve: float | None = None,
     lgi: float | None = None,
     compactness: float | None = None,
@@ -317,7 +346,10 @@ def draw_hallmarks_values_on_image(
     if area is not None:
         lines.append(f"Area: {area:.2f} {unit}^2")
     if perimeter is not None:
-        lines.append(f"Perimeter: {perimeter:.2f} {unit}")
+        label = "Perimeter (ext)" if perimeter_internal is not None else "Perimeter"
+        lines.append(f"{label}: {perimeter:.2f} {unit}")
+    if perimeter_internal is not None:
+        lines.append(f"Perimeter (int): {perimeter_internal:.2f} {unit}")
     if curve is not None:
         lines.append(f"Curve: {curve:.2f} {unit}")
     if lgi is not None:
@@ -393,6 +425,26 @@ def draw_hallmarks_values_on_image(
     x1 = min(max(0, x1), max(0, w - box_w))
     y1 = min(max(0, y1), max(0, h - box_h))
 
+    # Keep the values box off the annotated brain: if the box at the requested
+    # position overlaps the drawn content, slide it into the wider side margin
+    # (left or right), staying inside the image.
+    content = _content_bbox(out)
+    if content is not None:
+        cx0, cy0, cx1, cy1 = content
+        overlaps = not (x1 + box_w <= cx0 or x1 >= cx1
+                        or y1 + box_h <= cy0 or y1 >= cy1)
+        if overlaps:
+            left_space = cx0
+            right_space = w - cx1
+            if right_space >= left_space and right_space >= box_w + margin:
+                x1 = w - box_w - margin
+            elif left_space >= box_w + margin:
+                x1 = margin
+            else:
+                # Neither side margin fits; pick the roomier one and clamp.
+                x1 = (w - box_w - margin) if right_space >= left_space else margin
+            x1 = min(max(0, x1), max(0, w - box_w))
+
     cv2.rectangle(out, (x1, y1), (x1 + box_w, y1 + box_h), (0, 0, 0), -1)
     text_color = tuple(_get_viz().hallmark_text_color_bgr)
     y_base = y1 + margin + line_h
@@ -406,7 +458,7 @@ def compute_kernel_convex(kernel_size: int) -> np.ndarray:
     """Create an elliptical morphological structuring element.
 
     Used by the GI (gyrification index) pipeline to morphologically close
-    sulci before computing the "outer" (convex) perimeter.
+    sulci before computing the "closed-envelope" (convex) perimeter.
 
     Args:
         kernel_size: Diameter of the ellipse in pixels.
@@ -465,6 +517,44 @@ def contours_exclude(contours: list, excluded_space: np.ndarray, image_shape: tu
             filtered.append(cnt)
     return filtered
 
+def fill_section_polydata(section):
+    """Return a filled (capped) cross-section to render as a solid colored face.
+
+    ``mesh.slice()`` of a surface mesh (e.g. FreeSurfer pial) returns the
+    boundary CURVE (line cells), which renders as a thin outline so the slice
+    interior reads as background — the cross-section looks hollow. This
+    triangulates the closed contour into filled polygons (``vtkStripper`` +
+    ``vtkContourTriangulator``, even-odd rule) so the section renders as a solid
+    silhouette the same way a sliced volumetric VTK dataset already does:
+    concavities (sulci) are followed and genuine holes (enclosed voids) are
+    preserved. If the section is already polygonal (a sliced volume) or
+    triangulation fails/empties, the input is returned unchanged.
+    """
+    if section is None or getattr(section, "n_points", 0) == 0:
+        return section
+    try:
+        if section.n_faces_strict > 0:
+            return section  # already a filled face (e.g. sliced volume)
+    except Exception:
+        pass
+    try:
+        import vtk
+        from pyvista import wrap
+        strip = vtk.vtkStripper()
+        strip.SetInputData(section)
+        strip.Update()
+        tri = vtk.vtkContourTriangulator()
+        tri.SetInputData(strip.GetOutput())
+        tri.Update()
+        filled = wrap(tri.GetOutput())
+        if filled is None or filled.n_cells == 0:
+            return section
+        return filled
+    except Exception as ex:
+        logger.warning("section fill failed; rendering outline: %s", ex)
+        return section
+
+
 def split_inner_and_internal_contours(
     contours, hierarchy, excluded_space, image_shape, min_area,
 ):
@@ -512,32 +602,102 @@ def split_inner_and_internal_contours(
 
     return inner_filtered, internal_filtered
     
-def calc_scale(image_rgb: np.ndarray, cube_length: float) -> float | None:
+SCALE_CUBE_DETECTION_METHOD = "HSV red mask + morphology + minAreaRect"
+
+
+def red_scale_cube_mask(image_rgb: np.ndarray) -> np.ndarray:
+    """Return a cleaned HSV red mask for the rendered scale cube."""
+    hsv = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2HSV)
+    lower_red = cv2.inRange(hsv, np.array([0, 80, 80]), np.array([10, 255, 255]))
+    upper_red = cv2.inRange(hsv, np.array([170, 80, 80]), np.array([179, 255, 255]))
+    mask = cv2.bitwise_or(lower_red, upper_red)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    return mask.astype("uint8")
+
+
+def calc_scale_with_metadata(
+    image_rgb: np.ndarray,
+    cube_length: float,
+    *,
+    expected_px_range: tuple[float, float] | None = None,
+    min_area_px: float = 25.0,
+    max_aspect_error: float = 0.35,
+) -> tuple[float | None, dict, np.ndarray]:
+    """Detect the red scale cube and return ``(mm_per_px, metadata, mask)``.
+
+    The visible cube face should be approximately square and parallel to the
+    camera plane. A failed validation returns ``None`` with a clear status.
     """
-    Compute mm-per-pixel from a red reference cube drawn in the render.
-    cube_length_mm: the real cube side length (x_length) in mm.
-    """
-    red_rect = np.where((image_rgb[:, :, 0] > 150) & (image_rgb[:, :, 1] < 50), 255, 0).astype("uint8")
-    _, thresh_red = cv2.threshold(red_rect, 150, 255, 0)
-    contours, _ = cv2.findContours(thresh_red, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    metadata = {
+        "cube_len_mm": float(cube_length),
+        "detected_cube_size_px": None,
+        "computed_mm_per_px": None,
+        "projection_mode": "parallel",
+        "cube_detection_method": SCALE_CUBE_DETECTION_METHOD,
+        "calibration_status": "failed",
+        "calibration_error_percent": None,
+    }
+    mask = red_scale_cube_mask(image_rgb)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        print("[Scale] No red reference contour found; default scale 1.0 mm/px")
-        return 1.0
-    # Use the largest red blob as reference
-    x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
-    if float(w)>0:
-        scale = (cube_length/float(w))
-    else:
-        print("[STL Scale] Cup length error: cup length not found!")
-        return None
-    return scale
+        metadata["calibration_status"] = "failed: no red contour"
+        return None, metadata, mask
+
+    contour = max(contours, key=cv2.contourArea)
+    area = float(cv2.contourArea(contour))
+    if area < min_area_px:
+        metadata["calibration_status"] = f"failed: red contour area {area:.1f} below {min_area_px:.1f}px"
+        return None, metadata, mask
+
+    rect = cv2.minAreaRect(contour)
+    width_px, height_px = (float(rect[1][0]), float(rect[1][1]))
+    if width_px <= 0 or height_px <= 0:
+        metadata["calibration_status"] = "failed: fitted red rectangle has non-positive dimensions"
+        return None, metadata, mask
+
+    long_px = max(width_px, height_px)
+    short_px = min(width_px, height_px)
+    aspect = long_px / max(short_px, 1e-9)
+    if aspect > (1.0 + max_aspect_error):
+        metadata["detected_cube_size_px"] = long_px
+        metadata["calibration_status"] = f"failed: red contour aspect ratio {aspect:.3f} is not square"
+        return None, metadata, mask
+
+    if expected_px_range is None:
+        h, w = image_rgb.shape[:2]
+        expected_px_range = (5.0, 0.75 * float(min(h, w)))
+    lo, hi = expected_px_range
+    if long_px < lo or long_px > hi:
+        metadata["detected_cube_size_px"] = long_px
+        metadata["calibration_status"] = f"failed: detected cube size {long_px:.1f}px outside [{lo:.1f}, {hi:.1f}]"
+        return None, metadata, mask
+
+    mm_per_px = float(cube_length) / long_px
+    measured_cube_len = mm_per_px * long_px
+    error_percent = abs(measured_cube_len - float(cube_length)) / max(float(cube_length), 1e-9) * 100.0
+    metadata.update({
+        "detected_cube_size_px": long_px,
+        "computed_mm_per_px": mm_per_px,
+        "calibration_status": "valid",
+        "calibration_error_percent": error_percent,
+    })
+    return mm_per_px, metadata, mask
+
+
+def calc_scale(image_rgb: np.ndarray, cube_length: float) -> float | None:
+    """Compatibility wrapper returning only mm-per-pixel."""
+    mm_per_px, metadata, _mask = calc_scale_with_metadata(image_rgb, cube_length)
+    if mm_per_px is None:
+        print(f"[Scale] Scale cube was not detected or failed validation. {metadata['calibration_status']}. Measurements for this slice were skipped.")
+    return mm_per_px
     
 def get_red_rect_offset(image_rgb: np.ndarray) -> np.ndarray:  # noqa: returning shape (2,)
     """
     Detect red rectangle and return its center (x,y) in pixels — used to zero-align contours.
     """
-    red_mask = (image_rgb[:, :, 0] > 150) & (image_rgb[:, :, 1] < 50)
-    coords = np.argwhere(red_mask)
+    coords = np.argwhere(red_scale_cube_mask(image_rgb) > 0)
     if coords.size == 0:
         return np.array([0, 0])
     y_min, x_min = coords.min(axis=0)
@@ -729,30 +889,268 @@ def make_scale_cube(Slice_direction: str, cube_len: float, origin, s: float, off
     Returns:
         A ``pv.PolyData`` cube positioned beside the slice.
     """
-    # choose thin axis and translation vector
+    offset = float(offset) + float(cube_len)
+    thickness = max(float(cube_len) * 0.01, 1e-6)
     if Slice_direction == "X":
-        c = (s, origin[1], origin[2])
-        cube = pv.Cube(center = c, x_length=0.01, y_length=cube_len, z_length=cube_len)
-        cube.translate((-0.05, offset, offset), inplace=True)
+        c = (float(s), float(origin[1]) + offset, float(origin[2]) + offset)
+        cube = pv.Cube(center=c, x_length=thickness, y_length=cube_len, z_length=cube_len)
     elif Slice_direction == "Y":
-        c = (origin[0],s, origin[2])
-        cube = pv.Cube(center = c, x_length=cube_len, y_length=0.01, z_length=cube_len)
-        cube.translate((offset,-0.05 , offset), inplace=True)
+        c = (float(origin[0]) + offset, float(s), float(origin[2]) + offset)
+        cube = pv.Cube(center=c, x_length=cube_len, y_length=thickness, z_length=cube_len)
     elif Slice_direction == "Z":
-        c = (origin[0], origin[1], s)
-        cube = pv.Cube(center = c, x_length=cube_len, y_length=cube_len, z_length=0.01)
-        cube.translate((offset, offset, -0.05), inplace=True)
+        c = (float(origin[0]) + offset, float(origin[1]) + offset, float(s))
+        cube = pv.Cube(center=c, x_length=cube_len, y_length=cube_len, z_length=thickness)
     else:
         raise ValueError("Slice_direction must be 'X','Y','Z'.")
 
     return cube
+
+
+def prepare_orthographic_slice_render(p, view_fn) -> None:
+    """Apply reproducible camera settings before a PyVista slice screenshot."""
+    view_fn()
+    try:
+        p.parallel_projection = True
+    except Exception:
+        pass
+    try:
+        p.enable_parallel_projection()
+    except Exception:
+        pass
+    p.reset_camera()
+    try:
+        p.camera.zoom(0.95)
+    except Exception:
+        pass
+
+
+def validate_scale_cube_sanity(
+    p,
+    scale_cube,
+    cube_len_mm: float,
+    view_fn,
+    *,
+    background: str,
+) -> tuple[bool, dict]:
+    """Render a reference-only calibration frame and validate detection."""
+    p.clear()
+    p.set_background(background)
+    p.add_mesh(scale_cube, color="red", lighting=False)
+    prepare_orthographic_slice_render(p, view_fn)
+    img_rgb = p.screenshot(return_img=True)
+    mm_per_px, metadata, _mask = calc_scale_with_metadata(img_rgb, cube_len_mm)
+    if mm_per_px is None:
+        return False, metadata
+    detected_px = metadata.get("detected_cube_size_px")
+    measured_cube_len = mm_per_px * float(detected_px)
+    error_percent = abs(measured_cube_len - float(cube_len_mm)) / max(float(cube_len_mm), 1e-9) * 100.0
+    metadata["calibration_error_percent"] = error_percent
+    if error_percent > 1.0:
+        metadata["calibration_status"] = f"failed: sanity error {error_percent:.3f}% exceeds 1%"
+        return False, metadata
+    metadata["calibration_status"] = "valid: sanity check passed"
+    return True, metadata
 
 def compactness_2D(area: float, perimeter: float) -> float:
     if perimeter == 0:
         return 0
     return (4 * 3.141592653589793 * area) / (perimeter ** 2)
 
+
+def mask_perimeter_mm(
+    mask,
+    pixel_size_x,
+    pixel_size_y,
+    *,
+    method="arc_length",
+    simplify=False,
+    epsilon=0.5,
+):
+    """Perimeter (mm) of the boundary of a binary tissue mask.
+
+    ``method="arc_length"`` sums OpenCV contour lengths after scaling contour
+    coordinates by the x/y pixel spacing. ``method="crofton"`` fills holes,
+    resamples this 2-D mask to isotropic spacing, and runs scikit-image's
+    4-direction Crofton estimator. If scikit-image is unavailable, Crofton
+    falls back to the arc-length path.
+    """
+    arr = np.asarray(mask)
+    if arr.ndim != 2 or arr.size == 0:
+        return 0.0
+
+    px_x = float(pixel_size_x)
+    px_y = float(pixel_size_y)
+    if not (np.isfinite(px_x) and np.isfinite(px_y) and px_x > 0 and px_y > 0):
+        raise ValueError("pixel_size_x and pixel_size_y must be positive finite values")
+
+    method = str(method or "arc_length").lower()
+    binary = (arr > 0).astype(np.uint8)
+
+    def _arc_length(mask_u8) -> float:
+        contours, _hierarchy = cv2.findContours(
+            mask_u8.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+        total = 0.0
+        for cnt in contours:
+            work = cnt
+            if simplify and float(epsilon) > 0 and len(work) >= 3:
+                work = cv2.approxPolyDP(work, float(epsilon), True)
+            cnt_mm = work.astype(np.float32) * np.array([px_x, px_y], dtype=np.float32)
+            total += float(cv2.arcLength(cnt_mm, True))
+        return total
+
+    if method == "arc_length":
+        return _arc_length(binary)
+    if method != "crofton":
+        raise ValueError(f"Unsupported perimeter method: {method!r}")
+
+    try:
+        from scipy.ndimage import binary_fill_holes, zoom
+        from skimage.measure import perimeter_crofton
+    except Exception as ex:
+        logger.warning("Crofton perimeter unavailable; falling back to arc_length: %s", ex)
+        return _arc_length(binary)
+
+    filled = binary_fill_holes(binary.astype(bool))
+    if not np.any(filled):
+        return 0.0
+
+    iso_px = min(px_x, px_y)
+    scale_y = px_y / iso_px
+    scale_x = px_x / iso_px
+    iso_mask = zoom(
+        filled.astype(np.uint8),
+        zoom=(scale_y, scale_x),
+        order=0,
+        mode="nearest",
+    ).astype(bool)
+    return float(perimeter_crofton(iso_mask, directions=4) * iso_px)
+
 def compactness_3D(volume: float, surface_area: float) -> float:
     if surface_area == 0:
         return 0
-    return (36 * 3.141592653589793 * (volume ** 2)) / (surface_area ** 3)
+    comp = (36 * 3.141592653589793 * (volume ** 2)) / (surface_area ** 3)
+    if comp > 1.0:
+        print(f"[Compactness 3D] WARN: compactness {comp:.4f} > 1.0 — surface area is likely "
+              f"underestimated relative to volume (check unit consistency).")
+    return comp
+
+
+def _simpson_axis_integral(samples) -> float:
+    """``∫ y(h) dh`` over ``(position, value)`` samples via Simpson's rule.
+
+    Sorts by position, merges duplicate positions (mean value), and returns
+    ``0.0`` with fewer than two usable samples. A higher-order (≈ O(Δh⁴))
+    quadrature than the ``Σ value × Δh`` rectangle sum; integrating the value
+    directly means per-slice noise cannot inflate it (no frustum-style slant).
+    """
+    pts = [(float(h), float(v)) for (h, v) in samples
+           if h is not None and v is not None
+           and np.isfinite(h) and np.isfinite(v) and v >= 0]
+    if len(pts) < 2:
+        return 0.0
+    pts.sort(key=lambda t: t[0])
+    h = np.array([t[0] for t in pts], dtype=float)
+    v = np.array([t[1] for t in pts], dtype=float)
+    # Merge duplicate positions (mean value) so x is strictly increasing.
+    uh, inv = np.unique(h, return_inverse=True)
+    if uh.size < 2:
+        return 0.0
+    if uh.size != h.size:
+        sums = np.zeros(uh.size)
+        cnts = np.zeros(uh.size)
+        np.add.at(sums, inv, v)
+        np.add.at(cnts, inv, 1)
+        v = sums / cnts
+        h = uh
+    try:
+        from scipy.integrate import simpson
+    except ImportError:  # SciPy < 1.6
+        from scipy.integrate import simps as simpson
+    return float(abs(simpson(v, x=h)))
+
+
+def lateral_area_simpson(samples) -> float:
+    """Lateral surface area = ``∫ perimeter(h) dh`` via Simpson's rule.
+
+    ``samples`` is an iterable of ``(position, perimeter)`` in a consistent unit
+    (result in that unit²). See :func:`_simpson_axis_integral`.
+    """
+    return _simpson_axis_integral(samples)
+
+
+def volume_simpson(samples) -> float:
+    """Volume = ``∫ cross_section_area(h) dh`` via Simpson's rule.
+
+    ``samples`` is an iterable of ``(position, cross_section_area)`` in a
+    consistent unit (result in that unit³). See :func:`_simpson_axis_integral`.
+    """
+    return _simpson_axis_integral(samples)
+
+
+def total_surface_area_simpson(perimeter_samples, area_samples):
+    """Total surface area = Simpson lateral ``∫ perimeter dh`` + end caps.
+
+    The end caps are the cross-section areas at the first and last slice
+    positions (the top + bottom faces of the stack). A single valid slice yields
+    ``2 × area`` (a flat disk's two faces) and zero lateral.
+
+    Args:
+        perimeter_samples: iterable of ``(position, perimeter)``.
+        area_samples: iterable of ``(position, cross_section_area)``.
+
+    Returns:
+        ``(total, lateral, caps)`` in the samples' unit².
+    """
+    lateral = lateral_area_simpson(perimeter_samples)
+    pts = [(float(h), float(a)) for (h, a) in area_samples
+           if h is not None and a is not None
+           and np.isfinite(h) and np.isfinite(a) and a >= 0]
+    if not pts:
+        caps = 0.0
+    else:
+        pts.sort(key=lambda t: t[0])
+        caps = 2.0 * pts[0][1] if len(pts) == 1 else (pts[0][1] + pts[-1][1])
+    return lateral + caps, lateral, caps
+
+
+def area_based_gi_3d(mesh, scale=None):
+    """3-D area-based gyrification index = total mesh surface area ÷ convex-hull
+    surface area, both measured on the same (optionally scaled) geometry.
+
+    The convex hull is the smooth convex envelope of the mesh. For a closed,
+    roughly star-convex surface (like a brain) the ratio is ≥ 1 — ≈ 1 when
+    unfolded and larger when gyrified (a FreeSurfer-style 3-D GI proxy).
+    Independent of the 2-D perimeter ``GI``. NOTE: for handle/hole topologies
+    (e.g. a torus) the hull area can exceed the mesh area, giving a ratio < 1.
+
+    Args:
+        mesh: A PyVista mesh exposing ``points`` and ``extract_surface()``.
+        scale: Optional per-axis ``(3,)`` physical scale (model → mm) applied to
+            the points before measuring. Pass ``None`` for STL (already mm).
+
+    Returns:
+        ``(gi_3d, total_area, hull_area)``; any element may be ``None`` on
+        failure (degenerate geometry, SciPy missing, etc.).
+    """
+    try:
+        from scipy.spatial import ConvexHull
+    except Exception as ex:  # pragma: no cover - SciPy is a hard dep elsewhere
+        print(f"[Warning] area_based_gi_3d — SciPy unavailable: {ex}")
+        return None, None, None
+    try:
+        scaled = mesh
+        if scale is not None:
+            scaled = mesh.copy(deep=True)
+            scaled.points = np.asarray(scaled.points, dtype=float) * np.asarray(scale, dtype=float)
+        surf = scaled.extract_surface().triangulate()
+        total_area = float(surf.area)
+        pts = np.asarray(scaled.points, dtype=float)
+        if total_area <= 0 or pts.ndim != 2 or pts.shape[0] < 4:
+            return None, (total_area if total_area > 0 else None), None
+        hull_area = float(ConvexHull(pts).area)
+        if hull_area <= 0:
+            return None, total_area, None
+        return total_area / hull_area, total_area, hull_area
+    except Exception as ex:
+        print(f"[Warning] area_based_gi_3d — {ex}")
+        return None, None, None

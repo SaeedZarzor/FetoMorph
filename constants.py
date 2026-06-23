@@ -7,8 +7,11 @@ references the same values and they can be tuned in one place.
 # ---------------------------------------------------------------------------
 # Image processing thresholds
 # ---------------------------------------------------------------------------
-BINARY_THRESHOLD_VTK = 150       # cv2.threshold value for VTK screenshots (lighter background)
-BINARY_THRESHOLD_DEFAULT = 200   # cv2.threshold value for STL / image / NIfTI renders
+# Measurement masks are binarised with Otsu's method (cv2.THRESH_OTSU), which
+# picks the cut automatically per image. These BINARY_THRESHOLD_* values are no
+# longer used as the cut (kept only as legacy call-site arguments).
+BINARY_THRESHOLD_VTK = 150       # (legacy) former VTK-screenshot threshold
+BINARY_THRESHOLD_DEFAULT = 200   # (legacy) former STL / image / NIfTI threshold
 
 # ---------------------------------------------------------------------------
 # Red reference-cube colour detection (RGB space)
@@ -17,6 +20,26 @@ BINARY_THRESHOLD_DEFAULT = 200   # cv2.threshold value for STL / image / NIfTI r
 # and G below a maximum; B is ignored.
 RED_CHANNEL_MIN = 150   # R channel must exceed this to be considered "red"
 GREEN_CHANNEL_MAX = 50  # G channel must stay below this
+
+# ---------------------------------------------------------------------------
+# Surface-connected cavity correction (3D volume / surface area)
+# ---------------------------------------------------------------------------
+# When a sliced 3D geometry has a hole/cavity that opens onto the outer surface
+# (a surface-connected void), its area is subtracted from the cross-section
+# before volume integration, and its wall perimeter is added to the 3D surface
+# area. Fully-enclosed internal voids are left untouched (treated as solid).
+# A cavity is only considered when its physical area exceeds the threshold.
+DEFAULT_CAVITY_CORRECTION_ENABLED = True
+DEFAULT_CAVITY_AREA_THRESHOLD_MM2 = 0.0
+
+# Surface meshes (e.g. FreeSurfer pial) slice to a thin boundary curve, so the
+# brain interior reads as background and the cross-section renders hollow. When
+# enabled, the slice contour is triangulated into a filled face at render time
+# (vtkStripper + vtkContourTriangulator) so the cross-section is drawn as a solid
+# colored region against the background — the same way a sliced volumetric VTK
+# dataset already appears. Concavities (sulci) are followed and genuine enclosed
+# voids are preserved, so the outer boundary (hence GI/perimeter) is unchanged.
+DEFAULT_FILL_CROSS_SECTION = True
 
 # ---------------------------------------------------------------------------
 # Convexity-defect fixed-point divisor
@@ -57,8 +80,12 @@ DEFAULT_NIFTI_REGIONS = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 900
 DEFAULT_PIXEL_SIZE = 0.01        # mm/px fallback when user has not calibrated
-DEFAULT_CNT_THRESHOLD = 100      # contour detection threshold (0-255)
-DEFAULT_KERNEL_SIZE = 5          # morphological kernel size in pixels
+DEFAULT_CNT_THRESHOLD = 1.0      # min contour area to keep, in mm² (physical, like the cavity threshold)
+DEFAULT_KERNEL_SIZE_MM = 5.0     # morphological kernel diameter in mm
+DEFAULT_KERNEL_SIZE = max(3, int(round(DEFAULT_KERNEL_SIZE_MM)))  # legacy pixel fallback
+DEFAULT_PERIMETER_METHOD = "crofton"  # "arc_length" or "crofton"
+DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER = False
+DEFAULT_CONTOUR_SIMPLIFY_EPSILON = 0.5
 DEFAULT_SLICE_THICKNESS = 0.5    # mm between slices
 DEFAULT_SCALEBAR_MM = 25         # default scale-bar length in mm
 CONSOLE_MAX_BLOCKS = 10000       # max lines in the output console
