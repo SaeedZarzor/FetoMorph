@@ -25,6 +25,7 @@ assets/labels.xlsx
 area_band_output_multi/
 docs/
 output/
+traning_data/ 
 
 # Claude
 CLAUDE.md
