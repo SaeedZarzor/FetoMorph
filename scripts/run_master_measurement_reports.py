@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -876,6 +877,14 @@ def run_folder(
             area_close_mm, upscale_min=review_upscale_min,
         )
         logging.info("Wrote %d enlarged review image(s) to %s", n_review, output_dir / "review")
+
+        # The corrected review/ images supersede the core function's old-method
+        # annotated PNGs in image_Batch/, so drop that folder to avoid confusion.
+        # (Only when review is on; otherwise image_Batch is the sole image output.)
+        batch_dir = output_dir / "image_Batch"
+        if batch_dir.is_dir():
+            shutil.rmtree(batch_dir, ignore_errors=True)
+            logging.info("Removed stale old-method annotations: %s", batch_dir)
 
     return final_xlsx
 
