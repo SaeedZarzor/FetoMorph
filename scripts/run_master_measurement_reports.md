@@ -52,6 +52,9 @@ Supported CLI options:
 - `--unit`
 - `--auto-scalebar`
 - `--single-pass-metrics`
+- `--area-close-mm` (cropped slices; see below)
+- `--review`
+- `--review-upscale-min`
 - `--log-level {DEBUG,INFO,WARNING,ERROR}`
 
 Run all weeks and all axes:
@@ -146,7 +149,21 @@ Cropped bands need two extra fixes that the example config (`master_measurement_
 
 Both flags are off by default; only the cropped config enables them. They can also be forced on the command line with `--auto-scalebar` and `--single-pass-metrics`.
 
-Note: cropped bands clip the brain at the image edge, so `perimeter`, `LGI`, and `Compactness` include the straight crop-edge cuts and are best read as band-relative rather than whole-structure measures. `area` is the cleanest physical quantity.
+Note: cropped bands clip the brain at the image edge, so `perimeter`, `LGI`, and `Compactness` include the straight crop-edge cuts and are best read as band-relative rather than whole-structure measures. `area` is the cleanest physical quantity. (These reports are intended for comparison against partial-domain simulation cases, so the per-band — partial-domain — granularity is by design.)
+
+### Segmentation and review fixes (the three suggestions)
+
+The cropped-slice review showed three problems with the original brightness-threshold segmentation; all three are fixed inside the script (no changes to `functions/`, `helpers/`, or `constants.py`):
+
+1. **Bright labels (e.g. cyan) were dropped.** The original binarisation kept a pixel only when its grayscale value was `≤ BINARY_THRESHOLD_DEFAULT (200)`. That is right for a grayscale render but wrong for a colour label-map: cyan sits at gray `≈ 212` and was excluded, and pure-white interior cortex (`255`) was excluded entirely. `single_pass_metrics` and the review renderer now segment with **`segment_foreground`**: on a white-background image (auto-detected from the border) the foreground is **every non-white pixel** plus any white **fully enclosed** by tissue (interior cortex), so all label colours are kept regardless of brightness. Dark-background renders fall back to the original threshold, so full-slice behaviour is unchanged.
+
+2. **The inner white cortex was not counted in the area (`area_close_mm`).** With `area_close_mm > 0` the reported `area` is measured on the brain after a **morphological close** that fills the white cortex ring between the outer rim and the core, so it counts as ROI. The close distance is physical (`area_close_mm`) and scaled per folder via the detected `pixel_size`, so it is consistent across the differently-zoomed weeks. `perimeter` and `LGI` are still taken from the **folded** boundary, so the gyrification signal is unchanged. The cropped config sets `area_close_mm: 5.0`; `0` disables it (area = labelled tissue only). Force it on the command line with `--area-close-mm`.
+
+3. **The review image was tiny and missing annotations (`review`).** With `review: true` (or `--review`), an enlarged annotated PNG is written per image to a `review/` sub-folder beside the workbook. The whole frame — **scalebar included** — is upscaled with nearest-neighbour to a minimum side of `review_upscale_min` (default `600`, `--review-upscale-min`); measurement still runs at native resolution, so calibration is unaffected. The annotation matches the full-slice report: **red** inner (folded) contour, **green** convex/close envelope, **blue** convexity-defect chords (the outer line wrapping the region), and **gray** sulci-depth markers.
+
+In addition, when `single_pass_metrics` is on, the **sulci columns** (`Sulci_count`, `min/max/mean/total_depth`) are also recomputed on the new segmentation (matching the fixed-mm depth rule used for the review markers), so the workbook counts agree with the markers drawn on the review image.
+
+Config keys for the above (all in `master_measurement_reports_cropped_config.example.json`): `area_close_mm`, `review`, `review_upscale_min`.
 
 Run all weeks, axial and coronal:
 
@@ -157,7 +174,7 @@ Run all weeks, axial and coronal:
 Run one week and one axis:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_master_measurement_reports.py --input-root Examples\cropped_slices --output-root measurements --section-label cropped_slices --weeks 24 --axes axial --kernel-size 9 --auto-scalebar --single-pass-metrics
+.\.venv\Scripts\python.exe scripts\run_master_measurement_reports.py --input-root Examples\cropped_slices --output-root measurements --section-label cropped_slices --weeks 24 --axes axial --kernel-size 9 --auto-scalebar --single-pass-metrics --area-close-mm 5 --review
 ```
 
 Clean rerun:

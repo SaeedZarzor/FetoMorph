@@ -11,5 +11,8 @@
   "cnt_threshold": 500,
   "unit": "mm",
   "auto_scalebar": true,
-  "single_pass_metrics": true
+  "single_pass_metrics": true,
+  "area_close_mm": 5.0,
+  "review": true,
+  "review_upscale_min": 600
 }

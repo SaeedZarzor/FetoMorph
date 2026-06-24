@@ -16,8 +16,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from functions.measurement_batch import process_on_images_batch
-from helpers.helpers import compute_kernel_convex, compactness_2D
-from constants import BINARY_THRESHOLD_DEFAULT
+from helpers.helpers import (
+    compute_kernel_convex,
+    compactness_2D,
+    image_annotation_style,
+    SULCUS_CLASS_COLORS,
+)
+from constants import BINARY_THRESHOLD_DEFAULT, DEFECT_FIXED_POINT
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
@@ -37,6 +42,9 @@ DEFAULT_CONFIG = {
     "unit": "mm",
     "auto_scalebar": False,
     "single_pass_metrics": False,
+    "review": False,
+    "review_upscale_min": 600,
+    "area_close_mm": 0.0,
 }
 
 
@@ -91,6 +99,27 @@ def parse_args() -> argparse.Namespace:
              "small cropped brains are never erased. Overwrites those columns.",
     )
     parser.add_argument(
+        "--review",
+        action="store_true",
+        default=None,
+        help="Also write enlarged annotated review PNGs (corrected segmentation, "
+             "scalebar kept) to a 'review' sub-folder beside each report, for "
+             "visual inspection before trusting the numbers.",
+    )
+    parser.add_argument(
+        "--review-upscale-min",
+        type=int,
+        help="Target minimum side length (px) for review PNGs. Default 600.",
+    )
+    parser.add_argument(
+        "--area-close-mm",
+        type=float,
+        help="Option B: close the white cortex ring into the area. The reported "
+             "area is measured on the brain after a morphological close of this "
+             "physical distance (mm), scaled per folder via pixel_size. LGI and "
+             "perimeter stay on the folded boundary. 0 disables (area = tissue only).",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
@@ -127,6 +156,9 @@ def resolve_settings(args: argparse.Namespace) -> dict[str, Any]:
         "unit": args.unit,
         "auto_scalebar": args.auto_scalebar,
         "single_pass_metrics": args.single_pass_metrics,
+        "review": args.review,
+        "review_upscale_min": args.review_upscale_min,
+        "area_close_mm": args.area_close_mm,
     }
     for key, value in overrides.items():
         if value is not None:
@@ -161,6 +193,9 @@ def resolve_settings(args: argparse.Namespace) -> dict[str, Any]:
     cfg["unit"] = str(cfg["unit"]).strip()
     cfg["auto_scalebar"] = bool(cfg.get("auto_scalebar", False))
     cfg["single_pass_metrics"] = bool(cfg.get("single_pass_metrics", False))
+    cfg["review"] = bool(cfg.get("review", False))
+    cfg["review_upscale_min"] = int(cfg.get("review_upscale_min", 600))
+    cfg["area_close_mm"] = float(cfg.get("area_close_mm", 0.0) or 0.0)
     return cfg
 
 
@@ -169,6 +204,193 @@ def find_image_files(folder: Path) -> list[Path]:
         [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS],
         key=lambda p: p.name.lower(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Foreground segmentation (scripts-local).
+#
+# The shared functions/measurement_batch binarisation keeps a pixel as "brain"
+# only when its grayscale value is dark enough (THRESH_BINARY_INV @ 200). That
+# is correct for a grayscale render but wrong for these coloured label-map
+# crops: bright labels such as cyan (gray ~212) fall just over the threshold
+# and are dropped, and the inner white cortex (gray 255) is dropped entirely.
+# The recompute path below replaces that rule WITHOUT editing the shared module.
+# ---------------------------------------------------------------------------
+WHITE_BG_CHANNEL_MIN = 235  # a pixel is "background white" when every BGR channel >= this
+
+
+def _border_is_white(img: np.ndarray, border: int = 3, white_min: int = WHITE_BG_CHANNEL_MIN) -> bool:
+    """True when the image border is predominantly near-white.
+
+    Distinguishes white-background colour label maps (the brain crops, where the
+    region of interest is *any* non-white pixel) from dark-background grayscale
+    renders (where the legacy brightness threshold is the correct rule).
+    """
+    edges = np.concatenate([
+        img[:border, :, :].reshape(-1, 3),
+        img[-border:, :, :].reshape(-1, 3),
+        img[:, :border, :].reshape(-1, 3),
+        img[:, -border:, :].reshape(-1, 3),
+    ])
+    return bool(np.all(edges >= white_min, axis=1).mean() > 0.5)
+
+
+def segment_foreground(img: np.ndarray, white_min: int = WHITE_BG_CHANNEL_MIN) -> np.ndarray:
+    """Binary brain mask (uint8, 255 = brain) for one slice image.
+
+    White-background colour label maps: foreground is every non-white pixel — so
+    bright labels such as cyan are kept rather than dropped by a brightness cut —
+    PLUS any white region fully enclosed by tissue, which is the inner cortex and
+    gets filled in. White that opens outward to the image border stays background,
+    so the sulcal concavities (and therefore the LGI / sulcus-depth signal) are
+    preserved: this is the "fill enclosed only, keep folds" behaviour.
+
+    Dark-background grayscale renders fall back to the original
+    THRESH_BINARY_INV @ BINARY_THRESHOLD_DEFAULT rule, leaving full-slice
+    behaviour unchanged.
+    """
+    if not _border_is_white(img, white_min=white_min):
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+        return bw
+
+    nonwhite = np.where(np.all(img >= white_min, axis=2), 0, 255).astype(np.uint8)
+    # Fill white fully enclosed by tissue (interior cortex); white that reaches
+    # the border (exterior background + open sulcal valleys) is left alone.
+    return _fill_interior_holes(nonwhite)
+
+
+def _fill_interior_holes(mask: np.ndarray) -> np.ndarray:
+    """Flood the foreground over every background component that does not touch
+    the image border (i.e. holes fully enclosed by foreground)."""
+    num, labels = cv2.connectedComponents(cv2.bitwise_not(mask))
+    border_labels = set(
+        np.concatenate([labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]]).tolist()
+    )
+    filled = mask.copy()
+    for lbl in range(1, num):
+        if lbl not in border_labels:
+            filled[labels == lbl] = 255
+    return filled
+
+
+def area_close_kernel_px(area_close_mm: float, pixel_size: float, min_px: int) -> int:
+    """Close-kernel size (px) for the area mask, from a physical closing distance.
+
+    Scaling by ``pixel_size`` keeps the cortex-ring fill consistent across the
+    different per-folder zooms; never smaller than ``min_px`` (the LGI kernel).
+    """
+    if area_close_mm <= 0 or pixel_size <= 0:
+        return min_px
+    return max(min_px, int(round(area_close_mm / pixel_size)))
+
+
+def closed_brain_mask(kept_contours, shape, kernel_px: int) -> np.ndarray:
+    """Solid brain mask: fill the kept contours, morph-close to seal the cortex
+    ring / sulcal mouths, then fill any newly enclosed holes."""
+    inner = np.zeros(shape, np.uint8)
+    cv2.drawContours(inner, kept_contours, -1, 255, thickness=cv2.FILLED)
+    closed = cv2.morphologyEx(inner, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_px))
+    return _fill_interior_holes(closed)
+
+
+def render_review_image(
+    img: np.ndarray,
+    kernel_size: int,
+    cnt_threshold: float,
+    pixel_size: float,
+    unit: str = "mm",
+    area_close_mm: float = 0.0,
+    *,
+    upscale_min: int = 600,
+) -> np.ndarray:
+    """Enlarged annotated review image, drawn like the full-slice report.
+
+    Reproduces the four annotations of ``measurement_batch`` — red inner brain
+    contour, green envelope, blue convexity-defect chords (the outer line that
+    wraps the whole region), and sulci-depth markers at each kept defect's far
+    point — but on the corrected non-white segmentation, so cyan and the inner
+    cortex are no longer dropped.
+
+    Under option B (``area_close_mm > 0``) the green outline is the
+    cortex-ring-filled brain that ``area`` is measured on; otherwise it is the
+    light LGI envelope. Red always shows the folded boundary.
+
+    The whole frame (scalebar included) is scaled up with nearest-neighbour for
+    legibility; metrics are computed elsewhere at native resolution, so
+    calibration is unaffected.
+    """
+    mask = segment_foreground(img)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    kept = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
+
+    if area_close_mm > 0:
+        env_mask = closed_brain_mask(
+            kept, mask.shape, area_close_kernel_px(area_close_mm, pixel_size, kernel_size)
+        )
+    else:
+        inner = np.zeros(mask.shape, np.uint8)
+        cv2.drawContours(inner, kept, -1, 255, thickness=cv2.FILLED)
+        env_mask = cv2.morphologyEx(inner, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_size))
+    conv, _ = cv2.findContours(env_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    kept_conv = [c for c in conv if cv2.contourArea(c) > cnt_threshold]
+
+    annotated = img.copy()
+    h, w = annotated.shape[:2]
+    thickness, _font_scale, radius_px = image_annotation_style(w, h, style="bold")
+
+    cv2.drawContours(annotated, kept_conv, -1, (0, 255, 0), thickness)  # green envelope
+    cv2.drawContours(annotated, kept, -1, (0, 0, 255), thickness)       # red inner contour
+
+    # Blue convexity-defect chords + sulci markers (cropped sub-slices are not
+    # full MRI slices, so the fixed-depth keep rule and "unclassified" marker
+    # are used, matching measurement_batch's non-percent branch).
+    min_keep = 0.5 if unit == "mm" else 0.05 if unit == "cm" else 0.0
+    marker_color = SULCUS_CLASS_COLORS["unclassified"]
+    for cnt in kept:
+        hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
+        if hull is None or len(hull) < 3 or len(cnt) <= 3 or not np.all(np.diff(hull.ravel()) > 0):
+            continue
+        defects = cv2.convexityDefects(cnt, hull)
+        if defects is None:
+            continue
+        for i in range(defects.shape[0]):
+            s, e, f, d = defects[i, 0]
+            start, end, far = tuple(cnt[s][0]), tuple(cnt[e][0]), tuple(cnt[f][0])
+            cv2.line(annotated, start, end, [255, 0, 0], thickness)  # blue outer chord
+            if (d * pixel_size / DEFECT_FIXED_POINT) > min_keep:
+                cv2.circle(annotated, far, radius_px, marker_color, -1)
+
+    factor = max(1, int(round(upscale_min / max(min(h, w), 1))))
+    return cv2.resize(annotated, (w * factor, h * factor), interpolation=cv2.INTER_NEAREST)
+
+
+def render_review_images(
+    image_dir: Path,
+    output_dir: Path,
+    kernel_size: int,
+    cnt_threshold: float,
+    pixel_size: float,
+    unit: str = "mm",
+    area_close_mm: float = 0.0,
+    *,
+    upscale_min: int = 600,
+) -> int:
+    """Write one enlarged review PNG per image into ``<output_dir>/review``."""
+    review_dir = output_dir / "review"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for path in find_image_files(image_dir):
+        img = cv2.imread(str(path))
+        if img is None:
+            continue
+        big = render_review_image(
+            img, kernel_size, cnt_threshold, pixel_size, unit, area_close_mm,
+            upscale_min=upscale_min,
+        )
+        cv2.imwrite(str(review_dir / f"{path.stem}_review.png"), big)
+        written += 1
+    return written
 
 
 def measure_scalebar_pixels(
@@ -231,13 +453,23 @@ def single_pass_metrics(
     pixel_size: float,
     kernel_size: int,
     cnt_threshold: float,
+    area_close_mm: float = 0.0,
 ) -> tuple[float, float, float, float, float] | None:
     """Faithful single-pass recompute of the core morphometrics for one image.
 
     Mirrors the per-image math in ``measurement_batch.process_on_images_batch``
-    (same threshold, contour filter, and ``compute_kernel_convex`` /
-    ``compactness_2D`` helpers) but WITHOUT the LGI threshold-climbing retry,
-    which marches ``cnt_threshold`` past a small cropped brain and zeroes it out.
+    (the ``compute_kernel_convex`` / ``compactness_2D`` helpers and the contour
+    filter) but with two corrections: it drops the LGI threshold-climbing retry,
+    which marches ``cnt_threshold`` past a small cropped brain and zeroes it out,
+    and it segments with :func:`segment_foreground` instead of the grayscale
+    brightness threshold, so bright labels (e.g. cyan) and the inner white cortex
+    are no longer excluded from the region of interest.
+
+    When ``area_close_mm > 0`` the reported ``area`` is measured on the
+    morphologically-closed brain (option B: the white cortex ring between the
+    rim and the core is filled in and counts as ROI), with the close distance
+    scaled to ``pixel_size``. ``perimeter`` and ``lgi`` are always taken from the
+    folded boundary, so the gyrification signal is unchanged either way.
 
     Returns ``(area, perimeter, perimeter_convex, lgi, compactness)`` in physical
     units, or ``None`` when no contour survives ``cnt_threshold``.
@@ -245,8 +477,7 @@ def single_pass_metrics(
     img = cv2.imread(str(image_path))
     if img is None:
         return None
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    _, im_bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+    im_bw = segment_foreground(img)
     contours, _ = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     kept = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
     if not kept:
@@ -259,14 +490,70 @@ def single_pass_metrics(
     conv_contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     kept_conv = [c for c in conv_contours if cv2.contourArea(c) > cnt_threshold]
 
-    area = sum(cv2.contourArea(c) for c in kept) * pixel_size ** 2
+    # Perimeter and LGI from the folded boundary (gyrification).
     perimeter = sum(cv2.arcLength(c, True) for c in kept) * pixel_size
     perimeter_convex = (
         sum(cv2.arcLength(c, True) for c in kept_conv) * pixel_size if kept_conv else 0.0
     )
     lgi = perimeter / perimeter_convex if perimeter_convex else 0.0
-    compactness = compactness_2D(area, perimeter)
+
+    if area_close_mm > 0:
+        # Option B: area on the cortex-ring-filled brain; compactness uses that
+        # same region's boundary so it stays internally consistent.
+        ak = area_close_kernel_px(area_close_mm, pixel_size, kernel_size)
+        area_mask = closed_brain_mask(kept, im_bw.shape, ak)
+        area_contours, _ = cv2.findContours(area_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        area_kept = [c for c in area_contours if cv2.contourArea(c) > cnt_threshold]
+        area = sum(cv2.contourArea(c) for c in area_kept) * pixel_size ** 2
+        area_perim = sum(cv2.arcLength(c, True) for c in area_kept) * pixel_size
+        compactness = compactness_2D(area, area_perim)
+    else:
+        area = sum(cv2.contourArea(c) for c in kept) * pixel_size ** 2
+        compactness = compactness_2D(area, perimeter)
+
     return area, perimeter, perimeter_convex, lgi, compactness
+
+
+def single_pass_sulci(
+    image_path: Path,
+    pixel_size: float,
+    cnt_threshold: float,
+    unit: str = "mm",
+) -> tuple[int, float | None, float | None, float | None, float | None]:
+    """Recompute the sulci-depth statistics on the new segmentation.
+
+    Mirrors the non-percent (cropped sub-slice) branch of
+    ``measurement_batch.process_on_images_batch`` — convexity defects on the
+    kept folded contours, kept when deeper than the fixed per-unit minimum — so
+    the workbook's ``Sulci_count`` / depth columns agree with the markers drawn
+    in :func:`render_review_image`. Returns ``(count, min, max, mean, total)``;
+    depth stats are ``None`` when no defect is kept.
+    """
+    img = cv2.imread(str(image_path))
+    if img is None:
+        return 0, None, None, None, None
+    mask = segment_foreground(img)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    kept = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
+    min_keep = 0.5 if unit == "mm" else 0.05 if unit == "cm" else 0.0
+
+    depths: list[float] = []
+    for cnt in kept:
+        hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
+        if hull is None or len(hull) < 3 or len(cnt) <= 3 or not np.all(np.diff(hull.ravel()) > 0):
+            continue
+        defects = cv2.convexityDefects(cnt, hull)
+        if defects is None:
+            continue
+        for i in range(defects.shape[0]):
+            depth_value = defects[i, 0][3] * pixel_size / DEFECT_FIXED_POINT
+            if depth_value > min_keep:
+                depths.append(depth_value)
+
+    if not depths:
+        return 0, None, None, None, None
+    count = len(depths)
+    return count, min(depths), max(depths), sum(depths) / count, sum(depths)
 
 
 def correct_metrics_in_workbook(
@@ -275,12 +562,13 @@ def correct_metrics_in_workbook(
     pixel_size: float,
     kernel_size: int,
     cnt_threshold: float,
+    area_close_mm: float = 0.0,
 ) -> int:
     """Overwrite the core-metric cells of each data row with single-pass values.
 
     Looks up the area/perimeter/perimeter_convex/LGI/Compactness columns by
     header, then for every row whose ``File`` names an image in ``image_dir``
-    recomputes those five metrics via :func:`single_pass_metrics`. Rows whose
+    recomputes those metrics via :func:`single_pass_metrics`. Rows whose
     ``File`` is not an image (the appended metadata rows) are left untouched.
     Returns the number of rows corrected.
     """
@@ -308,7 +596,7 @@ def correct_metrics_in_workbook(
         img_path = image_dir / name.strip()
         if not img_path.is_file():  # metadata rows ("PixelSize:", etc.) are not images
             continue
-        result = single_pass_metrics(img_path, pixel_size, kernel_size, cnt_threshold)
+        result = single_pass_metrics(img_path, pixel_size, kernel_size, cnt_threshold, area_close_mm)
         values = result if result is not None else (0.0, 0.0, 0.0, 0.0, 0.0)
         if result is None:
             logging.warning("No contour > %s for %s; wrote zeros.", cnt_threshold, name)
@@ -318,6 +606,58 @@ def correct_metrics_in_workbook(
 
     wb.save(xlsx_path)
     return corrected
+
+
+def correct_sulci_in_workbook(
+    xlsx_path: Path,
+    image_dir: Path,
+    pixel_size: float,
+    cnt_threshold: float,
+    unit: str,
+) -> int:
+    """Overwrite Sulci_count and the depth columns with values recomputed on the
+    new segmentation via :func:`single_pass_sulci`, so they agree with the area/
+    LGI recompute and the review-image markers. Columns absent from the workbook
+    are skipped. Returns the number of data rows updated.
+    """
+    count_col = "Sulci_count"
+    depth_cols = {
+        "min": f"min_depth_{unit}", "max": f"max_depth_{unit}",
+        "mean": f"mean_depth_{unit}", "total": f"total_depth_{unit}",
+    }
+    wb = load_workbook(xlsx_path)
+    ws = wb.active
+
+    headers: dict[str, int] = {}
+    for col in range(1, ws.max_column + 1):
+        value = ws.cell(row=1, column=col).value
+        if isinstance(value, str):
+            headers[value.strip()] = col
+
+    if "File" not in headers or count_col not in headers:
+        logging.warning("Skipping sulci recompute for %s: missing File/%s", xlsx_path.name, count_col)
+        return 0
+
+    file_col = headers["File"]
+    updated = 0
+    for row in range(2, ws.max_row + 1):
+        name = ws.cell(row=row, column=file_col).value
+        if not isinstance(name, str):
+            continue
+        img_path = image_dir / name.strip()
+        if not img_path.is_file():
+            continue
+        count, mn, mx, mean, total = single_pass_sulci(img_path, pixel_size, cnt_threshold, unit)
+        ws.cell(row=row, column=headers[count_col], value=count)
+        for key, header in depth_cols.items():
+            if header not in headers:
+                continue
+            value = {"min": mn, "max": mx, "mean": mean, "total": total}[key]
+            ws.cell(row=row, column=headers[header], value=value)
+        updated += 1
+
+    wb.save(xlsx_path)
+    return updated
 
 
 def is_metadata_row(first_cell: Any) -> bool:
@@ -465,6 +805,9 @@ def run_folder(
     unit: str,
     auto_scalebar: bool = False,
     single_pass_metrics_enabled: bool = False,
+    review: bool = False,
+    review_upscale_min: int = 600,
+    area_close_mm: float = 0.0,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -516,11 +859,24 @@ def run_folder(
     # so the appended means reflect the corrected (retry-free) values.
     if single_pass_metrics_enabled:
         n = correct_metrics_in_workbook(
-            final_xlsx, input_dir, eff_pixel_size, kernel_size, cnt_threshold
+            final_xlsx, input_dir, eff_pixel_size, kernel_size, cnt_threshold, area_close_mm
         )
         logging.info("Single-pass recompute corrected %d data row(s) in %s", n, final_xlsx.name)
+        n_sulci = correct_sulci_in_workbook(
+            final_xlsx, input_dir, eff_pixel_size, cnt_threshold, unit
+        )
+        logging.info("Sulci recompute (new segmentation) updated %d data row(s) in %s",
+                     n_sulci, final_xlsx.name)
 
     add_summary_table(final_xlsx)
+
+    if review:
+        n_review = render_review_images(
+            input_dir, output_dir, kernel_size, cnt_threshold, eff_pixel_size, unit,
+            area_close_mm, upscale_min=review_upscale_min,
+        )
+        logging.info("Wrote %d enlarged review image(s) to %s", n_review, output_dir / "review")
+
     return final_xlsx
 
 
@@ -570,6 +926,13 @@ def main() -> int:
             "Single-pass metrics ON: area/perimeter/perimeter_convex/LGI/Compactness "
             "recomputed without the LGI retry after each batch run."
         )
+    if settings["area_close_mm"] > 0:
+        logging.info(
+            "Option B ON: area measured on the brain after a %.1f %s morphological "
+            "close (cortex ring filled, scaled per folder); LGI/perimeter stay on "
+            "the folded boundary.",
+            settings["area_close_mm"], settings["unit"],
+        )
 
     processed = 0
     skipped = 0
@@ -605,6 +968,9 @@ def main() -> int:
                     unit=settings["unit"],
                     auto_scalebar=settings["auto_scalebar"],
                     single_pass_metrics_enabled=settings["single_pass_metrics"],
+                    review=settings["review"],
+                    review_upscale_min=settings["review_upscale_min"],
+                    area_close_mm=settings["area_close_mm"],
                 )
                 logging.info("Wrote workbook: %s", xlsx_path)
                 processed += 1
