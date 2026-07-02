@@ -218,6 +218,12 @@ def find_image_files(folder: Path) -> list[Path]:
 # The recompute path below replaces that rule WITHOUT editing the shared module.
 # ---------------------------------------------------------------------------
 WHITE_BG_CHANNEL_MIN = 235  # a pixel is "background white" when every BGR channel >= this
+# Small close (px) that seals the thin white cortex/CSF ribbon between the tissue
+# core and the outer cortical rim into the ROI before the folded (pial) contour
+# is traced. Deliberately small: it bridges the ~2-4 px ribbon (and any gaps in
+# the rim) so the outer contour stops dipping inward through them, while wide
+# sulcal valleys survive so the real folded perimeter / LGI is preserved.
+PIAL_RIBBON_CLOSE_PX = 3
 
 
 def _border_is_white(img: np.ndarray, border: int = 3, white_min: int = WHITE_BG_CHANNEL_MIN) -> bool:
@@ -295,6 +301,34 @@ def closed_brain_mask(kept_contours, shape, kernel_px: int) -> np.ndarray:
     return _fill_interior_holes(closed)
 
 
+def segment_pial_mask(
+    img: np.ndarray,
+    ribbon_close_px: int = PIAL_RIBBON_CLOSE_PX,
+    white_min: int = WHITE_BG_CHANNEL_MIN,
+) -> np.ndarray:
+    """Brain mask for tracing the folded (pial) boundary, with the inner white
+    cortex ribbon sealed into the ROI.
+
+    Builds on :func:`segment_foreground` (non-white + enclosed-hole fill) and
+    then applies a *small* morphological close followed by an interior-hole fill.
+    That bridges the ~2-4 px white cortex/CSF ribbon between the tissue core and
+    the outer cortical rim -- which ``segment_foreground`` leaves as background
+    whenever it opens out to the image edge -- so the external contour no longer
+    dips inward through gaps in the rim. That inward dip is the "inner white
+    space is not filled" the pial surface was being mis-annotated on, and it also
+    massively inflated the folded perimeter / LGI on the affected bands.
+
+    The close is kept small on purpose: real (wide) sulcal valleys open broadly to
+    the border and survive it, so the genuine folding signal is preserved. Dark-
+    background full slices keep the unmodified :func:`segment_foreground` rule.
+    """
+    base = segment_foreground(img, white_min=white_min)
+    if ribbon_close_px <= 1 or not _border_is_white(img, white_min=white_min):
+        return base
+    closed = cv2.morphologyEx(base, cv2.MORPH_CLOSE, compute_kernel_convex(ribbon_close_px))
+    return _fill_interior_holes(closed)
+
+
 def render_review_image(
     img: np.ndarray,
     kernel_size: int,
@@ -321,7 +355,7 @@ def render_review_image(
     legibility; metrics are computed elsewhere at native resolution, so
     calibration is unaffected.
     """
-    mask = segment_foreground(img)
+    mask = segment_pial_mask(img)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     kept = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
 
@@ -462,9 +496,10 @@ def single_pass_metrics(
     (the ``compute_kernel_convex`` / ``compactness_2D`` helpers and the contour
     filter) but with two corrections: it drops the LGI threshold-climbing retry,
     which marches ``cnt_threshold`` past a small cropped brain and zeroes it out,
-    and it segments with :func:`segment_foreground` instead of the grayscale
+    and it segments with :func:`segment_pial_mask` instead of the grayscale
     brightness threshold, so bright labels (e.g. cyan) and the inner white cortex
-    are no longer excluded from the region of interest.
+    are no longer excluded from the region of interest, and the folded contour no
+    longer dips into the unfilled cortex ribbon (which had inflated the LGI).
 
     When ``area_close_mm > 0`` the reported ``area`` is measured on the
     morphologically-closed brain (option B: the white cortex ring between the
@@ -478,7 +513,7 @@ def single_pass_metrics(
     img = cv2.imread(str(image_path))
     if img is None:
         return None
-    im_bw = segment_foreground(img)
+    im_bw = segment_pial_mask(img)
     contours, _ = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     kept = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
     if not kept:
@@ -496,7 +531,11 @@ def single_pass_metrics(
     perimeter_convex = (
         sum(cv2.arcLength(c, True) for c in kept_conv) * pixel_size if kept_conv else 0.0
     )
-    lgi = perimeter / perimeter_convex if perimeter_convex else 0.0
+    # LGI is folded/convex; the folded boundary can never be shorter than its own
+    # convex envelope, so 1.0 is the theoretical floor. On these tiny crops pixel
+    # staircasing can push a near-unfolded band a hair below 1.0 (0.97-0.99) --
+    # clamp those impossible values up to 1.0. (0.0 stays the "no contour" sentinel.)
+    lgi = max(1.0, perimeter / perimeter_convex) if perimeter_convex else 0.0
 
     if area_close_mm > 0:
         # Option B: area on the cortex-ring-filled brain; compactness uses that
@@ -533,7 +572,7 @@ def single_pass_sulci(
     img = cv2.imread(str(image_path))
     if img is None:
         return 0, None, None, None, None
-    mask = segment_foreground(img)
+    mask = segment_pial_mask(img)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     kept = [c for c in contours if cv2.contourArea(c) > cnt_threshold]
     min_keep = 0.5 if unit == "mm" else 0.05 if unit == "cm" else 0.0

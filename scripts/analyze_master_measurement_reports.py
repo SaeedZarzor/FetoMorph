@@ -576,12 +576,15 @@ def analyze_workbook(path: Path, sheet_name: str) -> None:
         ("Axis", axis),
         ("Slice rows analyzed", len(df)),
     ]
-    note_parts = [
-        "Per-class sulcus plots may use values reconstructed from count + min/max/mean."
-    ]
-    if not has_sulcus_values:
+    note_parts = []
+    if has_sulcus_values:
         note_parts.append(
-            "Per-class sulcus tables/plots were skipped because this cropped-slice workbook has no per-class sulcus columns."
+            "Per-class sulcus plots may use values reconstructed from count + min/max/mean."
+        )
+    else:
+        note_parts.append(
+            "Cropped bands use the fixed-depth sulci rule (all 'unclassified'), so there is no "
+            "primary/secondary/tertiary breakdown; count and min/max/mean/total depth are reported instead."
         )
     if MATPLOTLIB_IMPORT_ERROR is not None:
         note_parts.append(
