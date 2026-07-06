@@ -281,6 +281,35 @@ def _fill_interior_holes(mask: np.ndarray) -> np.ndarray:
     return filled
 
 
+def _fill_non_exterior(mask: np.ndarray) -> np.ndarray:
+    """Flood the foreground over every background component except the single
+    largest one -- the true exterior that surrounds the pial surface.
+
+    Stronger than :func:`_fill_interior_holes`: it also fills the inner white
+    cortex/CSF pockets that leak out through the artificial *straight crop edges*
+    of a band sub-slice. Such a pocket is walled off from the true exterior by the
+    outer cortical rim but opens onto a crop cut, so it touches the image border
+    and ``_fill_interior_holes`` leaves it -- which makes ``RETR_EXTERNAL`` trace
+    the folded contour *inward* along the crop edge, outlining the inner cortex
+    (and inflating perimeter / LGI). Sealing every non-exterior component removes
+    that dip for a pocket of any width, independent of the crop's zoom, and keeps
+    the red contour a clean line along the artificial crop cuts.
+
+    Real sulci open to the true exterior, so they stay part of the largest
+    component and are never filled -- the gyrification signal is preserved.
+    """
+    num, labels = cv2.connectedComponents(cv2.bitwise_not(mask))
+    if num <= 1:  # no background at all
+        return mask.copy()
+    sizes = [(lbl, int(np.count_nonzero(labels == lbl))) for lbl in range(1, num)]
+    exterior = max(sizes, key=lambda t: t[1])[0]
+    filled = mask.copy()
+    for lbl, _ in sizes:
+        if lbl != exterior:
+            filled[labels == lbl] = 255
+    return filled
+
+
 def area_close_kernel_px(area_close_mm: float, pixel_size: float, min_px: int) -> int:
     """Close-kernel size (px) for the area mask, from a physical closing distance.
 
@@ -309,24 +338,36 @@ def segment_pial_mask(
     """Brain mask for tracing the folded (pial) boundary, with the inner white
     cortex ribbon sealed into the ROI.
 
-    Builds on :func:`segment_foreground` (non-white + enclosed-hole fill) and
-    then applies a *small* morphological close followed by an interior-hole fill.
-    That bridges the ~2-4 px white cortex/CSF ribbon between the tissue core and
-    the outer cortical rim -- which ``segment_foreground`` leaves as background
-    whenever it opens out to the image edge -- so the external contour no longer
-    dips inward through gaps in the rim. That inward dip is the "inner white
-    space is not filled" the pial surface was being mis-annotated on, and it also
-    massively inflated the folded perimeter / LGI on the affected bands.
+    Builds on :func:`segment_foreground` (non-white + enclosed-hole fill) and then
+    seals every background pocket that is not the true exterior via
+    :func:`_fill_non_exterior`. The offending pockets are the inner white
+    cortex/CSF ribbons that open onto the *artificial straight crop edges* of a
+    band sub-slice: walled off from the exterior by the outer cortical rim, they
+    touch the image border, so plain enclosed-hole filling leaves them and the
+    external contour dips inward along the crop edge -- outlining the inner cortex
+    and massively inflating the folded perimeter / LGI. Sealing them removes the
+    dip regardless of the pocket's width or the crop's zoom, so the red contour is
+    a clean line: it follows the true (curved) pial surface and runs straight along
+    the artificial top / bottom / left crop cuts (matching the reference outputs).
+    Cortex that is cut by the slab and sits along a crop cut is therefore bounded
+    by the straight cut rather than individually traced -- tracing it would dip the
+    contour into the CSF bays between the cut gyri.
 
-    The close is kept small on purpose: real (wide) sulcal valleys open broadly to
-    the border and survive it, so the genuine folding signal is preserved. Dark-
-    background full slices keep the unmodified :func:`segment_foreground` rule.
+    A *small* morphological close is applied first, to bridge genuine thin gaps in
+    the rim (a pocket leaking to the exterior through a ~2-4 px neck): the close
+    pinches the neck shut so the pocket becomes non-exterior and is then sealed.
+    Real (wide) sulcal valleys open broadly to the true exterior, stay part of the
+    largest component and survive, so the gyrification signal is preserved.
+    Dark-background full slices keep the unmodified :func:`segment_foreground` rule.
     """
     base = segment_foreground(img, white_min=white_min)
-    if ribbon_close_px <= 1 or not _border_is_white(img, white_min=white_min):
+    if not _border_is_white(img, white_min=white_min):
         return base
-    closed = cv2.morphologyEx(base, cv2.MORPH_CLOSE, compute_kernel_convex(ribbon_close_px))
-    return _fill_interior_holes(closed)
+    sealed = _fill_non_exterior(base)
+    if ribbon_close_px > 1:
+        closed = cv2.morphologyEx(sealed, cv2.MORPH_CLOSE, compute_kernel_convex(ribbon_close_px))
+        sealed = _fill_non_exterior(closed)
+    return sealed
 
 
 def render_review_image(
@@ -375,13 +416,18 @@ def render_review_image(
     thickness, _font_scale, radius_px = image_annotation_style(w, h, style="bold")
 
     cv2.drawContours(annotated, kept_conv, -1, (0, 255, 0), thickness)  # green envelope
-    cv2.drawContours(annotated, kept, -1, (0, 0, 255), thickness)       # red inner contour
 
     # Blue convexity-defect chords + sulci markers (cropped sub-slices are not
     # full MRI slices, so the fixed-depth keep rule and "unclassified" marker
-    # are used, matching measurement_batch's non-percent branch).
+    # are used, matching measurement_batch's non-percent branch). The chords are
+    # drawn BEFORE the red folded contour, and the markers AFTER it: on these
+    # staircased low-res crops the many tiny defects spawn many blue chords that
+    # would otherwise paint over the red and make the outer outline look absent,
+    # so red is layered last to read as the continuous outer surface line -- the
+    # folded boundary is unchanged, this is purely draw order.
     min_keep = 0.5 if unit == "mm" else 0.05 if unit == "cm" else 0.0
     marker_color = SULCUS_CLASS_COLORS["unclassified"]
+    marker_pts = []
     for cnt in kept:
         hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
         if hull is None or len(hull) < 3 or len(cnt) <= 3 or not np.all(np.diff(hull.ravel()) > 0):
@@ -394,7 +440,11 @@ def render_review_image(
             start, end, far = tuple(cnt[s][0]), tuple(cnt[e][0]), tuple(cnt[f][0])
             cv2.line(annotated, start, end, [255, 0, 0], thickness)  # blue outer chord
             if (d * pixel_size / DEFECT_FIXED_POINT) > min_keep:
-                cv2.circle(annotated, far, radius_px, marker_color, -1)
+                marker_pts.append(far)
+
+    cv2.drawContours(annotated, kept, -1, (0, 0, 255), thickness)      # red folded contour (on top)
+    for far in marker_pts:
+        cv2.circle(annotated, far, radius_px, marker_color, -1)        # gray sulci markers (topmost)
 
     factor = max(1, int(round(upscale_min / max(min(h, w), 1))))
     return cv2.resize(annotated, (w * factor, h * factor), interpolation=cv2.INTER_NEAREST)
