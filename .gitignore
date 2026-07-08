@@ -12,6 +12,8 @@ assets/
 output/
 area_band_output_multi/
 docs/
+numbered_batch_full/
+numbered_batch_cropped/
 
 # Python cache/build artifacts
 __pycache__/
@@ -70,3 +72,8 @@ CLAUDE.md
 profile_info.md
 graphify-out/
 hallmark_measurement_review.md
+
+#Python
+run_numbered_folder_batches.py
+combine_batch_allmarks_analysis.py
+run_master_measurement_reports.py

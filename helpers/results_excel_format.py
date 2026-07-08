@@ -93,6 +93,11 @@ class ResultsSheet:
     # own per-run parameters (kernel size, pixel spacing, threshold, …)
     # because they vary across measurements of the same file.
     extra_columns: tuple[str, ...] = ()
+    # Extra column headers appended AFTER the metric columns (to the right of the
+    # RESULTS_COLUMNS block). Use for variable-length per-row detail that belongs
+    # at the end of the row, e.g. every individual sulcus depth per class. Like
+    # every other column they are dropped when ``drop_empty_columns`` and empty.
+    trailing_columns: tuple[str, ...] = ()
     # When True, columns whose every row value is empty get dropped from
     # the Mean results table, and parameter rows with no value get
     # dropped from the Parameters block (skipping the block entirely if
@@ -363,7 +368,8 @@ def _render_sheet(wb, ws, sheet: ResultsSheet, used_names: set[str],
     file_name = sheet.file_name or ""
     folder = sheet.folder or ""
     n_cols = max(
-        len(RESULTS_COLUMNS) + len(sheet.extra_columns or ()) + 1, 11)
+        len(RESULTS_COLUMNS) + len(sheet.extra_columns or ())
+        + len(sheet.trailing_columns or ()) + 1, 11)
     last_col = n_cols + 1  # column A stays empty; data starts at B
 
     # Row 1 — Title
@@ -442,7 +448,9 @@ def _render_sheet(wb, ws, sheet: ResultsSheet, used_names: set[str],
     # set ``extra_columns``) sit between Section and the metric columns
     # so each measurement's adjustment parameters travel next to its row.
     extras = tuple(sheet.extra_columns or ())
-    column_names = ((sheet.section_header,) + extras + RESULTS_COLUMNS[1:])
+    trailing = tuple(sheet.trailing_columns or ())
+    column_names = ((sheet.section_header,) + extras
+                    + RESULTS_COLUMNS[1:] + trailing)
     if sheet.drop_empty_columns:
         column_names = _filter_populated_columns(column_names, sheet.rows)
     for i, name in enumerate(column_names, start=2):

@@ -14,6 +14,8 @@ from helpers.helpers import (
     mask_perimeter_mm,
     split_inner_and_internal_contours,
     threshold_binary,
+    border_is_white,
+    segment_pial_mask,
     SULCUS_CLASS_COLORS,
     SULCUS_CLASSES,
     classify_sulcus_depth,
@@ -40,6 +42,22 @@ from constants import (
 def _to_kernel_px(kernel_size_mm: float, pixel_size_mm: float) -> int:
     px = max(3, int(round(float(kernel_size_mm) / max(float(pixel_size_mm), 1e-9))))
     return px
+
+
+def _binarise_brain(image: np.ndarray, gray_code: int = cv2.COLOR_RGB2GRAY) -> np.ndarray:
+    """Binary brain mask (uint8, 255 = brain) with cropped-section handling.
+
+    White-background colour label-map crops (e.g. ``Examples/cropped_slices``)
+    are segmented with :func:`helpers.helpers.segment_pial_mask`: bright labels
+    such as cyan are kept and the inner white cortex ribbon is sealed into the
+    ROI, so the folded boundary / LGI is not inflated. Dark-background full-slice
+    renders keep the legacy Otsu inverse threshold, so full-slice behaviour is
+    unchanged.
+    """
+    if border_is_white(image):
+        return segment_pial_mask(image)
+    gray = cv2.cvtColor(image, gray_code)
+    return threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
 
 
 def process_on_images_batch(directory_path,
@@ -116,8 +134,7 @@ def process_on_images_batch(directory_path,
             raise ValueError(f"Could not read image: {file_path}")
 
         print(f"[Process Batch] {file_name} is processing")
-        im_bw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        im_bw = threshold_binary(im_bw, BINARY_THRESHOLD_DEFAULT, invert=True)
+        im_bw = _binarise_brain(image, cv2.COLOR_RGB2GRAY)
         # RETR_CCOMP + split so Contour Accounting can subtract internal holes
         # (min_area=0 here; the per-image local_threshold filter is applied in the
         # retry loop below to keep the existing LGI-parity behaviour).
@@ -310,7 +327,11 @@ def process_on_images_batch(directory_path,
                     if perimeter_outer_envelope is not None and perimeter_outer_envelope > 0
                     else None),
             "compactness": compactness,
-            "depth_sets": depth_sets if use_percent_filter else {},
+            # Keep the depth sets in BOTH modes: the fixed-filter (cropped
+            # sub-slice) path stores its kept sulci under "unclassified", so
+            # passing {} here dropped the Unclassified count/mean-depth columns
+            # from the workbook (drop_empty_columns saw only zeros).
+            "depth_sets": depth_sets,
             "png_path": new_path,
         })
 
@@ -324,10 +345,26 @@ def process_on_images_batch(directory_path,
             ResultsSheet, write_results_workbook, subtype_mean,
         )
 
+        # Per-class individual sulcus depths: one column per sulcus, deepest
+        # first (depth_sets were sorted descending by flatten_depth_sets in the
+        # loop). The number of columns for a class is the largest count of that
+        # class across the folder's images; rows with fewer leave the trailing
+        # cells blank, and drop_empty_columns removes any class with none.
+        max_counts = {k: 0 for k in SULCUS_CLASSES}
+        for r in sheet1:
+            d = r["depth_sets"] or {}
+            for k in SULCUS_CLASSES:
+                max_counts[k] = max(max_counts[k], len(d.get(k, []) or []))
+        depth_value_columns: list[str] = [
+            f"{k.capitalize()}_depth_{i + 1}"
+            for k in SULCUS_CLASSES
+            for i in range(max_counts[k])
+        ]
+
         results_rows = []
         for r in sheet1:
             d = r["depth_sets"] or {}
-            results_rows.append({
+            row = {
                 "Section": r["file_name"],
                 "Area": r["area"],
                 "Perimeter": r["perimeter"],
@@ -347,7 +384,14 @@ def process_on_images_batch(directory_path,
                 "UnclassifiedMeanDepth": subtype_mean(
                     None, d.get("unclassified", []) or []),
                 "_section_link": r["png_path"],
-            })
+            }
+            # Every individual sulcus value per class (deepest first).
+            for k in SULCUS_CLASSES:
+                vals = d.get(k, []) or []
+                for i in range(max_counts[k]):
+                    row[f"{k.capitalize()}_depth_{i + 1}"] = (
+                        vals[i] if i < len(vals) else None)
+            results_rows.append(row)
 
         parameters = {
             "Kernel size (mm)": float(kernel_size_mm),
@@ -382,6 +426,7 @@ def process_on_images_batch(directory_path,
             parameters=parameters,
             rows=results_rows,
             totals=totals if totals else None,
+            trailing_columns=tuple(depth_value_columns),
             drop_empty_columns=True,
         )
         xlsx_path = os.path.join(out_dir, "Batch_Allmarks.xlsx")

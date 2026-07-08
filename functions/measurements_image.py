@@ -17,6 +17,8 @@ from helpers.helpers import (
     mask_perimeter_mm,
     split_inner_and_internal_contours,
     threshold_binary,
+    border_is_white,
+    segment_pial_mask,
     _add_scalebar_on_annotated,
     draw_hallmarks_values_on_image,
     SULCUS_CLASS_COLORS,
@@ -43,6 +45,22 @@ from constants import (
 def _to_kernel_px(kernel_size_mm: float, pixel_size_mm: float) -> int:
     px = max(3, int(round(float(kernel_size_mm) / max(float(pixel_size_mm), 1e-9))))
     return px
+
+
+def _binarise_brain(image: np.ndarray, gray_code: int = cv2.COLOR_RGB2GRAY) -> np.ndarray:
+    """Binary brain mask (uint8, 255 = brain) with cropped-section handling.
+
+    White-background colour label-map crops (e.g. ``Examples/cropped_slices``)
+    are segmented with :func:`helpers.helpers.segment_pial_mask`: bright labels
+    such as cyan are kept (not dropped by a brightness cut) and the inner white
+    cortex ribbon is sealed into the ROI, so the folded boundary / LGI is not
+    inflated. Dark-background full-slice renders keep the legacy Otsu inverse
+    threshold, so full-slice behaviour is unchanged.
+    """
+    if border_is_white(image):
+        return segment_pial_mask(image)
+    gray = cv2.cvtColor(image, gray_code)
+    return threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
 
 
 def _split_contours_for_mode(bw, cnt_threshold: float, pixel_size: float):
@@ -110,8 +128,7 @@ def compute_image_allmarks(
         raise ValueError(f"Could not read image: {file_path}")
 
     print(f"[Image] {file_path} is processing")
-    im_bw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    im_bw = threshold_binary(im_bw, BINARY_THRESHOLD_DEFAULT, invert=True)
+    im_bw = _binarise_brain(image, cv2.COLOR_RGB2GRAY)
     # Brain-boundary (inner) + hole (internal) contours for Contour Accounting.
     inner_filtered, internal_filtered = _split_contours_for_mode(im_bw, cnt_threshold, pixel_size)
     filtered_contours = inner_filtered  # sulci defects + GI operate on the brain boundary
@@ -332,8 +349,7 @@ def compute_image_perimeter(
 
     slice_kind, _ = classify_slice_kind(image)
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
+    bw = _binarise_brain(image, cv2.COLOR_BGR2GRAY)
 
     inner_filtered, internal_filtered = _split_contours_for_mode(bw, cnt_threshold, pixel_size)
 
@@ -410,8 +426,7 @@ def compute_image_area(
 
     slice_kind, _ = classify_slice_kind(image)
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
+    bw = _binarise_brain(image, cv2.COLOR_BGR2GRAY)
 
     inner_filtered, internal_filtered = _split_contours_for_mode(bw, cnt_threshold, pixel_size)
 
@@ -492,8 +507,7 @@ def compute_image_lGI(
     slice_kind, _ = classify_slice_kind(image)
 
     print(f"[Image] {file_path} is processing")
-    im_bw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    im_bw = threshold_binary(im_bw, BINARY_THRESHOLD_DEFAULT, invert=True)
+    im_bw = _binarise_brain(image, cv2.COLOR_RGB2GRAY)
     contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) * (pixel_size ** 2) > cnt_threshold]
@@ -605,8 +619,7 @@ def compute_image_sulci_depth(
         raise ValueError(f"Could not read image: {file_path}")
 
     print(f"[Image] {file_path} is processing")
-    im_bw = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    im_bw = threshold_binary(im_bw, BINARY_THRESHOLD_DEFAULT, invert=True)
+    im_bw = _binarise_brain(image, cv2.COLOR_RGB2GRAY)
     contours, hierarchy = cv2.findContours(im_bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) * (pixel_size ** 2) > cnt_threshold]
@@ -718,8 +731,7 @@ def compute_compactness_2D(file_path: str, cnt_threshold: float = 20.0, pixel_si
 
     slice_kind, _ = classify_slice_kind(image)
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
+    bw = _binarise_brain(image, cv2.COLOR_BGR2GRAY)
 
     contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filtered = [c for c in contours if cv2.contourArea(c) * (pixel_size ** 2) > cnt_threshold]
@@ -787,8 +799,7 @@ def compute_image_curved_length(
 
     slice_kind, _ = classify_slice_kind(image)
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
+    bw = _binarise_brain(image, cv2.COLOR_BGR2GRAY)
 
     contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filtered = [c for c in contours if cv2.contourArea(c) * (pixel_size ** 2) > cnt_threshold]

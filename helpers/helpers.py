@@ -10,6 +10,7 @@ from __future__ import annotations
 from deps import *
 from functions.nifti_to_image import draw_new_scale_bar
 from constants import (
+    BINARY_THRESHOLD_DEFAULT,
     SULCUS_PRIMARY_MIN_FRACTION,
     SULCUS_PRIMARY_MAX_FRACTION,
     SULCUS_SECONDARY_MIN_FRACTION,
@@ -467,8 +468,173 @@ def compute_kernel_convex(kernel_size: int) -> np.ndarray:
         A ``uint8`` structuring element suitable for ``cv2.morphologyEx``.
     """
     kernel_convex = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-    
+
     return kernel_convex
+
+
+# ---------------------------------------------------------------------------
+# Cropped-section foreground / pial segmentation.
+#
+# The shared functions/measurement_batch binarisation keeps a pixel as "brain"
+# only when its grayscale value is dark enough (THRESH_BINARY_INV @ 200). That
+# is correct for a grayscale render but wrong for the coloured label-map crops
+# (Examples/cropped_slices/…): bright labels such as cyan (gray ~212) fall just
+# over the threshold and are dropped, and the inner white cortex (gray 255) is
+# dropped entirely. The helpers below replace that rule for white-background
+# colour crops WITHOUT changing full-slice (dark-background) behaviour.
+# ---------------------------------------------------------------------------
+WHITE_BG_CHANNEL_MIN = 235  # a pixel is "background white" when every BGR channel >= this
+# Small close (px) that seals the thin white cortex/CSF ribbon between the tissue
+# core and the outer cortical rim into the ROI before the folded (pial) contour
+# is traced. Deliberately small: it bridges the ~2-4 px ribbon (and any gaps in
+# the rim) so the outer contour stops dipping inward through them, while wide
+# sulcal valleys survive so the real folded perimeter / LGI is preserved.
+PIAL_RIBBON_CLOSE_PX = 3
+
+
+def border_is_white(img: np.ndarray, border: int = 3, white_min: int = WHITE_BG_CHANNEL_MIN) -> bool:
+    """True when the image border is predominantly near-white.
+
+    Distinguishes white-background colour label maps (the brain crops, where the
+    region of interest is *any* non-white pixel) from dark-background grayscale
+    renders (where the legacy brightness threshold is the correct rule).
+    """
+    edges = np.concatenate([
+        img[:border, :, :].reshape(-1, 3),
+        img[-border:, :, :].reshape(-1, 3),
+        img[:, :border, :].reshape(-1, 3),
+        img[:, -border:, :].reshape(-1, 3),
+    ])
+    return bool(np.all(edges >= white_min, axis=1).mean() > 0.5)
+
+
+def segment_foreground(img: np.ndarray, white_min: int = WHITE_BG_CHANNEL_MIN) -> np.ndarray:
+    """Binary brain mask (uint8, 255 = brain) for one slice image.
+
+    White-background colour label maps: foreground is every non-white pixel — so
+    bright labels such as cyan are kept rather than dropped by a brightness cut —
+    PLUS any white region fully enclosed by tissue, which is the inner cortex and
+    gets filled in. White that opens outward to the image border stays background,
+    so the sulcal concavities (and therefore the LGI / sulcus-depth signal) are
+    preserved: this is the "fill enclosed only, keep folds" behaviour.
+
+    Dark-background grayscale renders fall back to the original
+    THRESH_BINARY_INV @ BINARY_THRESHOLD_DEFAULT rule, leaving full-slice
+    behaviour unchanged.
+    """
+    if not border_is_white(img, white_min=white_min):
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        _, bw = cv2.threshold(gray, BINARY_THRESHOLD_DEFAULT, 255, 1)
+        return bw
+
+    nonwhite = np.where(np.all(img >= white_min, axis=2), 0, 255).astype(np.uint8)
+    # Fill white fully enclosed by tissue (interior cortex); white that reaches
+    # the border (exterior background + open sulcal valleys) is left alone.
+    return fill_interior_holes(nonwhite)
+
+
+def fill_interior_holes(mask: np.ndarray) -> np.ndarray:
+    """Flood the foreground over every background component that does not touch
+    the image border (i.e. holes fully enclosed by foreground)."""
+    num, labels = cv2.connectedComponents(cv2.bitwise_not(mask))
+    border_labels = set(
+        np.concatenate([labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]]).tolist()
+    )
+    filled = mask.copy()
+    for lbl in range(1, num):
+        if lbl not in border_labels:
+            filled[labels == lbl] = 255
+    return filled
+
+
+def fill_non_exterior(mask: np.ndarray) -> np.ndarray:
+    """Flood the foreground over every background component except the single
+    largest one -- the true exterior that surrounds the pial surface.
+
+    Stronger than :func:`fill_interior_holes`: it also fills the inner white
+    cortex/CSF pockets that leak out through the artificial *straight crop edges*
+    of a band sub-slice. Such a pocket is walled off from the true exterior by the
+    outer cortical rim but opens onto a crop cut, so it touches the image border
+    and ``fill_interior_holes`` leaves it -- which makes ``RETR_EXTERNAL`` trace
+    the folded contour *inward* along the crop edge, outlining the inner cortex
+    (and inflating perimeter / LGI). Sealing every non-exterior component removes
+    that dip for a pocket of any width, independent of the crop's zoom, and keeps
+    the red contour a clean line along the artificial crop cuts.
+
+    Real sulci open to the true exterior, so they stay part of the largest
+    component and are never filled -- the gyrification signal is preserved.
+    """
+    num, labels = cv2.connectedComponents(cv2.bitwise_not(mask))
+    if num <= 1:  # no background at all
+        return mask.copy()
+    sizes = [(lbl, int(np.count_nonzero(labels == lbl))) for lbl in range(1, num)]
+    exterior = max(sizes, key=lambda t: t[1])[0]
+    filled = mask.copy()
+    for lbl, _ in sizes:
+        if lbl != exterior:
+            filled[labels == lbl] = 255
+    return filled
+
+
+def area_close_kernel_px(area_close_mm: float, pixel_size: float, min_px: int) -> int:
+    """Close-kernel size (px) for the area mask, from a physical closing distance.
+
+    Scaling by ``pixel_size`` keeps the cortex-ring fill consistent across the
+    different per-folder zooms; never smaller than ``min_px`` (the LGI kernel).
+    """
+    if area_close_mm <= 0 or pixel_size <= 0:
+        return min_px
+    return max(min_px, int(round(area_close_mm / pixel_size)))
+
+
+def closed_brain_mask(kept_contours, shape, kernel_px: int) -> np.ndarray:
+    """Solid brain mask: fill the kept contours, morph-close to seal the cortex
+    ring / sulcal mouths, then fill any newly enclosed holes."""
+    inner = np.zeros(shape, np.uint8)
+    cv2.drawContours(inner, kept_contours, -1, 255, thickness=cv2.FILLED)
+    closed = cv2.morphologyEx(inner, cv2.MORPH_CLOSE, compute_kernel_convex(kernel_px))
+    return fill_interior_holes(closed)
+
+
+def segment_pial_mask(
+    img: np.ndarray,
+    ribbon_close_px: int = PIAL_RIBBON_CLOSE_PX,
+    white_min: int = WHITE_BG_CHANNEL_MIN,
+) -> np.ndarray:
+    """Brain mask for tracing the folded (pial) boundary, with the inner white
+    cortex ribbon sealed into the ROI.
+
+    Builds on :func:`segment_foreground` (non-white + enclosed-hole fill) and then
+    seals every background pocket that is not the true exterior via
+    :func:`fill_non_exterior`. The offending pockets are the inner white
+    cortex/CSF ribbons that open onto the *artificial straight crop edges* of a
+    band sub-slice: walled off from the exterior by the outer cortical rim, they
+    touch the image border, so plain enclosed-hole filling leaves them and the
+    external contour dips inward along the crop edge -- outlining the inner cortex
+    and massively inflating the folded perimeter / LGI. Sealing them removes the
+    dip regardless of the pocket's width or the crop's zoom, so the red contour is
+    a clean line: it follows the true (curved) pial surface and runs straight along
+    the artificial top / bottom / left crop cuts (matching the reference outputs).
+    Cortex that is cut by the slab and sits along a crop cut is therefore bounded
+    by the straight cut rather than individually traced -- tracing it would dip the
+    contour into the CSF bays between the cut gyri.
+
+    A *small* morphological close is applied first, to bridge genuine thin gaps in
+    the rim (a pocket leaking to the exterior through a ~2-4 px neck): the close
+    pinches the neck shut so the pocket becomes non-exterior and is then sealed.
+    Real (wide) sulcal valleys open broadly to the true exterior, stay part of the
+    largest component and survive, so the gyrification signal is preserved.
+    Dark-background full slices keep the unmodified :func:`segment_foreground` rule.
+    """
+    base = segment_foreground(img, white_min=white_min)
+    if not border_is_white(img, white_min=white_min):
+        return base
+    sealed = fill_non_exterior(base)
+    if ribbon_close_px > 1:
+        closed = cv2.morphologyEx(sealed, cv2.MORPH_CLOSE, compute_kernel_convex(ribbon_close_px))
+        sealed = fill_non_exterior(closed)
+    return sealed
+
 
 def defect_mm_per_px_and_fixed(
     start: tuple[float, float],

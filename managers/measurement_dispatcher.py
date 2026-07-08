@@ -1641,7 +1641,19 @@ class MeasurementDispatcher:
                 simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
                 contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
                 contour_mode=self.mw.contour_mode)
-                
+
+            # Append an Analysis sheet (summary tables + boxplots) to the batch
+            # workbook so every GUI batch run is analyzed like the master reports.
+            # Best-effort: a missing optional dependency must never fail the batch.
+            batch_xlsx = os.path.join(out_dir, "Batch_Allmarks.xlsx")
+            if os.path.isfile(batch_xlsx):
+                try:
+                    from helpers.analyze_master_measurement_reports import analyze_workbook
+                    analyze_workbook(batch_xlsx)
+                    print(f"[Process Batch] Analysis sheet added to {batch_xlsx}")
+                except Exception as ex:
+                    logger.warning("Batch analysis sheet skipped: %s", ex)
+
             self.mw.view.enable_png_navigation(saved_pngs, slice_indices=valid_slices)
 
             mid = len(saved_pngs) // 2
