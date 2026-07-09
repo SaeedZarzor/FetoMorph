@@ -21,7 +21,7 @@ from functions.optimization import optimization
 from functions.pial_to_stl import pial_pair_to_combined_stl, pial_to_stl
 from helpers.helpers import compactness_2D, compactness_3D
 from helpers.gestational_week_profile import (
-    GestationalWeekProfile, GASPResult, GASPSummary, METRIC_MAP,
+    GestationalWeekProfile, GASPResult, GASPSummary, METRIC_MAP, NORMALIZED_METRIC_MAP,
     MetricStats, WeekProfile, compute_similarity_scores,
 )
 from helpers.read_excel import conver_excel
@@ -2082,7 +2082,38 @@ class MeasurementDispatcher:
         if sd in dir_map:
             return dir_map[sd]
 
+        # Cropped sub-slices classify as "not_full_slice" (no axis), so fall back
+        # to the axis named in the image's folder path (…/{axis}/image.png).
+        if self.mw.current_kind == "image":
+            parts = os.path.normpath(
+                (getattr(self.mw, "current_path", "") or "").lower()).split(os.sep)
+            for a in valid:
+                if a in parts:
+                    return a
+
         return None
+
+    def _is_cropped_slice(self, measured: dict) -> bool:
+        """True when the current slice is a cropped sub-slice (``not_full_slice``).
+
+        Prefers a stored ``SliceKind``; otherwise classifies the loaded image.
+        Non-image contexts (mesh / manual entry) are treated as full slices.
+        """
+        stored = measured.get("SliceKind")
+        if isinstance(stored, str):
+            s = stored.strip().lower()
+            if s == "not_full_slice":
+                return True
+            if s in ("axial", "coronal", "sagittal"):
+                return False
+
+        if self.mw.current_kind == "image" and os.path.isfile(self.mw.current_path):
+            from helpers.slice_kind_classifier import classify_slice_kind
+            img_bgr = cv2.imread(self.mw.current_path)
+            if img_bgr is not None:
+                label, _conf = classify_slice_kind(img_bgr)
+                return label == "not_full_slice"
+        return False
 
     def _show_gasp_week_detail(
         self,
@@ -2117,8 +2148,37 @@ class MeasurementDispatcher:
         model = QStandardItemModel(0, len(cols), dlg)
         model.setHorizontalHeaderLabels(cols)
 
-        for meas_key, ref_field in METRIC_MAP.items():
+        comparison_maps = (NORMALIZED_METRIC_MAP, METRIC_MAP)
+        measured_key_by_field = {}
+        for comparison_map in comparison_maps:
+            for meas_key, ref_field in comparison_map.items():
+                measured_key_by_field.setdefault(ref_field, meas_key)
+        measured_key_by_field.setdefault("sulci_count_normalized", "TotalSulciCount")
+
+        ordered_fields = []
+        for comparison_map in comparison_maps:
+            for ref_field in comparison_map.values():
+                if ref_field not in ordered_fields:
+                    ordered_fields.append(ref_field)
+        for ref_field in result.per_metric:
+            if ref_field not in ordered_fields:
+                ordered_fields.append(ref_field)
+
+        for ref_field in ordered_fields:
+            if ref_field not in result.per_metric and (
+                result_alt is None or ref_field not in result_alt.per_metric
+            ):
+                continue
+            meas_key = measured_key_by_field.get(ref_field)
             val = measured.get(meas_key)
+            if isinstance(ref_field, str) and ref_field.endswith("_normalized"):
+                base_field = ref_field.removesuffix("_normalized")
+                base_stats = getattr(ref, base_field, None) if ref else None
+                if base_stats and base_stats.max:
+                    try:
+                        val = float(val) / float(base_stats.max)
+                    except (TypeError, ValueError, ZeroDivisionError):
+                        val = None
             label = metric_labels.get(ref_field, ref_field)
 
             stats: MetricStats | None = getattr(ref, ref_field, None) if ref else None
@@ -2509,12 +2569,23 @@ class MeasurementDispatcher:
         *manual_overrides* supplies project name and analysis-parameter values
         when there is no loaded image to read them from.
         """
-        csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                                "Examples", "gestational_week_reference.csv")
+        # Cropped sub-slices (not_full_slice) are compared against the cropped
+        # reference; full MRI slices against the full-slice reference.
+        examples_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Examples")
+        full_csv = os.path.join(examples_dir, "gestational_week_reference.csv")
+        cropped_csv = os.path.join(examples_dir, "gestational_week_cropped_reference.csv")
+        is_cropped = self._is_cropped_slice(measured)
+        csv_path = cropped_csv if is_cropped else full_csv
+        if is_cropped and not os.path.isfile(csv_path):
+            logger.warning(
+                "Cropped reference not found (%s); using full-slice reference.", csv_path)
+            csv_path = full_csv
         if not os.path.isfile(csv_path):
             QMessageBox.critical(self.mw, "Similarity Profile",
                 f"Reference CSV not found:\n{csv_path}")
             return
+        print(f"[Similarity Profile] slice_kind={'cropped' if is_cropped else 'full'}; "
+              f"reference={os.path.basename(csv_path)}")
 
         from managers.visualization_settings import get_active as _get_viz
         viz = _get_viz()
@@ -2523,6 +2594,7 @@ class MeasurementDispatcher:
         oor_beta = float(getattr(viz, "gasp_oor_beta", 1.0))
         apply_penalty = bool(getattr(viz, "gasp_apply_penalty", True))
         weighted_global = bool(getattr(viz, "gasp_weighted_global", True))
+        use_normalized = bool(is_cropped or getattr(viz, "gasp_use_normalized_full", False))
 
         ref_to_attr = {
             "area": "gasp_w_area",
@@ -2535,8 +2607,22 @@ class MeasurementDispatcher:
             "primary_sulcus_values": "gasp_w_primary_sulcus_values",
             "secondary_sulcus_values": "gasp_w_secondary_sulcus_values",
             "tertiary_sulcus_values": "gasp_w_tertiary_sulcus_values",
+            "primary_sulcus_values_normalized": "gasp_w_primary_sulcus_values",
+            "secondary_sulcus_values_normalized": "gasp_w_secondary_sulcus_values",
+            "tertiary_sulcus_values_normalized": "gasp_w_tertiary_sulcus_values",
+            "primary_count_normalized": "gasp_w_primary_count",
+            "secondary_count_normalized": "gasp_w_secondary_count",
+            "tertiary_count_normalized": "gasp_w_tertiary_count",
         }
         weights_user = {k: float(getattr(viz, a, 1.0)) for k, a in ref_to_attr.items()}
+        weights_user.setdefault("sulci_count", 1.5)
+        weights_user.setdefault("sulci_count_normalized", 1.5)
+        weights_user.setdefault("sulci_depth", 1.5)
+        weights_user.setdefault("sulci_depth_normalized", 1.5)
+        weights_user.setdefault("unclassified_count", 1.0)
+        weights_user.setdefault("unclassified_count_normalized", 1.0)
+        weights_user.setdefault("unclassified_sulcus_values", 1.0)
+        weights_user.setdefault("unclassified_sulcus_values_normalized", 1.0)
 
         def _run(method: str) -> GASPSummary:
             if method.startswith("mahal") and not weighted_global:
@@ -2548,6 +2634,7 @@ class MeasurementDispatcher:
                 method=method, weights=w,
                 apply_range_penalty=apply_penalty,
                 beta=oor_beta,
+                use_normalized=use_normalized,
             )
 
         try:
@@ -2588,6 +2675,12 @@ class MeasurementDispatcher:
             "primary_sulcus_values": "Primary Depth",
             "secondary_sulcus_values": "Secondary Depth",
             "tertiary_sulcus_values": "Tertiary Depth",
+            "unclassified_count": "Unclassified Count",
+            "unclassified_sulcus_values": "Unclassified Depth",
+            "sulci_count": "Sulci Count",
+            "sulci_depth": "Sulci Depth",
+            "sulci_depth_normalized": "Normalized Sulci Depth",
+            "sulci_count_normalized": "Normalized Sulci Count",
         }
 
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -2867,6 +2960,8 @@ class MeasurementDispatcher:
                 oor_beta=oor_beta,
                 apply_penalty=apply_penalty,
                 weighted_global=weighted_global,
+                normalized_comparison=use_normalized,
+                reference_csv=os.path.basename(csv_path),
                 kernel_size_mm=kernel_size_mm,
                 kernel_size_px=kernel_size_px,
                 pixel_size=pixel_size,

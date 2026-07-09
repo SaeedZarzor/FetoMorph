@@ -56,6 +56,7 @@ class VizDefaults:
     gasp_oor_beta: float = 1.0  # β for Mahalanobis: 0.5 / 1.0 / 2.0
     gasp_apply_penalty: bool = True  # master toggle for OOR penalty
     gasp_weighted_global: bool = True  # use weights in Global Distance GASP
+    gasp_use_normalized_full: bool = False  # cropped references always normalize
 
     # --- GASP per-metric weights ---
     gasp_w_area: float = 1.0

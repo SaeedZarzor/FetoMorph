@@ -138,6 +138,11 @@ class GASPOptionsDialog(QDialog):
         self._add_row(lay, "Weighted Global Distance:", self.chk_gasp_weighted_global,
             "Use per-metric weights in the Global Distance GASP method.")
 
+        self.chk_gasp_use_normalized_full = QCheckBox()
+        self._add_row(lay, "Normalize full sections:", self.chk_gasp_use_normalized_full,
+            "Use normalized reference CSV metrics for full-section similarity. "
+            "Cropped images always use normalized comparison.")
+
         self.btn_gasp_weights = QPushButton("Edit metric weights…")
         self.btn_gasp_weights.clicked.connect(self._open_weights_dialog)
         self._add_row(lay, "Metric weights:", self.btn_gasp_weights,
@@ -233,6 +238,7 @@ class GASPOptionsDialog(QDialog):
 
         self.chk_gasp_apply_penalty.setChecked(bool(getattr(vs, "gasp_apply_penalty", True)))
         self.chk_gasp_weighted_global.setChecked(bool(getattr(vs, "gasp_weighted_global", True)))
+        self.chk_gasp_use_normalized_full.setChecked(bool(getattr(vs, "gasp_use_normalized_full", False)))
         self._sync_penalty_enabled(self.chk_gasp_apply_penalty.isChecked())
         self._sync_weights_enabled(self.chk_gasp_weighted_global.isChecked())
 
@@ -251,6 +257,7 @@ class GASPOptionsDialog(QDialog):
             "gasp_oor_beta": float(self.cmb_gasp_oor_beta.currentData() or 1.0),
             "gasp_apply_penalty": bool(self.chk_gasp_apply_penalty.isChecked()),
             "gasp_weighted_global": bool(self.chk_gasp_weighted_global.isChecked()),
+            "gasp_use_normalized_full": bool(self.chk_gasp_use_normalized_full.isChecked()),
             "gasp_w_area": float(getattr(self, "_w_area", 1.0)),
             "gasp_w_perimeter": float(getattr(self, "_w_perimeter", 0.0)),
             "gasp_w_lgi": float(getattr(self, "_w_lgi", 2.0)),

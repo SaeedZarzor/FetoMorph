@@ -35,17 +35,29 @@ class WeekProfile:
     perimeter: MetricStats
     lgi: MetricStats
     compactness: MetricStats
-    # rounded sulcus count summary
-    sulci_count: MetricStats
+    # aggregate sulcus summaries (all classes pooled)
+    sulci_count: MetricStats   # per-slice total sulcus count
+    sulci_depth: MetricStats   # pooled per-sulcus depth across all classes
+    sulci_count_normalized: MetricStats
+    sulci_depth_normalized: MetricStats
+    # rounded sulcus count summary (per class)
     primary_count: MetricStats
     secondary_count: MetricStats
     tertiary_count: MetricStats
     unclassified_count: MetricStats
+    primary_count_normalized: MetricStats
+    secondary_count_normalized: MetricStats
+    tertiary_count_normalized: MetricStats
+    unclassified_count_normalized: MetricStats
     # sulcus value summary
     primary_sulcus_values: MetricStats
     secondary_sulcus_values: MetricStats
     tertiary_sulcus_values: MetricStats
     unclassified_sulcus_values: MetricStats
+    primary_sulcus_values_normalized: MetricStats
+    secondary_sulcus_values_normalized: MetricStats
+    tertiary_sulcus_values_normalized: MetricStats
+    unclassified_sulcus_values_normalized: MetricStats
 
 
 _METRIC_FIELDS: tuple[str, ...] = (
@@ -54,15 +66,45 @@ _METRIC_FIELDS: tuple[str, ...] = (
     "lgi",
     "compactness",
     "sulci_count",
+    "sulci_depth",
+    "sulci_count_normalized",
+    "sulci_depth_normalized",
     "primary_count",
     "secondary_count",
     "tertiary_count",
     "unclassified_count",
+    "primary_count_normalized",
+    "secondary_count_normalized",
+    "tertiary_count_normalized",
+    "unclassified_count_normalized",
     "primary_sulcus_values",
     "secondary_sulcus_values",
     "tertiary_sulcus_values",
     "unclassified_sulcus_values",
+    "primary_sulcus_values_normalized",
+    "secondary_sulcus_values_normalized",
+    "tertiary_sulcus_values_normalized",
+    "unclassified_sulcus_values_normalized",
 )
+
+
+def _metric_stats(row, name: str) -> MetricStats:
+    """Build :class:`MetricStats` for *name* from a CSV row.
+
+    Tolerant of a missing metric: a CSV without the ``{name}_n`` column (e.g. an
+    older reference, or one built before ``sulci_depth`` was added) yields an
+    empty ``MetricStats`` rather than raising, so such rows still load.
+    """
+    n_col = f"{name}_n"
+    if n_col not in row.index or pd.isna(row[n_col]):
+        return MetricStats(n=0, mean=None, std=None, min=None, max=None)
+    return MetricStats(
+        n=int(row[n_col]),
+        mean=_clean(row.get(f"{name}_mean")),
+        std=_clean(row.get(f"{name}_std")),
+        min=_clean(row.get(f"{name}_min")),
+        max=_clean(row.get(f"{name}_max")),
+    )
 
 
 class GestationalWeekProfile:
@@ -79,7 +121,9 @@ class GestationalWeekProfile:
     AXES = ("axial", "coronal", "sagittal")
 
     def __init__(self, csv_path: str | Path) -> None:
-        self._profiles: dict[tuple[int, str], WeekProfile] = self._load(Path(csv_path))
+        self.csv_path = Path(csv_path)
+        self.is_cropped_reference = "cropped" in self.csv_path.stem.lower()
+        self._profiles: dict[tuple[int, str], WeekProfile] = self._load(self.csv_path)
 
     def get(self, week: int, axis: str | None = None) -> WeekProfile | None:
         """Return the profile for *week* and *axis*.
@@ -108,14 +152,7 @@ class GestationalWeekProfile:
         profiles: dict[tuple[int, str], WeekProfile] = {}
         for _, row in df.iterrows():
             metric_stats = {
-                name: MetricStats(
-                    n=int(row[f"{name}_n"]),
-                    mean=_clean(row[f"{name}_mean"]),
-                    std=_clean(row[f"{name}_std"]),
-                    min=_clean(row[f"{name}_min"]),
-                    max=_clean(row[f"{name}_max"]),
-                )
-                for name in _METRIC_FIELDS
+                name: _metric_stats(row, name) for name in _METRIC_FIELDS
             }
             kernel_size_mm = (
                 _clean(row["kernel_size_mm"])
@@ -145,19 +182,142 @@ METRIC_MAP: dict[str, str] = {
     "PrimaryMeanDepth": "primary_sulcus_values",
     "SecondaryMeanDepth": "secondary_sulcus_values",
     "TertiaryMeanDepth": "tertiary_sulcus_values",
+    # Aggregate sulcus metrics — the measured values are derived per slice from
+    # the per-class counts / mean depths by :func:`_augment_aggregate_metrics`.
+    "TotalSulciCount": "sulci_count",
+    "MeanSulciDepth": "sulci_depth",
 }
+
+NORMALIZED_METRIC_MAP: dict[str, str] = {
+    "LGI": "lgi",
+    "Compactness": "compactness",
+    "TotalSulciCount": "sulci_count",
+    "MeanSulciDepth": "sulci_depth_normalized",
+}
+
+_NORMALIZED_COUNT_FALLBACKS: dict[str, str] = {
+    "sulci_count": "sulci_count_normalized",
+}
+
+_NORMALIZED_DEPTH_BASES: dict[str, str] = {
+    "sulci_depth_normalized": "sulci_depth",
+    "primary_sulcus_values_normalized": "primary_sulcus_values",
+    "secondary_sulcus_values_normalized": "secondary_sulcus_values",
+    "tertiary_sulcus_values_normalized": "tertiary_sulcus_values",
+    "unclassified_sulcus_values_normalized": "unclassified_sulcus_values",
+}
+
+_NORMALIZED_COUNT_BASES: dict[str, str] = {
+    "sulci_count_normalized": "sulci_count",
+    "primary_count_normalized": "primary_count",
+    "secondary_count_normalized": "secondary_count",
+    "tertiary_count_normalized": "tertiary_count",
+    "unclassified_count_normalized": "unclassified_count",
+}
+
+# Measured-dict keys for the two aggregate sulcus metrics, and the per-class
+# keys they are derived from.
+TOTAL_COUNT_KEY = "TotalSulciCount"
+MEAN_DEPTH_KEY = "MeanSulciDepth"
+_CLASS_COUNT_KEYS = (
+    "PrimarySulciCount", "SecondarySulciCount",
+    "TertiarySulciCount", "UnclassifiedSulciCount",
+)
+_CLASS_DEPTH_PAIRS = (
+    ("PrimarySulciCount", "PrimaryMeanDepth"),
+    ("SecondarySulciCount", "SecondaryMeanDepth"),
+    ("TertiarySulciCount", "TertiaryMeanDepth"),
+    ("UnclassifiedSulciCount", "UnclassifiedMeanDepth"),
+)
+
+
+def _augment_aggregate_metrics(measured: dict) -> dict:
+    """Return *measured* with the two aggregate sulcus metrics filled in.
+
+    ``TotalSulciCount`` = Σ per-class counts (the slice's total sulcus count).
+    ``MeanSulciDepth``  = Σ(count·mean_depth) / Σ count across classes — the
+    slice's overall mean sulcus depth, comparable to the pooled per-sulcus
+    ``sulci_depth`` reference the same way ``PrimaryMeanDepth`` compares to
+    ``primary_sulcus_values``. Values the caller already supplied explicitly are
+    never overwritten; classes missing from *measured* are simply skipped.
+    """
+    out = dict(measured)
+
+    if out.get(TOTAL_COUNT_KEY) is None:
+        counts = [c for c in (_clean(out.get(k)) for k in _CLASS_COUNT_KEYS)
+                  if c is not None]
+        if counts:
+            out[TOTAL_COUNT_KEY] = sum(counts)
+
+    if out.get(MEAN_DEPTH_KEY) is None:
+        total_depth = 0.0
+        total_count = 0.0
+        for count_key, depth_key in _CLASS_DEPTH_PAIRS:
+            count = _clean(out.get(count_key))
+            depth = _clean(out.get(depth_key))
+            if count is not None and depth is not None and count > 0:
+                total_depth += count * depth
+                total_count += count
+        if total_count > 0:
+            out[MEAN_DEPTH_KEY] = total_depth / total_count
+
+    return out
+
+
+def _stats_has_values(stats: MetricStats | None) -> bool:
+    return (
+        stats is not None
+        and stats.n > 0
+        and stats.mean is not None
+        and stats.std is not None
+        and stats.std >= 1e-12
+    )
+
+
+def _normalized_ref_field(ref: WeekProfile, ref_field: str) -> str:
+    normalized_field = _NORMALIZED_COUNT_FALLBACKS.get(ref_field)
+    if normalized_field and _stats_has_values(getattr(ref, normalized_field, None)):
+        return normalized_field
+    return ref_field
+
+
+def _comparison_value(raw_value: float, ref: WeekProfile, ref_field: str) -> float | None:
+    base_field = (
+        _NORMALIZED_DEPTH_BASES.get(ref_field)
+        or _NORMALIZED_COUNT_BASES.get(ref_field)
+    )
+    if base_field is None:
+        return raw_value
+
+    base_stats: MetricStats | None = getattr(ref, base_field, None)
+    if base_stats is None or base_stats.max is None or base_stats.max <= 0:
+        return None
+    return raw_value / base_stats.max
 
 DEFAULT_WEIGHTS: dict[str, float] = {
     "area": 1.0,
     "perimeter": 0.0,  # excluded due to high corrloation with area 
     "lgi": 2.0,
     "compactness": 1.0,
-    "primary_count": 1.5,
-    "secondary_count": 1.5,
+    "primary_count": 1.0,
+    "secondary_count": 1.0,
     "tertiary_count": 1,
-    "primary_sulcus_values": 1.5,
-    "secondary_sulcus_values": 1.5,
-    "tertiary_sulcus_values": 1,
+    "primary_sulcus_values": 1.0,
+    "secondary_sulcus_values": 1.0,
+    "tertiary_sulcus_values": 1.0,
+    "unclassified_sulcus_values": 1.0,
+    "sulci_count": 1.5,
+    "sulci_depth": 1.5,
+    "sulci_depth_normalized": 1.5,
+    "sulci_count_normalized": 1.5,
+    "primary_count_normalized": 1.0,
+    "secondary_count_normalized": 1.0,
+    "tertiary_count_normalized": 1.0,
+    "unclassified_count_normalized": 1.0,
+    "primary_sulcus_values_normalized": 1.0,
+    "secondary_sulcus_values_normalized": 1.0,
+    "tertiary_sulcus_values_normalized": 1.0,
+    "unclassified_sulcus_values_normalized": 1.0,
 }
 
 RANGE_PENALTY = 0.0  # Gaussian: similarity multiplier (λ) when a metric falls outside [min, max] (decreases more penalty as λ approaches 0) typical values might be 0.5 or 0.25 for moderate or strong penalty, respectively
@@ -202,6 +362,7 @@ def compute_similarity_scores(
     weights: dict[str, float] | None = None,
     apply_range_penalty: bool = True,
     beta: float | None = None,
+    use_normalized: bool = False,
 ) -> GASPSummary:
     """Week-specific Gaussian Similarity Scoring (GASP).
 
@@ -233,6 +394,12 @@ def compute_similarity_scores(
     w = weights if weights is not None else DEFAULT_WEIGHTS
     b = beta if beta is not None else OOR_BETA
     use_mahal = method.lower().startswith("mahal")
+    normalized_mode = bool(use_normalized or getattr(registry, "is_cropped_reference", False))
+
+    # Fill in TotalSulciCount / MeanSulciDepth from the per-class values so the
+    # two aggregate metrics are scored even when the caller only provides the
+    # per-class counts / mean depths.
+    measured = _augment_aggregate_metrics(measured)
 
     week_results: list[GASPResult] = []
 
@@ -244,7 +411,8 @@ def compute_similarity_scores(
         per_metric: dict[str, float] = {}
         z_scores: dict[str, float] = {}
         out_of_range: dict[str, bool] = {}
-        for meas_key, ref_field in METRIC_MAP.items():
+        metric_map = NORMALIZED_METRIC_MAP if normalized_mode else METRIC_MAP
+        for meas_key, ref_field in metric_map.items():
             val = measured.get(meas_key)
             if val is None:
                 continue
@@ -253,8 +421,13 @@ def compute_similarity_scores(
             except (TypeError, ValueError):
                 continue
 
+            ref_field = _normalized_ref_field(ref, ref_field) if normalized_mode else ref_field
+            val = _comparison_value(val, ref, ref_field) if normalized_mode else val
+            if val is None:
+                continue
+
             stats: MetricStats = getattr(ref, ref_field)
-            if stats.mean is None or stats.std is None or stats.std < 1e-12:
+            if not _stats_has_values(stats):
                 continue
 
             z = (val - stats.mean) / stats.std

@@ -16,7 +16,11 @@ The spec-layout "Mean results" table carries, per slice:
 
 Because the real per-sulcus depths are now columns in their own right, the old
 count+min/max/mean reconstruction is gone: this script reads the values
-directly. For each workbook it appends an ``Analysis`` sheet (summary tables +
+directly. The per-class and overall depth summaries also report full
+``normalized_{mean,std,min,max}`` stats over the per-sulcus normalized depths
+(each depth / its image's deepest sulcus), read from the ``{Class}_depth_i_norm``
+columns written by ``process_on_images_batch``.
+For each workbook it appends an ``Analysis`` sheet (summary tables +
 boxplots) back into the same file. Cropped sub-slices only carry the
 ``Unclassified`` class; full slices carry primary/secondary/tertiary too.
 """
@@ -246,9 +250,13 @@ def depth_value_columns(df: pd.DataFrame, class_name: str) -> list[str]:
 
 
 def build_sulcus_value_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Long table of every individual sulcus depth: (slice_file, class, value).
+    """Long table of every individual sulcus depth: (slice_file, class, value, value_norm).
 
-    Read straight from the ``{Class}_depth_{i}`` columns — no reconstruction.
+    Read straight from the ``{Class}_depth_{i}`` columns — no reconstruction. The
+    adjacent ``{Class}_depth_{i}_norm`` column (each depth normalized to the
+    deepest sulcus of its own image by
+    :func:`functions.measurement_batch.process_on_images_batch`) is carried as
+    ``value_norm``; ``NaN`` for older workbooks that lack the ``_norm`` columns.
     Always returns the fixed schema (empty when a workbook has no per-sulcus
     columns) so downstream lookups on ``sulcus_class`` never raise.
     """
@@ -258,14 +266,18 @@ def build_sulcus_value_table(df: pd.DataFrame) -> pd.DataFrame:
             for col in depth_value_columns(df, class_name):
                 value = row.get(col)
                 if pd.notna(value):
+                    norm = row.get(f"{col}_norm")
                     rows.append(
                         {
                             "slice_file": row["File"],
                             "sulcus_class": class_name.lower(),
                             "value": float(value),
+                            "value_norm": float(norm) if pd.notna(norm) else math.nan,
                         }
                     )
-    return pd.DataFrame(rows, columns=["slice_file", "sulcus_class", "value"])
+    return pd.DataFrame(
+        rows, columns=["slice_file", "sulcus_class", "value", "value_norm"]
+    )
 
 
 def metric_summary(df: pd.DataFrame, metrics: Iterable[str]) -> pd.DataFrame:
@@ -332,50 +344,54 @@ def count_summary(counts_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+_DEPTH_SUMMARY_COLUMNS = ["metric", "n", "mean", "std", "min", "max"]
+
+
+def _depth_stats_row(metric: str, values: pd.Series) -> dict[str, object]:
+    """One summary row (mean/std/min/max) for *values*; ``std`` is ``NaN`` for n≤1."""
+    v = pd.to_numeric(values, errors="coerce").dropna()
+    if v.empty:
+        return {"metric": metric, "n": 0, "mean": math.nan,
+                "std": math.nan, "min": math.nan, "max": math.nan}
+    return {
+        "metric": metric,
+        "n": int(v.shape[0]),
+        "mean": float(v.mean()),
+        "std": float(v.std(ddof=1)) if len(v) > 1 else math.nan,
+        "min": float(v.min()),
+        "max": float(v.max()),
+    }
+
+
 def per_class_depth_summary(sulcus_values_df: pd.DataFrame) -> pd.DataFrame:
+    """Two rows per class: raw depth stats and, below it, the per-sulcus
+    normalized-depth stats (each depth / its image's deepest sulcus)."""
     rows: list[dict[str, object]] = []
     for class_name in [name.lower() for name in SULCUS_CLASSES]:
+        mask = sulcus_values_df["sulcus_class"] == class_name
         values = pd.to_numeric(
-            sulcus_values_df.loc[
-                sulcus_values_df["sulcus_class"] == class_name, "value"
-            ],
-            errors="coerce",
+            sulcus_values_df.loc[mask, "value"], errors="coerce"
         ).dropna()
         if values.empty:
             continue
-        rows.append(
-            {
-                "metric": f"{class_name}_sulcus_depth",
-                "n": int(values.shape[0]),
-                "mean": float(values.mean()),
-                "std": float(values.std(ddof=1)) if len(values) > 1 else math.nan,
-                "min": float(values.min()),
-                "max": float(values.max()),
-                "total": float(values.sum()),
-            }
-        )
-    return pd.DataFrame(rows)
+        rows.append(_depth_stats_row(f"{class_name}_sulcus_depth", values))
+        rows.append(_depth_stats_row(
+            f"{class_name}_sulcus_depth_normalized",
+            sulcus_values_df.loc[mask, "value_norm"],
+        ))
+    return pd.DataFrame(rows, columns=_DEPTH_SUMMARY_COLUMNS)
 
 
 def overall_depth_summary(sulcus_values_df: pd.DataFrame) -> pd.DataFrame:
+    """Raw overall depth stats, followed by a separate normalized-depth row."""
     values = pd.to_numeric(sulcus_values_df["value"], errors="coerce").dropna()
     if values.empty:
-        return pd.DataFrame(
-            columns=["metric", "n", "mean", "std", "min", "max", "total"]
-        )
-    return pd.DataFrame(
-        [
-            {
-                "metric": "all_sulcus_depths",
-                "n": int(values.shape[0]),
-                "mean": float(values.mean()),
-                "std": float(values.std(ddof=1)) if len(values) > 1 else math.nan,
-                "min": float(values.min()),
-                "max": float(values.max()),
-                "total": float(values.sum()),
-            }
-        ]
-    )
+        return pd.DataFrame(columns=_DEPTH_SUMMARY_COLUMNS)
+    rows = [
+        _depth_stats_row("all_sulcus_depths", values),
+        _depth_stats_row("all_sulcus_depths_normalized", sulcus_values_df["value_norm"]),
+    ]
+    return pd.DataFrame(rows, columns=_DEPTH_SUMMARY_COLUMNS)
 
 
 # ── Plotting ─────────────────────────────────────────────────────────────────

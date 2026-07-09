@@ -355,15 +355,40 @@ def process_on_images_batch(directory_path,
             d = r["depth_sets"] or {}
             for k in SULCUS_CLASSES:
                 max_counts[k] = max(max_counts[k], len(d.get(k, []) or []))
+        # Each individual sulcus depth column is followed by its normalized
+        # value (depth / max sulcus depth of that image) in the adjacent cell.
         depth_value_columns: list[str] = [
-            f"{k.capitalize()}_depth_{i + 1}"
+            col
             for k in SULCUS_CLASSES
             for i in range(max_counts[k])
+            for col in (f"{k.capitalize()}_depth_{i + 1}",
+                        f"{k.capitalize()}_depth_{i + 1}_norm")
+        ]
+
+        # Four per-image aggregate depth columns computed across ALL sulci
+        # classes (primary/secondary/tertiary/unclassified) of that image:
+        # the mean, max, and min sulcus depth, plus the normalized mean depth
+        # = mean / max (normalized to the deepest sulcus). Empty when the image
+        # has no detected sulci (drop_empty_columns then removes them); also
+        # empty when max == 0 (undefined denominator).
+        agg_depth_columns = [
+            f"MeanSulciDepth ({unit})",
+            f"MaxSulciDepth ({unit})",
+            f"MinSulciDepth ({unit})",
+            "NormalizedDepth",
         ]
 
         results_rows = []
         for r in sheet1:
             d = r["depth_sets"] or {}
+            all_depths = [v for k in SULCUS_CLASSES for v in (d.get(k, []) or [])]
+            if all_depths:
+                _mean_d = sum(all_depths) / len(all_depths)
+                _max_d = max(all_depths)
+                _min_d = min(all_depths)
+                _norm_d = (_mean_d / _max_d if _max_d else None)
+            else:
+                _mean_d = _max_d = _min_d = _norm_d = None
             row = {
                 "Section": r["file_name"],
                 "Area": r["area"],
@@ -383,14 +408,21 @@ def process_on_images_batch(directory_path,
                     None, d.get("tertiary", []) or []),
                 "UnclassifiedMeanDepth": subtype_mean(
                     None, d.get("unclassified", []) or []),
+                f"MeanSulciDepth ({unit})": _mean_d,
+                f"MaxSulciDepth ({unit})": _max_d,
+                f"MinSulciDepth ({unit})": _min_d,
+                "NormalizedDepth": _norm_d,
                 "_section_link": r["png_path"],
             }
-            # Every individual sulcus value per class (deepest first).
+            # Every individual sulcus value per class (deepest first), each
+            # followed by its value normalized to the image's max sulcus depth.
             for k in SULCUS_CLASSES:
                 vals = d.get(k, []) or []
                 for i in range(max_counts[k]):
-                    row[f"{k.capitalize()}_depth_{i + 1}"] = (
-                        vals[i] if i < len(vals) else None)
+                    v = vals[i] if i < len(vals) else None
+                    row[f"{k.capitalize()}_depth_{i + 1}"] = v
+                    row[f"{k.capitalize()}_depth_{i + 1}_norm"] = (
+                        v / _max_d if (v is not None and _max_d) else None)
             results_rows.append(row)
 
         parameters = {
@@ -426,7 +458,7 @@ def process_on_images_batch(directory_path,
             parameters=parameters,
             rows=results_rows,
             totals=totals if totals else None,
-            trailing_columns=tuple(depth_value_columns),
+            trailing_columns=tuple(agg_depth_columns + depth_value_columns),
             drop_empty_columns=True,
         )
         xlsx_path = os.path.join(out_dir, "Batch_Allmarks.xlsx")
