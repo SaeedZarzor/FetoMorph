@@ -19,6 +19,7 @@ from helpers.helpers import (
     SULCUS_CLASS_COLORS,
     SULCUS_CLASSES,
     classify_sulcus_depth,
+    sulcus_depth_min,
     empty_depth_sets,
     flatten_depth_sets,
     format_sulcus_class_summary,
@@ -276,9 +277,9 @@ def process_on_images_batch(directory_path,
                         annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
                         depth_value = d * pixel_size / DEFECT_FIXED_POINT
                         if use_percent_filter:
-                            keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length)
+                            keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length) and depth_value > sulcus_depth_min(unit)
                         else:
-                            keep = depth_value > (0.5 if unit == "mm" else 0.05 if unit == "cm" else 0)
+                            keep = depth_value > sulcus_depth_min(unit)
                         if keep:
                             if use_percent_filter:
                                 sulcus_class = classify_sulcus_depth(depth_value, slice_length)

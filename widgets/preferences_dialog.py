@@ -193,6 +193,8 @@ class GASPOptionsDialog(QDialog):
             ("Perimeter", "_w_perimeter"),
             ("LGI", "_w_lgi"),
             ("Compactness", "_w_compactness"),
+            ("Total sulci count", "_w_sulci_count"),
+            ("Total sulcal depth", "_w_sulci_depth"),
             ("Primary sulci count", "_w_primary_count"),
             ("Secondary sulci count", "_w_secondary_count"),
             ("Tertiary sulci count", "_w_tertiary_count"),
@@ -244,6 +246,7 @@ class GASPOptionsDialog(QDialog):
 
         for suffix in (
             "_w_area", "_w_perimeter", "_w_lgi", "_w_compactness",
+            "_w_sulci_count", "_w_sulci_depth",
             "_w_primary_count", "_w_secondary_count", "_w_tertiary_count",
             "_w_primary_sulcus_values", "_w_secondary_sulcus_values",
             "_w_tertiary_sulcus_values",
@@ -262,6 +265,8 @@ class GASPOptionsDialog(QDialog):
             "gasp_w_perimeter": float(getattr(self, "_w_perimeter", 0.0)),
             "gasp_w_lgi": float(getattr(self, "_w_lgi", 2.0)),
             "gasp_w_compactness": float(getattr(self, "_w_compactness", 1.0)),
+            "gasp_w_sulci_count": float(getattr(self, "_w_sulci_count", 1.5)),
+            "gasp_w_sulci_depth": float(getattr(self, "_w_sulci_depth", 1.5)),
             "gasp_w_primary_count": float(getattr(self, "_w_primary_count", 1.5)),
             "gasp_w_secondary_count": float(getattr(self, "_w_secondary_count", 1.5)),
             "gasp_w_tertiary_count": float(getattr(self, "_w_tertiary_count", 1.0)),

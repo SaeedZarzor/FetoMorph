@@ -11,6 +11,7 @@ from deps import *
 from functions.nifti_to_image import draw_new_scale_bar
 from constants import (
     BINARY_THRESHOLD_DEFAULT,
+    DEFAULT_SULCUS_DEPTH_THRESHOLD,
     SULCUS_PRIMARY_MIN_FRACTION,
     SULCUS_PRIMARY_MAX_FRACTION,
     SULCUS_SECONDARY_MIN_FRACTION,
@@ -39,6 +40,22 @@ def _get_viz():
     """Lazy import to break the helpers ↔ managers circular dependency at load time."""
     from managers.visualization_settings import get_active
     return get_active()
+
+
+def sulcus_depth_min(unit: str = "mm") -> float:
+    """Minimum sulcus depth (in *unit*) to keep a sulcus, from live settings.
+
+    A convexity-defect shallower than this is treated as noise, not a sulcus.
+    Configured via Adjustments → "Sulcus Depth Threshold…" and stored as a
+    physical value in mm on :class:`VisualizationSettings`; converted to the
+    measurement ``unit`` here (``mm`` as-is, ``cm`` ÷ 10). Falls back to
+    :data:`constants.DEFAULT_SULCUS_DEPTH_THRESHOLD` if settings are unavailable.
+    """
+    try:
+        t = float(_get_viz().sulcus_depth_threshold)
+    except Exception:
+        t = float(DEFAULT_SULCUS_DEPTH_THRESHOLD)
+    return t / 10.0 if (unit or "mm").strip().lower() == "cm" else t
 
 
 # Default marker colours (BGR) for classified sulci. The live values come from

@@ -9,7 +9,7 @@ from __future__ import annotations
 from deps import *
 from typing import TYPE_CHECKING
 from constants import (
-    DEFAULT_PIXEL_SIZE, DEFAULT_CNT_THRESHOLD,
+    DEFAULT_PIXEL_SIZE, DEFAULT_CNT_THRESHOLD, DEFAULT_SULCUS_DEPTH_THRESHOLD,
     DEFAULT_KERNEL_SIZE_MM, DEFAULT_SLICE_THICKNESS,
     DEFAULT_SCALEBAR_MM,
     DEFAULT_CAVITY_CORRECTION_ENABLED, DEFAULT_CAVITY_AREA_THRESHOLD_MM2,
@@ -357,6 +357,55 @@ class SettingsManager:
             val = dlg.value()
             self.cnt_threshold = max(0.0, float(val))
             print(f"[Threshold] Contour area threshold set to {self.cnt_threshold:.2f} mm²")
+
+    def set_sulcus_depth_threshold_dialog(self) -> None:
+        """Open a dialog to set the minimum sulcus depth (mm) kept when measuring.
+
+        Stored on the shared :class:`VisualizationSettings` singleton so every
+        measurement function honours it via ``helpers.sulcus_depth_min()``.
+        """
+        from PySide6.QtWidgets import QInputDialog
+        from managers.visualization_settings import get_active
+        vs = get_active()
+        current = float(getattr(vs, "sulcus_depth_threshold",
+                                DEFAULT_SULCUS_DEPTH_THRESHOLD))
+        val, ok = QInputDialog.getDouble(
+            self.mw, "Sulcus Depth Threshold",
+            "Minimum sulcus depth to keep (mm):", current, 0.0, 100.0, 3)
+        if ok:
+            vs.apply({"sulcus_depth_threshold": max(0.0, float(val))})
+            vs.save()
+            print(f"[Threshold] Sulcus depth threshold set to {float(val):.3f} mm")
+
+    def set_slice_kind_override_dialog(self) -> None:
+        """Manually override the automatic slice-kind classification.
+
+        "Auto (classifier)" restores the ONNX classifier; any explicit kind is
+        forced for every measurement via ``classify_slice_kind``'s override
+        check. Stored on the shared :class:`VisualizationSettings` singleton.
+        """
+        from PySide6.QtWidgets import QInputDialog
+        from managers.visualization_settings import get_active
+        vs = get_active()
+        labels = [
+            "Auto (classifier)",
+            "Sagittal",
+            "Coronal",
+            "Axial",
+            "Not full slice (cropped)",
+        ]
+        values = ["auto", "sagittal", "coronal", "axial", "not_full_slice"]
+        current = str(getattr(vs, "slice_kind_override", "auto")).strip().lower()
+        idx = values.index(current) if current in values else 0
+        choice, ok = QInputDialog.getItem(
+            self.mw, "Slice Kind",
+            "Force the slice kind used by all measurements:",
+            labels, idx, False)
+        if ok:
+            selected = values[labels.index(choice)]
+            vs.apply({"slice_kind_override": selected})
+            vs.save()
+            print(f"[Slice Kind] Override set to {selected}")
 
     def set_cavity_options_dialog(self) -> None:
         """Open a dialog to enable/disable the surface-connected cavity correction

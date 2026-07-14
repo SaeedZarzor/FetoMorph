@@ -29,6 +29,7 @@ from helpers.helpers import (
     SULCUS_CLASS_COLORS,
     SULCUS_CLASSES,
     classify_sulcus_depth,
+    sulcus_depth_min,
     empty_depth_sets,
     flatten_depth_sets,
     format_sulcus_class_summary,
@@ -290,7 +291,7 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                                     # Depth filter: keep defects within
                                     # SULCI_DEPTH_MIN_FRACTION..SULCI_DEPTH_MAX_FRACTION
                                     # of brain IS-extent. dims[2] is in cm, ×10 → mm.
-                                    if (SULCUS_TERTIARY_MIN_FRACTION * _is_extent_mm) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * _is_extent_mm):
+                                    if (SULCUS_TERTIARY_MIN_FRACTION * _is_extent_mm) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * _is_extent_mm) and depth_mm > sulcus_depth_min("mm"):
                                         sulcus_class = classify_sulcus_depth(depth_mm, _is_extent_mm)
                                         marker_color = SULCUS_CLASS_COLORS[sulcus_class]
                                         depth_sets[sulcus_class].append(depth_mm)

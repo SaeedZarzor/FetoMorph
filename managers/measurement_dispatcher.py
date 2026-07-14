@@ -22,7 +22,7 @@ from functions.pial_to_stl import pial_pair_to_combined_stl, pial_to_stl
 from helpers.helpers import compactness_2D, compactness_3D
 from helpers.gestational_week_profile import (
     GestationalWeekProfile, GASPResult, GASPSummary, METRIC_MAP, NORMALIZED_METRIC_MAP,
-    MetricStats, WeekProfile, compute_similarity_scores,
+    MetricStats, WeekProfile, compute_similarity_scores, _augment_normalized_metrics,
 )
 from helpers.read_excel import conver_excel
 from managers.metrics_store import MetricsStore
@@ -2153,7 +2153,10 @@ class MeasurementDispatcher:
         for comparison_map in comparison_maps:
             for meas_key, ref_field in comparison_map.items():
                 measured_key_by_field.setdefault(ref_field, meas_key)
-        measured_key_by_field.setdefault("sulci_count_normalized", "TotalSulciCount")
+
+        # Show the same derived measured values the scorer used (depth ÷ the
+        # slice's own max sulcus depth, per-class count ÷ total count).
+        measured_display = _augment_normalized_metrics(measured)
 
         ordered_fields = []
         for comparison_map in comparison_maps:
@@ -2170,15 +2173,7 @@ class MeasurementDispatcher:
             ):
                 continue
             meas_key = measured_key_by_field.get(ref_field)
-            val = measured.get(meas_key)
-            if isinstance(ref_field, str) and ref_field.endswith("_normalized"):
-                base_field = ref_field.removesuffix("_normalized")
-                base_stats = getattr(ref, base_field, None) if ref else None
-                if base_stats and base_stats.max:
-                    try:
-                        val = float(val) / float(base_stats.max)
-                    except (TypeError, ValueError, ZeroDivisionError):
-                        val = None
+            val = measured_display.get(meas_key)
             label = metric_labels.get(ref_field, ref_field)
 
             stats: MetricStats | None = getattr(ref, ref_field, None) if ref else None
@@ -2613,12 +2608,13 @@ class MeasurementDispatcher:
             "primary_count_normalized": "gasp_w_primary_count",
             "secondary_count_normalized": "gasp_w_secondary_count",
             "tertiary_count_normalized": "gasp_w_tertiary_count",
+            # Total sulcus count / depth (raw and normalized share one weight each).
+            "sulci_count": "gasp_w_sulci_count",
+            "sulci_depth": "gasp_w_sulci_depth",
+            "sulci_depth_normalized": "gasp_w_sulci_depth",
         }
         weights_user = {k: float(getattr(viz, a, 1.0)) for k, a in ref_to_attr.items()}
-        weights_user.setdefault("sulci_count", 1.5)
-        weights_user.setdefault("sulci_count_normalized", 1.5)
-        weights_user.setdefault("sulci_depth", 1.5)
-        weights_user.setdefault("sulci_depth_normalized", 1.5)
+        weights_user.setdefault("sulci_count_normalized", weights_user["sulci_count"])
         weights_user.setdefault("unclassified_count", 1.0)
         weights_user.setdefault("unclassified_count_normalized", 1.0)
         weights_user.setdefault("unclassified_sulcus_values", 1.0)

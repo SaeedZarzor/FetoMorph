@@ -23,6 +23,7 @@ from helpers.helpers import (
     draw_hallmarks_values_on_image,
     SULCUS_CLASS_COLORS,
     classify_sulcus_depth,
+    sulcus_depth_min,
     empty_depth_sets,
     flatten_depth_sets,
     format_sulcus_class_summary,
@@ -250,9 +251,9 @@ def compute_image_allmarks(
                     # bands keep the original fixed-millimeter threshold.
                     depth_value = d * pixel_size / DEFECT_FIXED_POINT
                     if use_percent_filter:
-                        keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length)
+                        keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length) and depth_value > sulcus_depth_min(unit)
                     else:
-                        keep = depth_value > (0.5 if unit == "mm" else 0.05 if unit == "cm" else 0)
+                        keep = depth_value > sulcus_depth_min(unit)
 
                     # Classify by % of slice_length (full MRI slices only).
                     if keep:
@@ -671,9 +672,9 @@ def compute_image_sulci_depth(
                     # bands keep the original fixed-millimeter threshold.
                     depth_value = d * pixel_size / DEFECT_FIXED_POINT
                     if use_percent_filter:
-                        keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length)
+                        keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length) and depth_value > sulcus_depth_min(unit)
                     else:
-                        keep = depth_value > (0.5 if unit == "mm" else 0.05 if unit == "cm" else 0)
+                        keep = depth_value > sulcus_depth_min(unit)
                     if keep:
                         # Classify by % of slice_length (full MRI slices only).
                         if use_percent_filter:

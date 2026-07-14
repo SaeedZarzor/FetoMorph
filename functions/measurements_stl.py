@@ -39,6 +39,7 @@ from helpers.helpers import (
     SULCUS_CLASS_COLORS,
     SULCUS_CLASSES,
     classify_sulcus_depth,
+    sulcus_depth_min,
     empty_depth_sets,
     flatten_depth_sets,
     format_sulcus_class_summary,
@@ -353,9 +354,9 @@ def compute_stl_allmarks(
                             if d > DEFECT_FIXED_POINT:
                                 depth_mm = d * mm_per_px / DEFECT_FIXED_POINT
                                 if use_percent_filter:
-                                    keep = (SULCUS_TERTIARY_MIN_FRACTION * max_dim) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * max_dim)
+                                    keep = (SULCUS_TERTIARY_MIN_FRACTION * max_dim) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * max_dim) and depth_mm > sulcus_depth_min("mm")
                                 else:
-                                    keep = depth_mm > 0.5
+                                    keep = depth_mm > sulcus_depth_min("mm")
                                 if keep:
                                     if use_percent_filter:
                                         sulcus_class = classify_sulcus_depth(depth_mm, max_dim)
@@ -1538,9 +1539,9 @@ def compute_stl_sulci_depth(
                                 mm_per_fixed = mm_per_px / DEFECT_FIXED_POINT
                                 depth_mm = d *mm_per_fixed
                                 if use_percent_filter:
-                                    keep = (SULCUS_TERTIARY_MIN_FRACTION * max_dim) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * max_dim)
+                                    keep = (SULCUS_TERTIARY_MIN_FRACTION * max_dim) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * max_dim) and depth_mm > sulcus_depth_min("mm")
                                 else:
-                                    keep = depth_mm > 0.5
+                                    keep = depth_mm > sulcus_depth_min("mm")
                                 if keep:
                                     if use_percent_filter:
                                         sulcus_class = classify_sulcus_depth(depth_mm, max_dim)

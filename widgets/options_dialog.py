@@ -87,6 +87,10 @@ class ProcessingOptionsDialog(QtWidgets.QDialog):
         # Apply defaults on startup
         self.set_defaults()
 
+        # Keep this window white despite the dark app-wide theme.
+        from theme import apply_light_theme
+        apply_light_theme(self)
+
     # --- Defaults handler ---
     def set_defaults(self):
         """Reset all options to their factory defaults."""

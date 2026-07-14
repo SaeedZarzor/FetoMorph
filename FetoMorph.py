@@ -342,6 +342,9 @@ class MainWindow(QMainWindow):
         
         self.menu_recent = file_menu.addMenu("Recent")
         populate_recent_menu(self.menu_recent, self.recent, self.file_mgr.open_path)
+        self.act_open_home_folder = QAction("Open Home Folder…", self); self.act_open_home_folder.setToolTip("Open your home folder in the system file browser"); self.act_open_home_folder.triggered.connect(self.open_home_folder); file_menu.addAction(self.act_open_home_folder)
+        self.act_open_temp_folder = QAction("Open Current Temp Folder…", self); self.act_open_temp_folder.setToolTip("Open the active processing output folder, or the session temp folder if no output folder is active"); self.act_open_temp_folder.triggered.connect(self.open_current_temp_folder); file_menu.addAction(self.act_open_temp_folder)
+        file_menu.addSeparator()
         self.act_show_results = QAction("Show Results…", self); self.act_show_results.setShortcut(QKeySequence("Ctrl+Shift+R")); self.act_show_results.triggered.connect(self.metrics_store.show_results_dock); file_menu.addAction(self.act_show_results)
         self.act_save = QAction("Save View As…", self); self.act_save.setShortcut(QKeySequence("Ctrl+S")); self.act_save.triggered.connect(self.file_mgr.save_view); file_menu.addAction(self.act_save)
         self.act_save_data = QAction("Save Data As…", self); self.act_save_data.setShortcut(QKeySequence.SaveAs); self.act_save_data.triggered.connect(self.file_mgr.save_data_as); file_menu.addAction(self.act_save_data)
@@ -387,6 +390,8 @@ class MainWindow(QMainWindow):
         self.act_perimeter_options = QAction("Perimeter Method…", self); self.act_perimeter_options.triggered.connect(self.settings.set_perimeter_options_dialog); Adjustments_menu.addAction(self.act_perimeter_options)
         self.act_slice_thickness = QAction("Set Slice Thickness…", self); self.act_slice_thickness.triggered.connect(self.settings.set_slice_thickness_dialog); Adjustments_menu.addAction(self.act_slice_thickness); self.act_slice_thickness.setToolTip("Set the distance between slices")
         self.act_cnt_threshold = QAction("Set filtered Threshold…", self); self.act_cnt_threshold.setShortcut(QKeySequence("Ctrl+T")); self.act_cnt_threshold.triggered.connect(self.settings.set_cnt_threshold_dialog); Adjustments_menu.addAction(self.act_cnt_threshold)
+        self.act_sulcus_depth_threshold = QAction("Sulcus Depth Threshold…", self); self.act_sulcus_depth_threshold.setToolTip("Minimum sulcus depth (mm) counted as a sulcus across all measurements"); self.act_sulcus_depth_threshold.triggered.connect(self.settings.set_sulcus_depth_threshold_dialog); Adjustments_menu.addAction(self.act_sulcus_depth_threshold)
+        self.act_slice_kind_override = QAction("Slice Kind Override…", self); self.act_slice_kind_override.setToolTip("Manually set the slice kind (axial/coronal/sagittal/cropped) instead of auto-detection"); self.act_slice_kind_override.triggered.connect(self.settings.set_slice_kind_override_dialog); Adjustments_menu.addAction(self.act_slice_kind_override)
         self.act_gasp_options = QAction("GASP Options", self); self.act_gasp_options.triggered.connect(self._open_gasp_options); Adjustments_menu.addAction(self.act_gasp_options)
         # Contour-accounting mode: 3-way exclusive submenu under Adjustments.
         from PySide6.QtGui import QActionGroup
@@ -438,6 +443,7 @@ class MainWindow(QMainWindow):
         Adjustments_menu.addAction(self.act_cavity_options)
 
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Adjustments_menu.addAction(self.act_annotate_square)
+        self.act_upscale_image = QAction("Upscale Image…", self); self.act_upscale_image.setShortcut(QKeySequence("Ctrl+Shift+U")); self.act_upscale_image.setToolTip("Smooth LANCZOS upscale + sharpen the current image and reload it"); self.act_upscale_image.triggered.connect(self.upscale_current_image); Adjustments_menu.addAction(self.act_upscale_image)
         self.act_choose_regions = QAction("ROI selection…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Adjustments_menu.addAction(self.act_choose_regions)
         self.act_set_physical_dim = QAction("Mesh dimensions…", self);self.act_set_physical_dim.setToolTip("Define the physical dimensions of the VTK mesh."); self.act_set_physical_dim.triggered.connect(self.settings.load_mesh_and_ask_geometry);Adjustments_menu.addAction(self.act_set_physical_dim)
     
@@ -451,9 +457,11 @@ class MainWindow(QMainWindow):
         # Examples menu
         Examples_menu = self.menuBar().addMenu("Examples")
         Fetal_brain_2D_sections = Examples_menu.addMenu("Fetal brain 2D sections")
-        Fetal_brain_3D_nifti = Examples_menu.addMenu("Fetal brain 3D NIfTI")
+        Fetal_brain_3D = Examples_menu.addMenu("Fetal brain 3D")
         fill_2D_sections = Fetal_brain_2D_sections.addAction("Filled 2D sections"); fill_2D_sections.setShortcut(QKeySequence("Ctrl+Alt+F")); fill_2D_sections.setToolTip("Open example filled 2D fetal brain sections by gestational week"); fill_2D_sections.triggered.connect(self.choose_gestational_week_2D_fill)
         cropped_2D_sections = Fetal_brain_2D_sections.addAction("Cropped 2D sections"); cropped_2D_sections.setShortcut(QKeySequence("Ctrl+Alt+C")); cropped_2D_sections.setToolTip("Open example cropped 2D fetal brain sections by gestational week"); cropped_2D_sections.triggered.connect(self.choose_gestational_week_2D_cropped)
+        surface_mri_nifti = Fetal_brain_3D.addAction("Fetal surface MRI"); surface_mri_nifti.setToolTip("Open an example 3D fetal brain surface MRI segmentation (NIfTI) by gestational week"); surface_mri_nifti.triggered.connect(self.choose_gestational_week_3D_surface_mri)
+        brain_stl_3D = Fetal_brain_3D.addAction("Fetal brain STL"); brain_stl_3D.setToolTip("Open an example 3D fetal brain surface mesh (STL) by gestational week"); brain_stl_3D.triggered.connect(self.choose_gestational_week_3D_brain_stl)
 
         # Settings menu (visualization options)
         settings_menu = self.menuBar().addMenu("Settings"); self.settings_menu = settings_menu
@@ -462,6 +470,21 @@ class MainWindow(QMainWindow):
         self.act_preferences.setShortcut(QKeySequence.Preferences)
         self.act_preferences.triggered.connect(self._open_preferences)
         settings_menu.addAction(self.act_preferences)
+
+        # About menu
+        about_menu = self.menuBar().addMenu("About")
+        self.act_about_description = QAction("Description", self)
+        self.act_about_description.triggered.connect(self.show_about_description)
+        about_menu.addAction(self.act_about_description)
+        self.act_about_copyright = QAction("Copyright", self)
+        self.act_about_copyright.triggered.connect(self.show_about_copyright)
+        about_menu.addAction(self.act_about_copyright)
+        self.act_about_acknowledgements = QAction("Acknowledgements", self)
+        self.act_about_acknowledgements.triggered.connect(self.show_about_acknowledgements)
+        about_menu.addAction(self.act_about_acknowledgements)
+        self.act_about_readme = QAction("ReadMe", self)
+        self.act_about_readme.triggered.connect(self.open_readme)
+        about_menu.addAction(self.act_about_readme)
 
         # Disable initially
         for action in [
@@ -483,6 +506,7 @@ class MainWindow(QMainWindow):
             self.act_kernel_size,
             self.act_perimeter_options,
             self.act_cnt_threshold,
+            self.act_sulcus_depth_threshold,
             self.act_set_custom_label,
             self.act_meas_allmarks,
             self.act_meas_volumes,
@@ -506,7 +530,7 @@ class MainWindow(QMainWindow):
         vtk_output = QtVTKOutputWindow(self._qt_console); vtkOutputWindow.SetInstance(vtk_output)
         print("Application started. Progress output will appear here.")
 
-        self.all_actions = {self.act_show_results, self.act_Reset, self.act_close, self.act_quit, self.act_imp_img, self.act_imp_vtk, self.act_imp_stl, self.act_imp_nii, self.act_save, self.act_save_data, self.act_export_metrics, self.act_meas_allmarks, self.act_meas_perimeter, self.act_meas_area, self.act_meas_volumes, self.act_meas_lgi, self.act_meas_sulci, self.act_meas_curvature, self.act_meas_compactness, self.act_hausdorf, self.act_set_custom_label,  self.act_set_image_scale, self.act_set_scale,  self.act_kernel_size, self.act_perimeter_options, self.act_slice_thickness,  self.act_cnt_threshold, self.act_contour_outer, self.act_contour_subtract, self.act_contour_internal_only, self.act_cavity_options, self.act_annotate_square, self.act_choose_regions, self.act_optimization, self.act_nitfi2png, self.act_niftiextractor, self.act_pial_to_stl, self.act_pial_merge, self.act_img_batch, self.act_set_physical_dim}
+        self.all_actions = {self.act_show_results, self.act_Reset, self.act_close, self.act_quit, self.act_imp_img, self.act_imp_vtk, self.act_imp_stl, self.act_imp_nii, self.act_save, self.act_save_data, self.act_export_metrics, self.act_meas_allmarks, self.act_meas_perimeter, self.act_meas_area, self.act_meas_volumes, self.act_meas_lgi, self.act_meas_sulci, self.act_meas_curvature, self.act_meas_compactness, self.act_hausdorf, self.act_set_custom_label,  self.act_set_image_scale, self.act_set_scale,  self.act_kernel_size, self.act_perimeter_options, self.act_slice_thickness,  self.act_cnt_threshold, self.act_sulcus_depth_threshold, self.act_contour_outer, self.act_contour_subtract, self.act_contour_internal_only, self.act_cavity_options, self.act_annotate_square, self.act_choose_regions, self.act_optimization, self.act_nitfi2png, self.act_niftiextractor, self.act_pial_to_stl, self.act_pial_merge, self.act_img_batch, self.act_set_physical_dim}
         self._update_process_actions()
     
 
@@ -573,8 +597,11 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Adjustments", self.act_perimeter_options)
         self.ribbon.add_action("Adjustments", self.act_slice_thickness)
         self.ribbon.add_action("Adjustments", self.act_cnt_threshold)
+        self.ribbon.add_action("Adjustments", self.act_sulcus_depth_threshold)
+        self.ribbon.add_action("Adjustments", self.act_slice_kind_override)
         self.ribbon.add_action("Adjustments", self.act_cavity_options)
         self.ribbon.add_action("Adjustments", self.act_annotate_square)
+        self.ribbon.add_action("Adjustments", self.act_upscale_image)
         self.ribbon.add_action("Adjustments", self.act_choose_regions)
         self.ribbon.add_action("Adjustments", self.act_set_physical_dim)
         
@@ -835,6 +862,11 @@ class MainWindow(QMainWindow):
         subset of measurements; this method keeps the UI consistent.
         """
         kind = self.current_kind
+        image_loaded = kind == "image"
+        imported_item_loaded = kind is not None and kind != "Optimization"
+        self.act_slice_kind_override.setVisible(image_loaded)
+        self.act_slice_kind_override.setEnabled(image_loaded)
+        self.act_sulcus_depth_threshold.setEnabled(imported_item_loaded)
 
         # Contour Accounting applies only to the 2-D image pipeline — single
         # images and planar meshes (which route through it); the image batch
@@ -847,6 +879,10 @@ class MainWindow(QMainWindow):
         # (STL/VTK volumetric slicing and NIfTI); off by default and for 2-D
         # images / planar meshes.
         self.act_cavity_options.setEnabled(False)
+
+        # Upscaling is a 2-D raster operation — only enabled when an image is
+        # loaded (re-enabled in the "image" branch below).
+        self.act_upscale_image.setEnabled(False)
 
         if kind == "stl" or (kind is not None and kind.startswith("vtk")):
             is_planar = self._flat_axis is not None
@@ -918,6 +954,7 @@ class MainWindow(QMainWindow):
             self.act_optimization.setEnabled(True)
             self.act_meas_allmarks.setEnabled(True)
             self.act_annotate_square.setEnabled(True)
+            self.act_upscale_image.setEnabled(True)
             self.act_nitfi2png.setEnabled(False)
             self.act_hausdorf.setEnabled(True)
             self.act_meas_curvature.setEnabled(True)
@@ -1050,7 +1087,118 @@ class MainWindow(QMainWindow):
         except Exception as ex:
             QMessageBox.warning(self, "Reset View", f"Could not reload:\n{ex}")
 
-        
+    def open_current_temp_folder(self):
+        """Open the active output folder, falling back to the session temp dir."""
+        folder = self.current_output_dir if self.current_output_dir else self.temp_dir
+        if not folder or not os.path.isdir(folder):
+            QMessageBox.warning(
+                self,
+                "Open Temp Folder",
+                f"Temp folder not found:\n{folder or '(none)'}",
+            )
+            return
+        ok = QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        if ok:
+            print(f"[Temp] Opened folder: {folder}")
+        else:
+            QMessageBox.warning(
+                self,
+                "Open Temp Folder",
+                f"Could not open folder:\n{folder}",
+            )
+
+    def open_home_folder(self):
+        """Open the current user's home folder in the system file browser."""
+        folder = str(Path.home())
+        if not os.path.isdir(folder):
+            QMessageBox.warning(
+                self,
+                "Open Home Folder",
+                f"Home folder not found:\n{folder}",
+            )
+            return
+        ok = QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        if ok:
+            print(f"[File] Opened home folder: {folder}")
+        else:
+            QMessageBox.warning(
+                self,
+                "Open Home Folder",
+                f"Could not open folder:\n{folder}",
+            )
+
+    def show_about_description(self):
+        QMessageBox.information(
+            self,
+            "About FetoMorph - Description",
+            "FetoMorph is a desktop application for morphometric analysis of the "
+            "developing fetal brain. It extracts quantitative descriptors — "
+            "surface area, perimeter, volume, gyrification (LGI / GI), "
+            "compactness, curvature, and a full sulcal profile (per-class counts "
+            "and depths) — from 2D image slices, 3D NIfTI volumes, and STL/VTK "
+            "surface meshes, and indexes them by gestational age.\n\n"
+            "Aim: the core purpose is to validate the simulation results "
+            "generated by computational models of brain development. Simulated "
+            "brain geometries are measured with the same pipeline used on real "
+            "fetal brain data, and the Gestational Age Similarity Profile (GASP) "
+            "scores how closely each measured brain matches age-specific "
+            "reference statistics — giving an objective, metric-based way to "
+            "judge whether a simulation reproduces realistic developmental "
+            "morphology and timing.\n\n"
+            "The methodology, concept, and scientific investigation were "
+            "developed by Saeed Zarzor. The software implementation was written "
+            "with the assistance of Claude Code and Codex.",
+        )
+
+    def show_about_copyright(self):
+        QMessageBox.information(
+            self,
+            "About FetoMorph - Copyright",
+            "Copyright (c) 2026 BRAINIACS.\n\n"
+            "All rights reserved unless a separate license file or written "
+            "permission states otherwise.",
+        )
+
+    def show_about_acknowledgements(self):
+        QMessageBox.information(
+            self,
+            "About FetoMorph - Acknowledgements",
+            "FetoMorph is built with Python, PySide6/Qt, VTK, OpenCV, NumPy, "
+            "pandas, openpyxl, Matplotlib, PyVista, and ONNX Runtime.\n\n"
+            "Acknowledgement is given to the fetal brain imaging datasets provided "
+            "by the developing Human Connectome Project (dHCP), undertaken by the "
+            "KCL–Imperial–Oxford Consortium and funded by the European Research "
+            "Council under the European Union’s Seventh Framework Programme "
+            "(FP7/2007–2013), ERC Grant Agreement No. 319456, and ERC Consolidator "
+            "Grant No. 101083647.\n\n"
+            "FetoMorph was developed as part of the BRAINIACS project, funded by "
+            "the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) "
+            "through grant BU 3728/1-1, awarded to SB.\n\n"
+            "We also sincerely thank Median Almurey, Ahmad Baradiei, Yanal Moulla, "
+            "Rami Musleh, and Divyashree Doddbele for their valuable contributions, "
+            "to the design implementation, testing, validation, and continued "
+            "improvement of the software."
+
+        )
+
+    def open_readme(self):
+        readme_path = Path(__file__).resolve().parent / "README.md"
+        if not readme_path.is_file():
+            QMessageBox.warning(
+                self,
+                "ReadMe",
+                f"README.md not found:\n{readme_path}",
+            )
+            return
+        ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(readme_path)))
+        if not ok:
+            QMessageBox.warning(
+                self,
+                "ReadMe",
+                f"Could not open README.md:\n{readme_path}",
+            )
+
+
 # ---------------- annotate square ----------
 
     def annotate_square(self):
@@ -1105,10 +1253,51 @@ class MainWindow(QMainWindow):
             logger.debug("statusBar showMessage failed", exc_info=True)
         
         # start selection on the image widget
-        
+
         self.image_label.start_square_selection(_on_done)
         self.image_label.setFocus()
-    
+
+    def upscale_current_image(self):
+        """Upscale the current 2-D image (LANCZOS + sharpen) and reload it.
+
+        Writes the result to ``<temp>/upscaled`` and loads it as the current
+        image so subsequent measurements run on the sharper, higher-resolution
+        frame. The burned-in scale bar is enlarged with the frame, so re-detect
+        the scale on the upscaled image (do not divide the old mm/pixel by the
+        factor).
+        """
+        from helpers import Upscaling
+
+        if self.current_kind != "image" or not self.current_path:
+            QMessageBox.warning(self, "Upscale Image", "Load a 2-D image first.")
+            return
+
+        scale, ok = QInputDialog.getInt(
+            self, "Upscale Image", "Scale factor (×):",
+            Upscaling.DEFAULT_SCALE, 2, 16, 1)
+        if not ok:
+            return
+
+        src = self.last_annotated_path or self.current_path
+        out_dir = os.path.join(self.temp_dir, "upscaled")
+        os.makedirs(out_dir, exist_ok=True)
+        base = os.path.splitext(os.path.basename(src))[0]
+        out_path = os.path.join(out_dir, f"{base}_{scale}x.png")
+        try:
+            Upscaling.upscale_image_file(src, out_path, scale=scale)
+        except Exception as ex:
+            logger.error("Upscale failed: %s", ex)
+            QMessageBox.critical(self, "Upscale Failed", f"{type(ex).__name__}: {ex}")
+            return
+
+        self.file_mgr.load_image(out_path)
+        self.current_output_dir = out_dir
+        print(f"[Upscale] {src} → {out_path} ({scale}x)")
+        try:
+            self.statusBar().showMessage(f"Upscaled {scale}× → {out_path}", 5000)
+        except Exception:
+            logger.debug("statusBar showMessage failed", exc_info=True)
+
 
     def get_label_for_cropped_path(self, path: str) -> str | None:
         """Return the annotation label for a saved cropped image path, or None."""
@@ -1627,6 +1816,35 @@ class MainWindow(QMainWindow):
             return
         self.file_mgr.load_image(path)
 
+    def choose_gestational_week_3D_surface_mri(self):
+        """Open an example 3D fetal surface-MRI NIfTI for a user-chosen week."""
+        dlg = GestationalWeeksDialog(self, initial=24, show_axis=False)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        week = dlg.value()
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "Examples", "fetal_surface_MRI", f"{week}week")
+        path = os.path.join(base, "seg.nii")
+        if not os.path.isfile(path):
+            QMessageBox.warning(self, "Not Found",
+                                f"No surface-MRI NIfTI for week {week}.\n{path}")
+            return
+        self.file_mgr.load_nifti(path)
+
+    def choose_gestational_week_3D_brain_stl(self):
+        """Open an example 3D fetal brain surface mesh (STL) for a chosen week."""
+        dlg = GestationalWeeksDialog(self, initial=24, show_axis=False)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        week = dlg.value()
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "Examples", "fetal_brain_stl", f"{week}.stl")
+        if not os.path.isfile(path):
+            QMessageBox.warning(self, "Not Found",
+                                f"No brain STL for week {week}.\n{path}")
+            return
+        self.file_mgr.load_stl(path)
+
 
 # ---------------------------
 # Entry point
@@ -1641,6 +1859,10 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("FetoMorph")
     app.setApplicationDisplayName("FetoMorph")
+
+    # One consistent slate/teal look across every window and dialog.
+    from theme import apply_theme
+    apply_theme(app)
 
     win = MainWindow();
     win.setWindowTitle("FetoMorph")

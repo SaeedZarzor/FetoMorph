@@ -81,6 +81,7 @@ WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 900
 DEFAULT_PIXEL_SIZE = 0.01        # mm/px fallback when user has not calibrated
 DEFAULT_CNT_THRESHOLD = 1.0      # min contour area to keep, in mm² (physical, like the cavity threshold)
+DEFAULT_SULCUS_DEPTH_THRESHOLD = 1.0  # min sulcus depth to keep, in mm (physical); tunable via Adjustments
 DEFAULT_KERNEL_SIZE_MM = 5.0     # morphological kernel diameter in mm
 DEFAULT_KERNEL_SIZE = max(3, int(round(DEFAULT_KERNEL_SIZE_MM)))  # legacy pixel fallback
 DEFAULT_PERIMETER_METHOD = "crofton"  # "arc_length" or "crofton"

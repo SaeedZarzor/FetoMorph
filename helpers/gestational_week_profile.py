@@ -1,13 +1,14 @@
 """Gestational-week reference statistics loaded from a CSV.
 
 Mirrors the per-week structure documented in ``profile_info.md`` (metadata
-plus three metric-summary tables) for gestational weeks 24-38.
+plus three metric-summary tables) for gestational weeks 24-36.
 """
 
 from dataclasses import dataclass
 from pathlib import Path
 
 import math
+import re
 import pandas as pd
 
 
@@ -117,7 +118,7 @@ class GestationalWeekProfile:
     for every metric listed on :class:`WeekProfile`.
     """
 
-    VALID_RANGE = range(24, 39)
+    VALID_RANGE = range(24, 37)
     AXES = ("axial", "coronal", "sagittal")
 
     def __init__(self, csv_path: str | Path) -> None:
@@ -146,11 +147,15 @@ class GestationalWeekProfile:
         """Return the available axes for a given week."""
         return [a for a in self.AXES if (int(week), a) in self._profiles]
 
-    @staticmethod
-    def _load(path: Path) -> dict[tuple[int, str], WeekProfile]:
+    @classmethod
+    def _load(cls, path: Path) -> dict[tuple[int, str], WeekProfile]:
         df = pd.read_csv(path)
         profiles: dict[tuple[int, str], WeekProfile] = {}
         for _, row in df.iterrows():
+            # Only score weeks inside VALID_RANGE; reference CSVs may carry rows
+            # for weeks outside the supported range.
+            if int(row["week"]) not in cls.VALID_RANGE:
+                continue
             metric_stats = {
                 name: _metric_stats(row, name) for name in _METRIC_FIELDS
             }
@@ -188,31 +193,43 @@ METRIC_MAP: dict[str, str] = {
     "MeanSulciDepth": "sulci_depth",
 }
 
+# Metrics used for normalization-based (unit-free) comparison. Area, perimeter
+# and the raw (mm) depths are deliberately excluded. LGI / Compactness / total
+# sulcal count are already scale-free and compared as-is; the depth and per-class
+# count metrics use the ``*_normalized`` reference columns, with the measured
+# values derived by :func:`_augment_normalized_metrics` (depth ÷ the slice's own
+# max sulcus depth; per-class count ÷ the slice's total count). A ``*_normalized``
+# column missing from the CSV drops that metric out during scoring.
 NORMALIZED_METRIC_MAP: dict[str, str] = {
     "LGI": "lgi",
     "Compactness": "compactness",
     "TotalSulciCount": "sulci_count",
-    "MeanSulciDepth": "sulci_depth_normalized",
+    "NormSulciDepth": "sulci_depth_normalized",
+    "PrimaryDepthNorm": "primary_sulcus_values_normalized",
+    "SecondaryDepthNorm": "secondary_sulcus_values_normalized",
+    "TertiaryDepthNorm": "tertiary_sulcus_values_normalized",
+    "UnclassifiedDepthNorm": "unclassified_sulcus_values_normalized",
+    "PrimaryCountNorm": "primary_count_normalized",
+    "SecondaryCountNorm": "secondary_count_normalized",
+    "TertiaryCountNorm": "tertiary_count_normalized",
+    "UnclassifiedCountNorm": "unclassified_count_normalized",
 }
 
-_NORMALIZED_COUNT_FALLBACKS: dict[str, str] = {
-    "sulci_count": "sulci_count_normalized",
+# Measured normalized-depth key -> the raw (mean-depth) measured key it scales.
+_DEPTH_NORM_SOURCES: dict[str, str] = {
+    "NormSulciDepth": "MeanSulciDepth",
+    "PrimaryDepthNorm": "PrimaryMeanDepth",
+    "SecondaryDepthNorm": "SecondaryMeanDepth",
+    "TertiaryDepthNorm": "TertiaryMeanDepth",
+    "UnclassifiedDepthNorm": "UnclassifiedMeanDepth",
 }
 
-_NORMALIZED_DEPTH_BASES: dict[str, str] = {
-    "sulci_depth_normalized": "sulci_depth",
-    "primary_sulcus_values_normalized": "primary_sulcus_values",
-    "secondary_sulcus_values_normalized": "secondary_sulcus_values",
-    "tertiary_sulcus_values_normalized": "tertiary_sulcus_values",
-    "unclassified_sulcus_values_normalized": "unclassified_sulcus_values",
-}
-
-_NORMALIZED_COUNT_BASES: dict[str, str] = {
-    "sulci_count_normalized": "sulci_count",
-    "primary_count_normalized": "primary_count",
-    "secondary_count_normalized": "secondary_count",
-    "tertiary_count_normalized": "tertiary_count",
-    "unclassified_count_normalized": "unclassified_count",
+# Measured normalized-count key -> the raw per-class count measured key it scales.
+_COUNT_NORM_SOURCES: dict[str, str] = {
+    "PrimaryCountNorm": "PrimarySulciCount",
+    "SecondaryCountNorm": "SecondarySulciCount",
+    "TertiaryCountNorm": "TertiarySulciCount",
+    "UnclassifiedCountNorm": "UnclassifiedSulciCount",
 }
 
 # Measured-dict keys for the two aggregate sulcus metrics, and the per-class
@@ -248,6 +265,12 @@ def _augment_aggregate_metrics(measured: dict) -> dict:
                   if c is not None]
         if counts:
             out[TOTAL_COUNT_KEY] = sum(counts)
+        else:
+            # Fallback: the metrics-store overall count (cropped slices only
+            # record UnclassifiedSulciCount, but "SulciCount" is always set).
+            overall_count = _clean(out.get("SulciCount"))
+            if overall_count is not None:
+                out[TOTAL_COUNT_KEY] = overall_count
 
     if out.get(MEAN_DEPTH_KEY) is None:
         total_depth = 0.0
@@ -260,6 +283,13 @@ def _augment_aggregate_metrics(measured: dict) -> dict:
                 total_count += count
         if total_count > 0:
             out[MEAN_DEPTH_KEY] = total_depth / total_count
+        else:
+            # Fallback: the metrics-store overall mean depth. Cropped slices are
+            # all "unclassified", for which no per-class mean depth is recorded,
+            # so the per-class derivation above yields nothing.
+            overall_mean = _clean(out.get("MeanDepth"))
+            if overall_mean is not None:
+                out[MEAN_DEPTH_KEY] = overall_mean
 
     return out
 
@@ -274,31 +304,67 @@ def _stats_has_values(stats: MetricStats | None) -> bool:
     )
 
 
-def _normalized_ref_field(ref: WeekProfile, ref_field: str) -> str:
-    normalized_field = _NORMALIZED_COUNT_FALLBACKS.get(ref_field)
-    if normalized_field and _stats_has_values(getattr(ref, normalized_field, None)):
-        return normalized_field
-    return ref_field
+_PER_SULCUS_DEPTH_RE = re.compile(
+    r"^(?:Primary|Secondary|Tertiary|Unclassified)_depth_\d+$")
 
 
-def _comparison_value(raw_value: float, ref: WeekProfile, ref_field: str) -> float | None:
-    base_field = (
-        _NORMALIZED_DEPTH_BASES.get(ref_field)
-        or _NORMALIZED_COUNT_BASES.get(ref_field)
-    )
-    if base_field is None:
-        return raw_value
+def _max_sulcus_depth(measured: dict) -> float | None:
+    """The slice's own maximum sulcus depth, used to normalize depths.
 
-    base_stats: MetricStats | None = getattr(ref, base_field, None)
-    if base_stats is None or base_stats.max is None or base_stats.max <= 0:
-        return None
-    return raw_value / base_stats.max
+    Prefers an explicit max — ``MaxSulciDepth`` or the metrics-store ``MaxDepth``
+    column (which ``MetricsStore.record_metric_for`` fills with ``max(sulci_depth)``);
+    otherwise takes the max over the per-sulcus depth columns the batch exports
+    (``Primary_depth_1`` … ``Unclassified_depth_N``). Returns ``None`` when none
+    is available (e.g. mesh / manual-entry paths carry no per-sulcus values), so
+    the depth metrics are ignored rather than mis-normalized.
+    """
+    for key in ("MaxSulciDepth", "MaxDepth"):
+        explicit = _clean(measured.get(key))
+        if explicit is not None and explicit > 0:
+            return explicit
+    depths = [
+        d for d in (
+            _clean(v) for k, v in measured.items()
+            if isinstance(k, str) and _PER_SULCUS_DEPTH_RE.match(k)
+        )
+        if d is not None
+    ]
+    return max(depths) if depths else None
+
+
+def _augment_normalized_metrics(measured: dict) -> dict:
+    """Return *measured* with the normalized (scale-free) metrics filled in.
+
+    Sulcal depth is normalized by the slice's OWN maximum sulcus depth
+    (``normalized_sulcal_depth = sulcal_depth / max_sulcal_depth``) so it is
+    invariant to the (per-crop) pixel spacing; per-class sulcal count is
+    normalized by the slice's total sulcus count. The reference statistics for
+    these come from the ``*_normalized`` CSV columns, so a missing column simply
+    drops the metric during scoring. Values already present are not overwritten.
+    """
+    out = _augment_aggregate_metrics(measured)  # TotalSulciCount, MeanSulciDepth
+
+    max_depth = _max_sulcus_depth(out)
+    if max_depth and max_depth > 0:
+        for norm_key, src_key in _DEPTH_NORM_SOURCES.items():
+            src = _clean(out.get(src_key))
+            if src is not None and out.get(norm_key) is None:
+                out[norm_key] = src / max_depth
+
+    total = _clean(out.get(TOTAL_COUNT_KEY))
+    if total and total > 0:
+        for norm_key, src_key in _COUNT_NORM_SOURCES.items():
+            src = _clean(out.get(src_key))
+            if src is not None and out.get(norm_key) is None:
+                out[norm_key] = src / total
+
+    return out
 
 DEFAULT_WEIGHTS: dict[str, float] = {
     "area": 1.0,
     "perimeter": 0.0,  # excluded due to high corrloation with area 
     "lgi": 2.0,
-    "compactness": 1.0,
+    "compactness": 0.5,
     "primary_count": 1.0,
     "secondary_count": 1.0,
     "tertiary_count": 1,
@@ -396,10 +462,13 @@ def compute_similarity_scores(
     use_mahal = method.lower().startswith("mahal")
     normalized_mode = bool(use_normalized or getattr(registry, "is_cropped_reference", False))
 
-    # Fill in TotalSulciCount / MeanSulciDepth from the per-class values so the
-    # two aggregate metrics are scored even when the caller only provides the
-    # per-class counts / mean depths.
-    measured = _augment_aggregate_metrics(measured)
+    # Derive the aggregate / normalized measured metrics from the per-class
+    # counts and depths so they are scored even when the caller only supplies
+    # the per-class values.
+    measured = (
+        _augment_normalized_metrics(measured) if normalized_mode
+        else _augment_aggregate_metrics(measured)
+    )
 
     week_results: list[GASPResult] = []
 
@@ -419,11 +488,6 @@ def compute_similarity_scores(
             try:
                 val = float(val)
             except (TypeError, ValueError):
-                continue
-
-            ref_field = _normalized_ref_field(ref, ref_field) if normalized_mode else ref_field
-            val = _comparison_value(val, ref, ref_field) if normalized_mode else val
-            if val is None:
                 continue
 
             stats: MetricStats = getattr(ref, ref_field)

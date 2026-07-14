@@ -28,6 +28,24 @@ _input_name: str | None = None
 _load_failed = False
 
 
+def _manual_override() -> "SliceKind | None":
+    """Return the user's manual slice-kind override, or ``None`` for auto.
+
+    Read lazily from :class:`VisualizationSettings` so this module stays
+    importable without Qt and avoids a circular import at load time. Any value
+    other than the four valid kinds (including ``"auto"``) means "use the
+    classifier".
+    """
+    try:
+        from managers.visualization_settings import get_active
+        value = str(getattr(get_active(), "slice_kind_override", "auto")).strip().lower()
+    except Exception:
+        return None
+    if value in _LABELS:
+        return value  # type: ignore[return-value]
+    return None
+
+
 def _get_session():
     """Lazily build (and cache) the ONNX Runtime session."""
     global _session, _input_name, _load_failed
@@ -98,7 +116,14 @@ def classify_slice_kind(image_bgr: np.ndarray) -> tuple[SliceKind, float]:
         ``"sagittal" | "coronal" | "axial" | "not_full_slice"``.
         Falls back to ``("not_full_slice", 0.0)`` if the model file or
         onnxruntime is unavailable, or if ``image_bgr`` is invalid.
+
+        A manual override set via Adjustments → "Slice Kind Override…" short-
+        circuits the classifier entirely and returns the forced kind.
     """
+    override = _manual_override()
+    if override is not None:
+        return (override, 1.0)
+
     if image_bgr is None or not isinstance(image_bgr, np.ndarray) or image_bgr.size == 0:
         return ("not_full_slice", 0.0)
 

@@ -50,6 +50,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_DIR = REPO_ROOT / "traning_data"
 MODEL_OUT = REPO_ROOT / "models" / "slice_kind_cnn.onnx"
 
+# Train on the exact same preprocessing the runtime classifier applies, so the
+# model never sees a train/serve skew. classify_slice_kind() reframes every
+# image (tight-crop to the brain + pad to a centered square) BEFORE resizing;
+# training must do the same or full-slice accuracy collapses at inference.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+from helpers.slice_kind_classifier import _reframe_to_training_layout
+
 LABELS = ("sagittal", "coronal", "axial", "not_full_slice")
 IMG_SIZE = 128
 BATCH_SIZE = 32
@@ -158,6 +166,8 @@ class SliceKindDataset(Dataset):
         img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
         if img is None:
             raise RuntimeError(f"Could not read image: {path}")
+        # Match the runtime classifier's preprocessing exactly (see note above).
+        img = _reframe_to_training_layout(img)
         img = cv2.resize(img, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_AREA)
         if self.augment:
             img = self._augment(img)

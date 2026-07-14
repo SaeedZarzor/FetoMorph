@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from deps import QObject, QSettings, Signal
+from constants import DEFAULT_SULCUS_DEPTH_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,19 @@ class VizDefaults:
     gasp_w_primary_sulcus_values: float = 1.5
     gasp_w_secondary_sulcus_values: float = 1.5
     gasp_w_tertiary_sulcus_values: float = 1.0
+    gasp_w_sulci_count: float = 1.5      # total sulcus count
+    gasp_w_sulci_depth: float = 1.5      # total sulcal depth (raw or normalized)
+
+    # --- Measurement filters ---
+    # Minimum sulcus (convexity-defect) depth to keep, in mm. Read by every
+    # measurement function via helpers.sulcus_depth_min().
+    sulcus_depth_threshold: float = DEFAULT_SULCUS_DEPTH_THRESHOLD
+
+    # --- Slice-kind override ---
+    # Manual override for the automatic slice-kind classifier. "auto" keeps the
+    # ONNX classifier; any of "sagittal" / "coronal" / "axial" / "not_full_slice"
+    # forces that kind for every measurement via classify_slice_kind().
+    slice_kind_override: str = "auto"
 
 
 _DEFAULTS = VizDefaults()

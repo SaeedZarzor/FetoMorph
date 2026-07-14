@@ -59,6 +59,8 @@ def set_icons(ui, assets: Path) -> None:
         "act_similarity_profile": "icons/transparency.png",
         "act_cavity_options" : "icons/cube-3d.png",
         "act_perimeter_options" : "icons/select.png",
+        "act_sulcus_depth_threshold" : "icons/depth_set.png",
+        "act_slice_kind_override": "icons/sort-by.png",
     }
 
     for attr, rel in icons.items():

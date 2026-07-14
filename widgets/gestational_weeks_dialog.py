@@ -14,7 +14,8 @@ class GestationalWeeksDialog(QDialog):
     The slider and spin box are kept in sync within the specified range.
     """
 
-    def __init__(self, parent=None, initial: int = 24, minimum: int = 24, maximum: int = 38):
+    def __init__(self, parent=None, initial: int = 24, minimum: int = 24, maximum: int = 38,
+                 show_axis: bool = True):
         """Initialise the gestational weeks dialog.
 
         Args:
@@ -22,6 +23,8 @@ class GestationalWeeksDialog(QDialog):
             initial: Starting gestational week.
             minimum: Earliest allowed week.
             maximum: Latest allowed week.
+            show_axis: Show the Axis selector (2-D sections). Hide it for 3-D
+                volumes where a single axis is meaningless.
         """
         super().__init__(parent)
         self.setWindowTitle("Gestational Age (Weeks)")
@@ -70,7 +73,11 @@ class GestationalWeeksDialog(QDialog):
 
         form.addRow("Gestational week:", self.slider)
         form.addRow("Value:", self.spin)
-        form.addRow("Axis:", self.axis_combo)
+        if show_axis:
+            form.addRow("Axis:", self.axis_combo)
+        else:
+            # Not in the layout: hide it so it isn't drawn at (0,0) over the form.
+            self.axis_combo.hide()
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
         btns.accepted.connect(self.accept)
