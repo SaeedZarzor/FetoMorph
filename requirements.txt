@@ -101,7 +101,7 @@ protobuf==7.34.1
 psutil==7.0.0
 ptyprocess==0.7.0
 pure_eval==0.2.3
-pycairo @ file:///private/tmp/py3cairo-20231211-33175-e8xwuk/pycairo-1.25.1
+pycairo==1.25.1
 pycparser==2.23
 Pygments==2.19.2
 PyGObject==3.46.0
@@ -112,6 +112,7 @@ pyqt6-plugins==6.4.2.2.3
 PyQt6-Qt6==6.4.3
 pyqt6-tools==6.4.2.3.3
 PyQt6_sip==13.8.0
+pytest==8.4.2
 PySide6==6.9.1
 PySide6_Addons==6.9.1
 PySide6_Essentials==6.9.1
