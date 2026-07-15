@@ -1184,7 +1184,9 @@ class MainWindow(QMainWindow):
             "Models of Human Brain Development (Version v1) [Computer software]."
             "Zenodo. European Congress on Computational Methods in Applied Sciences"
             "and Engineering (ECCOMAS), Munich, Germany."
-            "https://doi.org/10.5281/zenodo.21383500 \n\n"
+            "https://doi.org/10.5281/zenodo.21384068\n\n"
+
+            
         )
 
     def show_about_acknowledgements(self):
