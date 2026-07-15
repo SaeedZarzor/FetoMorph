@@ -64,7 +64,7 @@ Built with PySide6 (Qt6), VTK, OpenCV, and an ONNX deep-learning model for slice
 
 1. Clone the repository:
    ```bash
-   git clone <repo-url>
+   git clone https://github.com/SaeedZarzor/FetoMorph
    cd FetoMorph
    ```
 
