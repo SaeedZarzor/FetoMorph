@@ -377,7 +377,8 @@ FetoMorph is licensed under the MIT License. See the `LICENSE` file for the comp
 When using FetoMorph in research, please cite:
 
 ```text
-ZARZOR, M. S., Ma, Q., Kainz, B.& Budday, S. (2026). FetoMorph: A Unified Toolkit for Validating Computational Models of Human Brain Development (Version v1) [Computer software]. Zenodo. European Congress on Computational Methods in Applied Sciences and Engineering (ECCOMAS), Munich, Germany. 
+
+ZARZOR, M. S., Ma, Q., Kainz, B.& Budday, S. (2026). FetoMorph - A Unified Toolkit for Validating Computational Models of Human Brain Development (Version v1) [Computer software]. Zenodo. European Congress on Computational Methods in Applied Sciences and Engineering (ECCOMAS), Munich, Germany. https://doi.org/10.5281/zenodo.21384068
 ```
 
 ## Acknowledgements
