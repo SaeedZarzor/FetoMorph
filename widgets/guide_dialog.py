@@ -208,7 +208,8 @@ until data of the matching kind (image / mesh / volume) is loaded.</p>
       GASP metric weights.</li>
   <li><b>About →</b> About FetoMorph, <b>User Guide</b> (this window, F1),
       Contributors, Acknowledgements, Copyright and License, Citing FetoMorph,
-      Icon Credits, and ReadMe.</li>
+      <b>Declaration</b> (AI tools used to develop FetoMorph, and icon credits),
+      and ReadMe.</li>
 </ul>
 
 <h3 style="color:{ACCENT};">Keyboard shortcuts</h3>

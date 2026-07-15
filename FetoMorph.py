@@ -483,7 +483,7 @@ class MainWindow(QMainWindow):
         about_menu.addAction(QAction("Acknowledgements", self, triggered=self.show_about_acknowledgements))
         about_menu.addAction(QAction("Copyright and License", self, triggered=self.show_about_copyright))
         about_menu.addAction(QAction("Citing FetoMorph", self, triggered=self.show_about_citation))
-        about_menu.addAction(QAction("Icon Credits", self, triggered=self.show_about_icon_credits))
+        about_menu.addAction(QAction("Declaration", self, triggered=self.show_about_declaration))
         about_menu.addSeparator()
         about_menu.addAction(QAction("ReadMe", self, triggered=self.open_readme))
 
@@ -1212,13 +1212,22 @@ class MainWindow(QMainWindow):
 
         )
     
-    def show_about_icon_credits(self):
+    def show_about_declaration(self):
         QMessageBox.information(
             self,
-            "About FetoMorph - Icon Credits",
-            "Icons made by kliwir art, Freepik, Three musketeers, FetchLab, " 
-            "juicy_fish, Us and Up, Pixel perfect, Fathema Khanom, meaicon, " 
-            "Karyative, Iconic Panda, JessHG, FACH, Anggara, samlakodad, and Infinite " 
+            "About FetoMorph - Declaration",
+            "AI-Assisted Development\n\n"
+            "Parts of FetoMorph were developed with the assistance of AI coding "
+            "tools, including Claude Code (Anthropic, Claude Opus 4.8) and "
+            "Codex 5.5 (OpenAI). These tools were used to support "
+            "implementation, refactoring, testing, and documentation. All "
+            "AI-assisted output was reviewed, tested, and validated by the "
+            "authors, who take full responsibility for the correctness and "
+            "scientific integrity of the software.\n\n"
+            "Icon Credits\n\n"
+            "Icons made by kliwir art, Freepik, Three musketeers, FetchLab, "
+            "juicy_fish, Us and Up, Pixel perfect, Fathema Khanom, meaicon, "
+            "Karyative, Iconic Panda, JessHG, FACH, Anggara, samlakodad, and Infinite "
             "Dendrogram from Flaticon."
         )
 
