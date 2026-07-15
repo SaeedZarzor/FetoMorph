@@ -39,9 +39,9 @@ Built with PySide6 (Qt6), VTK, OpenCV, and an ONNX deep-learning model for slice
   - [Export](#export)
 - [Contributors](#contributors)
 - [Copyright and License](#copyright-and-license)
-- [Citing FetoMorph] (#citing-fetoMorph)
-- [Acknowledgements] (#acknowledgements)
-- [Icon Credits] (#icon-credits)
+- [Citing FetoMorph](#citing-fetoMorph)
+- [Acknowledgements](#acknowledgements)
+- [Icon Credits](#icon-credits)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Project Structure](#project-structure)
 
