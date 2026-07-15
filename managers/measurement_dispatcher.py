@@ -2227,6 +2227,11 @@ class MeasurementDispatcher:
         already been measured (allmarks computed) AND the 2D slices have
         been generated and are currently being browsed via the slider.
         """
+        # If an image is already loaded, skip the picker and score it directly.
+        if self.mw.current_kind == "image" and self.mw.current_path:
+            self._similarity_profile_from_image()
+            return
+
         mesh_ready = self._mesh_section_workflow_ready()
 
         mb = QMessageBox(self.mw)
@@ -2253,7 +2258,10 @@ class MeasurementDispatcher:
         mb.exec()
         clicked = mb.clickedButton()
         if clicked is btn_import:
-            self._similarity_profile_from_image()
+            # No image is loaded: import one first, then score it.
+            self.mw.file_mgr.import_image()
+            if self.mw.current_kind == "image" and self.mw.current_path:
+                self._similarity_profile_from_image()
         elif clicked is btn_manual:
             self._similarity_profile_manual()
         elif btn_mesh is not None and clicked is btn_mesh:
@@ -2312,7 +2320,7 @@ class MeasurementDispatcher:
         reply = QMessageBox.information(
             self.mw, "Similarity Profile",
             "To obtain an accurate comparison, make sure to adjust the "
-            "image scale properly and set the kernel size to 25.",
+            "image scale properly and set the kernel size to 5 mm and the minimum sulcus depth set to 1 mm.",
             QMessageBox.Ok | QMessageBox.Cancel, QMessageBox.Ok)
         if reply != QMessageBox.Ok:
             return
@@ -2372,6 +2380,29 @@ class MeasurementDispatcher:
     def _similarity_profile_manual(self):
         """Open the manual hallmark-entry dialog and score against the registry."""
         from widgets.manual_gasp_dialog import ManualGASPDialog
+
+        # Ask which comparison to use BEFORE entering data, so the form can be
+        # tailored (normalized hides the unit-based Area/Perimeter fields).
+        cmp_box = QMessageBox(self.mw)
+        cmp_box.setWindowTitle("Similarity Profile")
+        cmp_box.setIcon(QMessageBox.Question)
+        cmp_box.setText("Which comparison do you want to use?")
+        cmp_box.setInformativeText(
+            "Normalized — unit-free metrics only (LGI, compactness, sulcal "
+            "counts, normalized sulcal depth); use when scale/units differ.\n"
+            "Full — also includes absolute metrics (area, perimeter, depth).")
+        btn_norm = cmp_box.addButton("Normalized", QMessageBox.AcceptRole)
+        btn_full = cmp_box.addButton("Full", QMessageBox.ActionRole)
+        cmp_box.addButton(QMessageBox.Cancel)
+        cmp_box.exec()
+        clicked = cmp_box.clickedButton()
+        if clicked is btn_norm:
+            force_normalized = True
+        elif clicked is btn_full:
+            force_normalized = False
+        else:
+            return
+
         settings = getattr(self.mw, "settings", None)
         default_kernel = getattr(settings, "kernel_size_mm", 5.0)
         default_unit = getattr(settings, "units_length", None) or "mm"
@@ -2388,6 +2419,7 @@ class MeasurementDispatcher:
             default_kernel_size=default_kernel,
             default_pixel_size=default_pixel,
             default_project_name=default_name,
+            normalized=force_normalized,
         )
         if dlg.exec() != QDialog.Accepted:
             return
@@ -2398,6 +2430,7 @@ class MeasurementDispatcher:
                 "No hallmark values were entered.")
             return
         axis = vals["axis"]
+
         overrides = {
             "project_name": vals["project_name"] or None,
             "kernel_size_mm": vals["kernel_size"],
@@ -2407,7 +2440,8 @@ class MeasurementDispatcher:
             "source_path": None,
             "source_label": "(manually entered)",
         }
-        self._run_similarity_profile(measured, axis, manual_overrides=overrides)
+        self._run_similarity_profile(measured, axis, manual_overrides=overrides,
+                                     force_normalized=force_normalized)
 
     def _similarity_profile_from_mesh_section(self):
         """Score the slice currently selected on the slider for an STL/VTK mesh.
@@ -2557,12 +2591,18 @@ class MeasurementDispatcher:
 
         return measured
 
-    def _run_similarity_profile(self, measured, axis, *, manual_overrides=None):
+    def _run_similarity_profile(self, measured, axis, *, manual_overrides=None,
+                                force_normalized=None):
         """Compute the GASP summary for *measured* on *axis*, render the chart,
         and write the per-run results folder.
 
         *manual_overrides* supplies project name and analysis-parameter values
         when there is no loaded image to read them from.
+
+        *force_normalized* overrides the normalized-vs-full comparison choice
+        (used by the manual-entry flow). ``None`` keeps the default behaviour
+        (cropped always normalized; full follows the ``gasp_use_normalized_full``
+        setting). Cropped data is always scored normalized regardless.
         """
         # Cropped sub-slices (not_full_slice) are compared against the cropped
         # reference; full MRI slices against the full-slice reference.
@@ -2589,7 +2629,11 @@ class MeasurementDispatcher:
         oor_beta = float(getattr(viz, "gasp_oor_beta", 1.0))
         apply_penalty = bool(getattr(viz, "gasp_apply_penalty", True))
         weighted_global = bool(getattr(viz, "gasp_weighted_global", True))
-        use_normalized = bool(is_cropped or getattr(viz, "gasp_use_normalized_full", False))
+        if force_normalized is not None:
+            # Manual-entry choice; cropped data is always normalized regardless.
+            use_normalized = bool(is_cropped) or bool(force_normalized)
+        else:
+            use_normalized = bool(is_cropped or getattr(viz, "gasp_use_normalized_full", False))
 
         ref_to_attr = {
             "area": "gasp_w_area",

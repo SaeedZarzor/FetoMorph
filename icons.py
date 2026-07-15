@@ -61,6 +61,7 @@ def set_icons(ui, assets: Path) -> None:
         "act_perimeter_options" : "icons/select.png",
         "act_sulcus_depth_threshold" : "icons/depth_set.png",
         "act_slice_kind_override": "icons/sort-by.png",
+        "act_upscale_image":     "icons/upscale.png",
     }
 
     for attr, rel in icons.items():
