@@ -8,7 +8,6 @@ ENV/
 .vscode/
 
 # Project-specific generated folders
-assets/
 output/
 area_band_output_multi/
 docs/
