@@ -1190,8 +1190,6 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "About FetoMorph - Acknowledgements",
-            "FetoMorph is built with Python, PySide6/Qt, VTK, OpenCV, NumPy, "
-            "pandas, openpyxl, Matplotlib, PyVista, and ONNX Runtime.\n\n"
             "Acknowledgement is given to the fetal brain imaging datasets provided "
             "by the developing Human Connectome Project (dHCP), undertaken by the "
             "KCL–Imperial–Oxford Consortium and funded by the European Research "
@@ -1204,7 +1202,9 @@ class MainWindow(QMainWindow):
             "We also sincerely thank Median Almurey, Ahmad Baradiei, Yanal Moulla, "
             "Rami Musleh, and Divyashree Doddbele for their valuable contributions, "
             "to the design implementation, testing, validation, and continued "
-            "improvement of the software."
+            "improvement of the software. \n\n"
+            "FetoMorph is built with Python, PySide6/Qt, VTK, OpenCV, NumPy, "
+            "pandas, openpyxl, Matplotlib, PyVista, and ONNX Runtime.\n\n"
 
         )
     
