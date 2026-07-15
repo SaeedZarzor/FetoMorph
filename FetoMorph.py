@@ -1147,10 +1147,7 @@ class MainWindow(QMainWindow):
             "data, FetoMorph provides a unified framework for comparing model outputs "
             "with age-specific reference statistics. Its Gestational Age Similarity "
             "Profile (GASP) objectively evaluates how closely each simulation reproduces "
-            "realistic developmental morphology and timing. \n\n"
-
-            "GitHub repository:\n" "https://github.com/SaeedZarzor/FetoMorph \n\n"
-            "DOI:\n" "https://doi.org/10.5281/zenodo.21353636\n\n"          
+            "realistic developmental morphology and timing. \n\n"         
         )
 
     def show_about_contributors(self):
@@ -1187,7 +1184,7 @@ class MainWindow(QMainWindow):
             "Models of Human Brain Development (Version v1) [Computer software]."
             "Zenodo. European Congress on Computational Methods in Applied Sciences"
             "and Engineering (ECCOMAS), Munich, Germany."
-            "  \n\n"
+            "https://doi.org/10.5281/zenodo.21383500 \n\n"
         )
 
     def show_about_acknowledgements(self):
