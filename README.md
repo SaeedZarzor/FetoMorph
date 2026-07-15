@@ -2,8 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
-![DOI](https://zenodo.org/badge/21353636.svg)
-
+[![DOI](https://zenodo.org/badge/1082443295.svg)](https://doi.org/10.5281/zenodo.21353636)
 
 FetoMorph is a desktop platform that standardizes the measurement and analysis of fetal brain morphology, enabling consistent validation across different computational models of fetal brain development. It extracts quantitative descriptors including surface area, perimeter, volume, gyrification, compactness, curvature, and sulcal profiles from 2D image slices, 3D NIfTI volumes, and STL/VTK surface meshes.
 
