@@ -28,6 +28,10 @@ INT_KEYS: tuple[tuple[str, str], ...] = (
 )
 AXES: tuple[str, ...] = ("axial", "coronal", "sagittal")
 
+# Unit-based metrics that the normalized (scale-free) comparison never uses;
+# hidden from the form when the user picks a normalized comparison.
+_ABSOLUTE_FLOAT_KEYS: frozenset[str] = frozenset({"Area", "Perimeter"})
+
 
 class ManualGASPDialog(QDialog):
     """Collect hallmark inputs + analysis metadata for a manual GASP run."""
@@ -41,20 +45,33 @@ class ManualGASPDialog(QDialog):
         default_kernel_size: float | None = 5.0,
         default_pixel_size: float | None = None,
         default_project_name: str = "",
+        normalized: bool = False,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Similarity Profile — Manual Entry")
+        self._normalized = bool(normalized)
+        mode = "Normalized" if self._normalized else "Full"
+        self.setWindowTitle(f"Similarity Profile — Manual Entry ({mode})")
         self.setModal(True)
         self.setMinimumWidth(440)
 
         outer = QVBoxLayout(self)
 
-        info = QLabel(
-            "Enter hallmark values for the brain to score against the "
-            "gestational-week reference profiles.\n"
-            "Leave a field blank to omit that metric from the GASP "
-            "computation."
-        )
+        if self._normalized:
+            info_text = (
+                "Normalized comparison: enter the unit-free hallmark values "
+                "(LGI, compactness, sulci counts and depths). Area and perimeter "
+                "are not used and are hidden.\n"
+                "Leave a field blank to omit that metric from the GASP "
+                "computation."
+            )
+        else:
+            info_text = (
+                "Full comparison: enter hallmark values for the brain to score "
+                "against the gestational-week reference profiles.\n"
+                "Leave a field blank to omit that metric from the GASP "
+                "computation."
+            )
+        info = QLabel(info_text)
         info.setWordWrap(True)
         outer.addWidget(info)
 
@@ -79,6 +96,8 @@ class ManualGASPDialog(QDialog):
 
         self._float_inputs: dict[str, QLineEdit] = {}
         for key, label in FLOAT_KEYS:
+            if self._normalized and key in _ABSOLUTE_FLOAT_KEYS:
+                continue  # unit-based; not used by the normalized comparison
             le = QLineEdit(self)
             le.setPlaceholderText("blank = omit")
             le.setValidator(QDoubleValidator(self))
@@ -138,7 +157,10 @@ class ManualGASPDialog(QDialog):
     def _collect_measured(self) -> dict:
         out: dict = {}
         for key, _ in FLOAT_KEYS:
-            t = self._float_inputs[key].text().strip()
+            le = self._float_inputs.get(key)
+            if le is None:
+                continue  # field hidden in normalized mode
+            t = le.text().strip()
             if not t:
                 continue
             try:
