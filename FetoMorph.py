@@ -1182,7 +1182,11 @@ class MainWindow(QMainWindow):
             self,
             "About FetoMorph - Citing",
             "When using FetoMorph in research, please cite:\n"
-            "MS Zarzor, Q Ma, B Kainz, S Budday. FetoMorph, Version v1.0, 2026. "
+            "ZARZOR, M. S., Ma, Q., Kainz, B.& Budday, S. (2026)."
+            "FetoMorph: A Unified Toolkit for Validating Computational"
+            "Models of Human Brain Development (Version v1) [Computer software]."
+            "Zenodo. European Congress on Computational Methods in Applied Sciences"
+            "and Engineering (ECCOMAS), Munich, Germany."
             "https://doi.org/10.5281/zenodo.21353636 \n\n"
         )
 
