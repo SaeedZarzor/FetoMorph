@@ -29,6 +29,29 @@ from pymoo.util.ref_dirs import get_reference_directions
 from pymoo.visualization.scatter import Scatter
 from itertools import combinations
 
+# Map internal objective names → DataFrame column names. This indirection
+# lets the UI use descriptive names while the DataFrame columns match the
+# measurement pipeline output. Single source of truth — the dispatcher and
+# the scatter plots import this rather than keeping their own copies.
+OBJ_TO_COLUMN = {
+    "perimeter_rate": "LGI",
+    "cell_density": "CellDensity",
+    "min_d_value": "MinDepth",
+    "max_min_d_value": "MinDepth",
+    "min_min_d_value": "MinDepth",
+    "mean_d_value": "MeanDepth",
+    "max_d_value": "MaxDepth",
+    "area": "area",
+}
+
+# Constraint key → the column it bounds.
+CONSTRAINT_TO_COLUMN = {
+    "max_cell_density": "CellDensity",
+    "number_SulciCount": "SulciCount",
+    "max_MaxDepth": "MaxDepth",
+}
+
+
 class MyProblem(Problem):
     """pymoo Problem wrapper that maps DataFrame rows to objective values.
 
@@ -39,23 +62,32 @@ class MyProblem(Problem):
 
     def __init__(self, data, objectives = None, constraints = None, objective_directions=None):
         self.df = data.copy()
-        self.objectives = objectives or []
+        # Keep only objectives backed by a column, so n_obj always matches
+        # the width of out["F"]. optimization() rejects missing columns up
+        # front, so in practice nothing is dropped here.
+        self.objectives = [o for o in (objectives or [])
+                           if OBJ_TO_COLUMN.get(o, o) in self.df.columns]
         self.constraints = constraints or {}
         self.objective_directions = objective_directions or {}
 
-        n_constr = 0
-        if self.constraints.get("max_cell_density") is not None:
-            n_constr += 1 
-        if self.constraints.get("number_SulciCount") is not None:
-            n_constr += 1 
-        if self.constraints.get("max_MaxDepth") is not None:
-            n_constr += 1 
-
+        # A constraint only applies when its column is present. Building the
+        # active list once keeps n_constr in step with out["G"] — counting a
+        # constraint here that _evaluate then skips makes pymoo fail.
+        self.active_constraints = []
+        for key, column in CONSTRAINT_TO_COLUMN.items():
+            bound = self.constraints.get(key)
+            if bound is None:
+                continue
+            if column not in self.df.columns:
+                print(f"[Optimization] Ignoring constraint '{key}': "
+                      f"column '{column}' not in data.")
+                continue
+            self.active_constraints.append((column, float(bound)))
 
         super().__init__(
             n_var=1,
             n_obj=len(self.objectives),
-            n_constr=n_constr,
+            n_constr=len(self.active_constraints),
             xl=np.array([0]),
             xu=np.array([len(data) - 1]),
             type_var=np.double,
@@ -69,51 +101,28 @@ class MyProblem(Problem):
         indices = np.floor(x).astype(int).flatten()
         indices = np.clip(indices, 0, len(self.df) - 1)
 
-        perimeter_rate = self.df["LGI"].iloc[indices].values
-        sulci_count = self.df["SulciCount"].iloc[indices].values
-        max_d_value = self.df["MaxDepth"].iloc[indices].values
-        min_d_value = self.df["MinDepth"].iloc[indices].values
-        mean_d_value = self.df["MeanDepth"].iloc[indices].values
-        area = self.df["area"].iloc[indices].values
-        if "CellDensity" in self.df.columns:
-            cell_density = self.df["CellDensity"].iloc[indices].values
+        def values(column):
+            """Metric column sampled at the population's row indices."""
+            return self.df[column].to_numpy()[indices]
 
+        # Only the selected objectives are read — pulling every metric up
+        # front breaks on sheets that legitimately omit one (the exporter
+        # drops all-empty columns).
         F = []
-        objective_values = {
-            "perimeter_rate": perimeter_rate,
-            "max_d_value": max_d_value,
-            "max_min_d_value": min_d_value,
-            "min_min_d_value": min_d_value,
-            "mean_d_value": mean_d_value,
-            "area": area,
-        }
-        if "CellDensity" in self.df.columns:
-            objective_values["cell_density"] = cell_density
-
         for obj in self.objectives:
-            if obj not in objective_values:
+            column = OBJ_TO_COLUMN.get(obj, obj)
+            if column not in self.df.columns:
                 continue
             direction = str(self.objective_directions.get(obj, "maximize")).lower()
-            val = objective_values[obj]
+            val = values(column)
             # pymoo minimises by default — flip sign for maximisation objectives.
             F.append(-val if direction == "maximize" else val)
 
         out["F"] = np.column_stack(F)
 
-        G = [] 
-        if "CellDensity" in self.df.columns:
-            max_cd= self.constraints.get("max_cell_density")
-            if max_cd is not None:
-                G.append((cell_density - max_cd).reshape(-1, 1))
-
-        number_su= self.constraints.get("number_SulciCount")
-        if number_su is not None:
-            G.append((sulci_count - number_su).reshape(-1, 1))
-        
-        max_md= self.constraints.get("max_MaxDepth")
-        if max_md is not None:
-            G.append((max_d_value - max_md).reshape(-1, 1))
-
+        # g(x) ≤ 0 — each active constraint is an upper bound on its column.
+        G = [(values(column) - bound).reshape(-1, 1)
+             for column, bound in self.active_constraints]
         if G:
             out["G"] = np.column_stack(G)
 
@@ -155,10 +164,51 @@ def optimization(
                             "No objectives selected. Please select at least one objective before proceeding!")
         return None, [], 0
 
-    if "cell_density" in objectives and "CellDensity" not in df1.columns:
-            QMessageBox.critical(parent, "Optimization Failed",
-                                "Objective 'Cell Density' selected but 'CellDensity' column not found in data!")
-            return None, [], 0
+    # Every selected objective needs its column. Report all missing ones at
+    # once rather than failing later on the first KeyError.
+    missing = sorted({OBJ_TO_COLUMN.get(obj, obj) for obj in objectives}
+                     - set(df1.columns))
+    if missing:
+        # Show what the file DID provide — without it there is no way to tell
+        # whether the metric is absent, named differently, or simply empty.
+        found = [str(c) for c in df1.columns if not str(c).startswith("__")]
+        sources = []
+        if "__source_excel_name" in df1.columns:
+            sources = sorted({str(s) for s in df1["__source_excel_name"]})
+        print(f"[Optimization] Missing column(s): {', '.join(missing)}")
+        print(f"[Optimization] Columns found in the data: {found}")
+        print(f"[Optimization] Source file(s): {sources}")
+        QMessageBox.critical(
+            parent, "Optimization Failed",
+            "The selected Excel data has no column for: "
+            f"{', '.join(missing)}.\n\n"
+            f"Columns found in the file: {', '.join(found) or '(none)'}\n\n"
+            f"File(s) read: {', '.join(sources) or '(unknown)'}\n\n"
+            "Check that the selected objectives match the measurements in "
+            "the file.")
+        return None, [], 0
+
+    # Coerce the columns in play to numbers and drop rows that have no value
+    # for one of them — a NaN would silently poison the Pareto front.
+    required_cols = sorted({OBJ_TO_COLUMN.get(obj, obj) for obj in objectives}
+                           | {col for key, col in CONSTRAINT_TO_COLUMN.items()
+                              if (constraints or {}).get(key) is not None
+                              and col in df1.columns})
+    df1 = df1.copy()
+    for col in required_cols:
+        df1[col] = pd.to_numeric(df1[col], errors="coerce")
+    n_before = len(df1)
+    df1 = df1.dropna(subset=required_cols).reset_index(drop=True)
+    n_dropped = n_before - len(df1)
+    if n_dropped:
+        print(f"[Optimization] Dropped {n_dropped} row(s) with missing values "
+              f"in: {', '.join(required_cols)}")
+    if df1.empty:
+        QMessageBox.critical(
+            parent, "Optimization Failed",
+            "No rows have values for all of the selected objectives: "
+            f"{', '.join(required_cols)}.")
+        return None, [], 0
 
     objective_directions = objective_directions or {obj: "maximize" for obj in objectives}
     problem = MyProblem(
@@ -271,26 +321,13 @@ def optimization(
     # Save scatter plots for every pair of selected objectives.
     os.makedirs(out_dir, exist_ok=True)
     
-    # Map internal objective names → DataFrame column names.
-    # This indirection allows the UI to use descriptive names while the
-    # DataFrame columns match the measurement pipeline output.
-    obj_to_column = {
-        "perimeter_rate": "LGI",
-        "cell_density": "CellDensity",
-        "max_min_d_value": "MinDepth",
-        "min_min_d_value": "MinDepth",
-        "mean_d_value": "MeanDepth",
-        "max_d_value": "MaxDepth",
-        "area": "area"
-    }
-    
     for i, j in combinations(range(len(objectives)), 2):
         x_obj = objectives[i]
         y_obj = objectives[j]
         
         # Get corresponding column names
-        x_col = obj_to_column.get(x_obj, x_obj)
-        y_col = obj_to_column.get(y_obj, y_obj)
+        x_col = OBJ_TO_COLUMN.get(x_obj, x_obj)
+        y_col = OBJ_TO_COLUMN.get(y_obj, y_obj)
         
         # Get values from filtered_df1 using the actual column names
         x_vals = filtered_df1[x_col]

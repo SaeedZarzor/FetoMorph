@@ -17,7 +17,7 @@ from functions.measurements_nifti import *
 from functions.measurements_image import *
 from functions.measurements_stl import *
 from functions.measurements_vtk import *
-from functions.optimization import optimization
+from functions.optimization import OBJ_TO_COLUMN, optimization
 from functions.pial_to_stl import pial_pair_to_combined_stl, pial_to_stl
 from helpers.helpers import compactness_2D, compactness_3D
 from helpers.gestational_week_profile import (
@@ -301,7 +301,7 @@ class MeasurementDispatcher:
                 self.mw.current_output_dir = out_dir
                 
                 labels = self.mw.nifti_selected_regions if self.mw.nifti_selected_regions else self.mw.labels_available
-                dims, area, volume, gi, depth, saved_pngs, valid_slices = compute_nifti_allmarks(self, file_path=nif_path,
+                dims, area, volume, gi, depth, saved_pngs, valid_slices = compute_nifti_allmarks(self.mw, file_path=nif_path,
                 out_dir=out_dir, valid_labels=labels, min_contour_area=self.mw.cnt_threshold, kernel_size_mm=self.mw.settings.kernel_size_mm,
                 cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2,
                 perimeter_method=self.mw.settings.perimeter_method,
@@ -352,7 +352,7 @@ class MeasurementDispatcher:
                 os.makedirs(out_dir, exist_ok=True)
 
                 self.mw.current_output_dir = out_dir
-                source_label, dims, area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_stl_allmarks(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
+                source_label, dims, area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_stl_allmarks(self.mw, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
                 kernel_size_mm=self.mw.settings.kernel_size_mm, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction,
                 cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2,
                 perimeter_method=self.mw.settings.perimeter_method,
@@ -421,7 +421,7 @@ class MeasurementDispatcher:
                     self.mw.settings.load_mesh_and_ask_geometry()
 
                 u = self.mw.units_length
-                area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_vtk_allmarks(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
+                area, volume, gi, compactness ,depth, saved_pngs, valid_slices = compute_vtk_allmarks(self.mw, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
                     kernel_size_mm=self.mw.settings.kernel_size_mm, Slice_direction=self.mw.slice_direction, Physical_dim=self.mw.physical_dim, unit=u, slice_thickness=self.mw.slice_thickness,
                     cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2,
                     perimeter_method=self.mw.settings.perimeter_method,
@@ -497,7 +497,7 @@ class MeasurementDispatcher:
                 self.mw.current_output_dir = out_dir
                 labels = self.mw.nifti_selected_regions if self.mw.nifti_selected_regions else self.mw.labels_available
 
-                dims, volume,saved_pngs, valid_slices = compute_nifti_volume(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels,
+                dims, volume,saved_pngs, valid_slices = compute_nifti_volume(self.mw, file_path=nif_path, out_dir=out_dir, valid_labels = labels,
                     cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
             
                 if volume is None:
@@ -530,7 +530,7 @@ class MeasurementDispatcher:
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.mw.current_output_dir = out_dir
-                source_label, dims,volume, saved_pngs, valid_slices = compute_stl_volume(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction,
+                source_label, dims,volume, saved_pngs, valid_slices = compute_stl_volume(self.mw, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction,
                 fill_cross_section=self.mw.settings.fill_cross_section,
                 cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
             
@@ -581,7 +581,7 @@ class MeasurementDispatcher:
                     self.mw.settings.load_mesh_and_ask_geometry()
 
                 u = self.mw.units_length
-                volume, saved_pngs, valid_slices = compute_vtk_volume(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
+                volume, saved_pngs, valid_slices = compute_vtk_volume(self.mw, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
                     Slice_direction = self.mw.slice_direction, Physical_dim= self.mw.physical_dim, unit = u, slice_thickness=self.mw.slice_thickness,
                     fill_cross_section=self.mw.settings.fill_cross_section,
                     cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
@@ -1005,7 +1005,7 @@ class MeasurementDispatcher:
                     labels = self.mw.nifti_selected_regions if self.mw.nifti_selected_regions else self.mw.labels_available
 
                     lGI, saved_pngs, valid_slices = compute_nifti_lGI(
-                        self, file_path=nif_path, out_dir=out_dir,
+                        self.mw, file_path=nif_path, out_dir=out_dir,
                         valid_labels=labels, min_contour_area=self.mw.cnt_threshold,
                         kernel_size_mm=self.mw.settings.kernel_size_mm,
                         perimeter_method=self.mw.settings.perimeter_method,
@@ -1048,7 +1048,7 @@ class MeasurementDispatcher:
                     
                     self.mw.current_output_dir = out_dir
                     source_label, dims, gi, saved_pngs, valid_slices =compute_stl_lGI(
-                        self,
+                        self.mw,
                         file_path=stl_path,
                         out_dir=out_dir,
                         min_contour_area=self.mw.cnt_threshold,
@@ -1100,7 +1100,7 @@ class MeasurementDispatcher:
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.mw.current_output_dir = out_dir
-                source_label, dims, gi, saved_pngs, valid_slices = compute_stl_lGI(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
+                source_label, dims, gi, saved_pngs, valid_slices = compute_stl_lGI(self.mw, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
                 kernel_size_mm=self.mw.settings.kernel_size_mm, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction,
                 perimeter_method=self.mw.settings.perimeter_method,
                 simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
@@ -1152,7 +1152,7 @@ class MeasurementDispatcher:
                     self.mw.settings.load_mesh_and_ask_geometry()
 
                 u = self.mw.units_length
-                gi, saved_pngs, valid_slices = compute_vtk_lGI(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
+                gi, saved_pngs, valid_slices = compute_vtk_lGI(self.mw, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
                     kernel_size_mm=self.mw.settings.kernel_size_mm, Slice_direction=self.mw.slice_direction, Physical_dim=self.mw.physical_dim, unit=u, slice_thickness=self.mw.slice_thickness,
                     perimeter_method=self.mw.settings.perimeter_method,
                     simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
@@ -1259,7 +1259,7 @@ class MeasurementDispatcher:
                 self.mw.current_output_dir = out_dir
                 labels = self.mw.nifti_selected_regions if self.mw.nifti_selected_regions else self.mw.labels_available
 
-                dims, depth,saved_pngs, valid_slices = compute_nifti_sulci_depth(self, file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.mw.cnt_threshold)
+                dims, depth,saved_pngs, valid_slices = compute_nifti_sulci_depth(self.mw, file_path=nif_path, out_dir=out_dir, valid_labels = labels, min_contour_area=self.mw.cnt_threshold)
             
                 if depth is None:
                     return
@@ -1332,7 +1332,7 @@ class MeasurementDispatcher:
                     self.mw.settings.load_mesh_and_ask_geometry()
 
                 u = self.mw.units_length
-                depth, saved_pngs, valid_slices = compute_vtk_sulci_depth(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
+                depth, saved_pngs, valid_slices = compute_vtk_sulci_depth(self.mw, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold,
                 Slice_direction = self.mw.slice_direction, Physical_dim= self.mw.physical_dim, unit = u, slice_thickness=self.mw.slice_thickness)
             
                 if depth is None:
@@ -1440,7 +1440,7 @@ class MeasurementDispatcher:
                 labels = self.mw.nifti_selected_regions if self.mw.nifti_selected_regions else self.mw.labels_available
 
                 dims, area,saved_pngs, valid_slices = compute_nifti_area(
-                    self, file_path=nif_path, out_dir=out_dir,
+                    self.mw, file_path=nif_path, out_dir=out_dir,
                     valid_labels=labels, min_contour_area=self.mw.cnt_threshold,
                     perimeter_method=self.mw.settings.perimeter_method,
                     simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter,
@@ -1480,7 +1480,7 @@ class MeasurementDispatcher:
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.mw.current_output_dir = out_dir
-                source_label, dims,area, saved_pngs, valid_slices = compute_stl_area(self, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction,
+                source_label, dims,area, saved_pngs, valid_slices = compute_stl_area(self.mw, file_path=self.mw.current_path,     out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction,
                 perimeter_method=self.mw.settings.perimeter_method, simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter, contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
                 fill_cross_section=self.mw.settings.fill_cross_section,
                 cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
@@ -1531,7 +1531,7 @@ class MeasurementDispatcher:
                     self.mw.settings.load_mesh_and_ask_geometry()
 
                 u = self.mw.units_length
-                area, saved_pngs, valid_slices = compute_vtk_area(self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, Slice_direction = self.mw.slice_direction, Physical_dim= self.mw.physical_dim, unit = u, slice_thickness=self.mw.slice_thickness,
+                area, saved_pngs, valid_slices = compute_vtk_area(self.mw, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, Slice_direction = self.mw.slice_direction, Physical_dim= self.mw.physical_dim, unit = u, slice_thickness=self.mw.slice_thickness,
                 perimeter_method=self.mw.settings.perimeter_method, simplify_contours_for_perimeter=self.mw.settings.simplify_contours_for_perimeter, contour_simplify_epsilon=self.mw.settings.contour_simplify_epsilon,
                 fill_cross_section=self.mw.settings.fill_cross_section,
                 cavity_correction_enabled=self.mw.settings.cavity_correction_enabled, cavity_area_threshold_mm2=self.mw.settings.cavity_area_threshold_mm2)
@@ -1594,7 +1594,7 @@ class MeasurementDispatcher:
         first_pm = QPixmap(imgs[0])
         if first_pm.isNull():
             QMessageBox.critical(
-                self,
+                self.mw,
                 "Process Batch Failed",
                 f"Could not open image file:\n{imgs[0]}",
             )
@@ -1739,7 +1739,7 @@ class MeasurementDispatcher:
 
             self.mw.last_dir = os.path.dirname(excel_files[0]) or self.mw.last_dir
             opt_dialog = OptimizationOptionsDialog(
-                self,
+                self.mw,
                 max_sulci_count=max_sulci,
                 max_cell_density=max_cell_density,
             )
@@ -1758,7 +1758,7 @@ class MeasurementDispatcher:
                 print(f"[Optimization] Max CellDensity in selected files: {max_cell_density}")
 
             results, saved_pngs, n_optimal_results = optimization(
-                self,
+                self.mw,
                 df1,
                 out_dir,
                 objectives=self.mw.optimization_objectives,
@@ -1773,18 +1773,9 @@ class MeasurementDispatcher:
                 print("Use File → Save Data As… to copy outputs you want to keep.")
 
                 if isinstance(results, pd.DataFrame) and not results.empty:
-                    obj_to_column = {
-                        "perimeter_rate": "LGI",
-                        "cell_density": "CellDensity",
-                        "min_d_value": "MinDepth",
-                        "max_min_d_value": "MinDepth",
-                        "mean_d_value": "MeanDepth",
-                        "max_d_value": "MaxDepth",
-                        "area": "area", 
-                    }
                     objective_cols = []
                     for obj in self.mw.optimization_objectives:
-                        col = obj_to_column.get(obj, obj)
+                        col = OBJ_TO_COLUMN.get(obj, obj)
                         if col in results.columns and col not in objective_cols:
                             objective_cols.append(col)
                     cols_to_print = [c for c in ["File"] + objective_cols if c in results.columns]
@@ -1910,7 +1901,7 @@ class MeasurementDispatcher:
                 break
             else:
                 btn = QMessageBox.warning(
-                    self,
+                    self.mw,
                     "Hausdorff distance",
                     "Both images must use the same measuring units to compute the Hausdorff distance.",
                     QMessageBox.Ok | QMessageBox.Cancel)
@@ -2021,7 +2012,7 @@ class MeasurementDispatcher:
                     exts.add(ext)
                 if not {"lh", "rh"}.issubset(names):
                     QMessageBox.warning(
-                        self,
+                        self.mw,
                         "Invalid selection",
                         "You must select both 'lh' and 'rh' files (e.g., lh.pial and rh.pial)."
                     )
@@ -2029,7 +2020,7 @@ class MeasurementDispatcher:
                 
                 if len(exts) != 1:
                     reply = QMessageBox.question(
-                    self,
+                    self.mw,
                     "Confirm",
                     "You have selected two different file types. Would you like to proceed?",
                     QMessageBox.Yes | QMessageBox.No,

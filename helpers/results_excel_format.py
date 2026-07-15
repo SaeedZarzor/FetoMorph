@@ -216,6 +216,17 @@ def read_results_sheet(
     wb = load_workbook(xlsx_path, data_only=True, read_only=False)
     ws = (wb[sheet_name] if sheet_name is not None
           else wb.worksheets[sheet_index])
+    return parse_results_worksheet(ws)
+
+
+def parse_results_worksheet(ws) -> dict[str, Any]:
+    """Parse an already-loaded worksheet in the spec layout.
+
+    Same return shape as :func:`read_results_sheet`. Callers that need
+    several sheets from one workbook use this to avoid re-loading the
+    file per sheet. Sheets that are not in the spec layout (e.g. the
+    embedded per-slice image tabs) come back with an empty ``rows``.
+    """
     cells = [[c.value for c in row] for row in ws.iter_rows()]
 
     out: dict[str, Any] = {
