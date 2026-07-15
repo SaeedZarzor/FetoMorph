@@ -215,6 +215,65 @@ def _derive_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# Columns that identify a row rather than measure it, so they can never be
+# optimised even though some of them read as numeric.
+NON_METRIC_COLUMNS = {"File", "Section", "Slice", "GestationalWeek"}
+
+# Per-sulcus columns ("Primary_depth_3", "Unclassified_depth_2_norm"): one
+# value per *sulcus*, not per slice, and how many exist changes from file to
+# file. Offering them as objectives would make the dialog's contents depend on
+# whichever file happened to be loaded, so they are filtered out. The
+# aggregates derived from them (Max/Min/MeanDepth) are offered instead.
+_PER_SULCUS_COLUMN_RE = re.compile(r"_depth_\d+(?:_norm)?$", re.IGNORECASE)
+
+
+def get_optimizable_columns(df: pd.DataFrame) -> list[str]:
+    """Return the per-slice numeric columns usable as objectives/constraints.
+
+    Any column of *df* that holds at least one number qualifies, so metrics
+    added to the exporter later show up in the optimisation dialog without
+    code changes. Bookkeeping columns (``__source_excel_path``), identifiers
+    (:data:`NON_METRIC_COLUMNS`) and per-sulcus values are excluded.
+
+    Args:
+        df: Merged measurement DataFrame, as returned by :func:`conver_excel`.
+
+    Returns:
+        Column names in the order they appear in *df*.
+    """
+    columns = []
+    for col in df.columns:
+        name = str(col)
+        if name.startswith("__") or name in NON_METRIC_COLUMNS:
+            continue
+        if _PER_SULCUS_COLUMN_RE.search(name):
+            continue
+        if pd.to_numeric(df[col], errors="coerce").notna().any():
+            columns.append(name)
+    return columns
+
+
+def get_column_ranges(
+    df: pd.DataFrame, columns: list[str] | None = None
+) -> dict[str, tuple[float, float]]:
+    """Return ``{column: (min, max)}`` over the numeric values of each column.
+
+    Used to bound the constraint spin boxes to what the data can actually
+    satisfy. Columns with no numeric values are omitted.
+    """
+    if columns is None:
+        columns = get_optimizable_columns(df)
+    ranges: dict[str, tuple[float, float]] = {}
+    for col in columns:
+        if col not in df.columns:
+            continue
+        vals = pd.to_numeric(df[col], errors="coerce").dropna()
+        if vals.empty:
+            continue
+        ranges[col] = (float(vals.min()), float(vals.max()))
+    return ranges
+
+
 def get_max_sulcicount(df: pd.DataFrame):
     """Return the maximum SulciCount value in *df*, or ``None``."""
     if "SulciCount" not in df.columns:

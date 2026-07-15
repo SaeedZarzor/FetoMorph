@@ -129,8 +129,21 @@ until data of the matching kind (image / mesh / volume) is loaded.</p>
       and writes a structured Excel report — per-image rows, every individual
       sulcus value per class, and an automatic statistical <i>Analysis</i>
       sheet.</li>
-  <li><b>Optimization</b> — multi-objective optimisation (NSGA-II/III) over slice
-      metrics.</li>
+  <li><b>Optimization</b> — multi-objective optimisation (NSGA-II/III) that finds
+      the Pareto-optimal slices across one or more measurement Excel files.
+      Select the files, then build the run in the dialog: add an
+      <i>objective</i> row per metric to optimise, each set to <i>Maximize</i>
+      or <i>Minimize</i> — at least two are needed, since the solver trades them
+      off against one another. The dropdowns list whatever metrics your files
+      actually contain (LGI, area, perimeter, compactness, sulci depths and
+      counts, cell density…), so anything the measurement tools export can be
+      optimised. Add <i>constraint</i> rows to restrict which slices qualify —
+      each bounds a column from either side, e.g. <i>Number of sulci ≥ 2</i> or
+      <i>cell density ≤ 2500</i>. Hover any row for an explanation of the
+      metric and its range in your data. NSGA-II suits up to 3 objectives and is
+      disabled beyond that; NSGA-III handles any number. Results are written to
+      the output folder as <i>Pareto-optimal solutions.xlsx</i>, a scatter plot
+      per objective pair, and a parameters file recording the run.</li>
   <li><b>Nifti masking…</b> — convert a NIfTI volume into slice images.</li>
   <li><b>Nifti extract regions…</b> — extract selected label regions from a
       segmentation.</li>

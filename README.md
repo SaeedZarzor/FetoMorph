@@ -260,13 +260,31 @@ GASP compares a brain's morphometrics (area, perimeter, LGI, compactness, sulci 
 
 ### Multi-Objective Optimization
 
-NSGA-II / NSGA-III optimization (via **pymoo**) over slice measurement data:
+NSGA-II / NSGA-III optimization (via **pymoo**) over slice measurement data.
+Select one or more measurement Excel files and the optimizer finds the
+Pareto-optimal slices.
 
-- **Objectives**: LGI, max/min/mean sulci depth, area, cell density
-- **Per-objective direction**: maximize or minimize
-- **Constraints**: upper bounds on cell density, sulci count, max depth
+- **Objectives**: built from the columns of the selected files, so any metric
+  the measurement pipeline exports can be optimized — LGI, area, perimeter,
+  compactness, max/min/mean sulci depth, normalized depth, sulci counts (total
+  and per class), cell density. Add an objective per row, each with its own
+  **maximize / minimize** direction. At least two are required: the optimizer
+  trades objectives off against each other, so a single objective is just a
+  sort.
+- **Constraints**: bound any column from either side — `CellDensity ≤ 2500`,
+  `SulciCount ≥ 2`. Add as many as needed; only slices satisfying all of them
+  are considered. Values are limited to the range present in the data.
+- **Algorithm**: NSGA-II (up to 3 objectives) or NSGA-III (any number).
+  NSGA-II is disabled automatically beyond 3 objectives.
 - **Configurable generations** (default: 200)
-- **Output**: Pareto front visualization and optimal slice indices exported to Excel
+- **Output**: `Pareto-optimal solutions.xlsx`, a scatter plot per objective
+  pair, and `optimization_parameters.txt` recording the exact configuration
+  for reproducibility
+
+Per-sulcus columns (`Primary_depth_1`, `Unclassified_depth_2_norm`, …) are not
+offered — they describe individual sulci rather than the slice, and how many
+exist varies per file. The aggregates derived from them (max/min/mean depth)
+are offered instead.
 
 ### FreeSurfer Integration
 

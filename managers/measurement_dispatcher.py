@@ -17,14 +17,14 @@ from functions.measurements_nifti import *
 from functions.measurements_image import *
 from functions.measurements_stl import *
 from functions.measurements_vtk import *
-from functions.optimization import OBJ_TO_COLUMN, optimization
+from functions.optimization import optimization
 from functions.pial_to_stl import pial_pair_to_combined_stl, pial_to_stl
 from helpers.helpers import compactness_2D, compactness_3D
 from helpers.gestational_week_profile import (
     GestationalWeekProfile, GASPResult, GASPSummary, METRIC_MAP, NORMALIZED_METRIC_MAP,
     MetricStats, WeekProfile, compute_similarity_scores, _augment_normalized_metrics,
 )
-from helpers.read_excel import conver_excel
+from helpers.read_excel import conver_excel, get_column_ranges, get_optimizable_columns
 from managers.metrics_store import MetricsStore
 from managers.view_manager import ViewManager
 from widgets.optimization_widgets import OptimizationOptionsDialog
@@ -1738,10 +1738,24 @@ class MeasurementDispatcher:
                 return
 
             self.mw.last_dir = os.path.dirname(excel_files[0]) or self.mw.last_dir
+
+            # The dialog offers whatever metrics the selected files hold, so a
+            # column added to the exporter is optimisable with no UI change.
+            columns = get_optimizable_columns(df1)
+            column_ranges = get_column_ranges(df1, columns)
+            print(f"[Optimization] Optimizable columns ({len(columns)}): "
+                  f"{', '.join(columns) or '(none)'}")
+            if not columns:
+                QMessageBox.warning(
+                    self.mw, "Optimization Failed",
+                    "The selected Excel file(s) contain no numeric metric "
+                    "columns to optimise.")
+                return
+
             opt_dialog = OptimizationOptionsDialog(
                 self.mw,
-                max_sulci_count=max_sulci,
-                max_cell_density=max_cell_density,
+                columns=columns,
+                column_ranges=column_ranges,
             )
             if not opt_dialog.exec():
                 return
@@ -1774,8 +1788,7 @@ class MeasurementDispatcher:
 
                 if isinstance(results, pd.DataFrame) and not results.empty:
                     objective_cols = []
-                    for obj in self.mw.optimization_objectives:
-                        col = OBJ_TO_COLUMN.get(obj, obj)
+                    for col in self.mw.optimization_objectives:
                         if col in results.columns and col not in objective_cols:
                             objective_cols.append(col)
                     cols_to_print = [c for c in ["File"] + objective_cols if c in results.columns]

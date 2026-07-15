@@ -295,7 +295,7 @@ class MainWindow(QMainWindow):
 
         # Params for optimization
         self.optimization_objectives: list[str] = []
-        self.optimization_constraints: dict[str, float] = {}
+        self.optimization_constraints: list[dict] = []
         self.optimization_algorithms: str = "NSGA-III"
         self.optimization_n_gen: int = 200
         self.optimization_objective_directions: dict[str, str] = {}

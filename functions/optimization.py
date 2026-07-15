@@ -4,13 +4,21 @@ Given a DataFrame of per-slice measurements (GI, sulci counts, depths, area,
 cell density), finds Pareto-optimal slices that best satisfy the user's
 selected objectives and constraints.
 
+Objectives and constraints are chosen per run from whatever columns the
+selected Excel files contain, so a metric added to the exporter becomes
+optimisable without touching this module.
+
 Key concepts:
     * **pymoo minimises** by default — objectives that should be *maximised*
       are sign-flipped (``-val``) before passing to the solver.
-    * ``obj_to_column`` maps internal objective names (e.g. ``"perimeter_rate"``)
-      to the DataFrame column names (e.g. ``"LGI"``).
-    * Constraints are expressed as ``g(x) ≤ 0``: e.g.
-      ``cell_density - max_cell_density ≤ 0``.
+    * An objective is normally just a DataFrame column name. ``OBJ_TO_COLUMN``
+      only maps the legacy internal names (``"perimeter_rate"`` → ``"LGI"``)
+      that predate column-based selection; unknown names pass through
+      unchanged.
+    * Constraints are ``{"column", "op", "value"}`` rows, expressed to pymoo
+      as ``g(x) ≤ 0``: ``CellDensity ≤ 2500`` becomes
+      ``CellDensity - 2500 ≤ 0``, and ``SulciCount ≥ 2`` its mirror image
+      ``2 - SulciCount ≤ 0``.
 """
 
 from __future__ import annotations
@@ -44,12 +52,63 @@ OBJ_TO_COLUMN = {
     "area": "area",
 }
 
-# Constraint key → the column it bounds.
+# Legacy constraint key → the column it bounds. Only used to read the old
+# ``{"max_cell_density": 2500}`` dict form; the dialog now names columns
+# directly and states the comparison explicitly.
 CONSTRAINT_TO_COLUMN = {
     "max_cell_density": "CellDensity",
     "number_SulciCount": "SulciCount",
     "max_MaxDepth": "MaxDepth",
 }
+
+
+def normalize_constraints(constraints) -> list[dict]:
+    """Coerce any accepted constraint format into ``[{column, op, value}]``.
+
+    Two formats are accepted:
+
+    * The current one, a list of ``{"column": "SulciCount", "op": ">=",
+      "value": 1}`` dicts, where any column can be bounded in either
+      direction.
+    * The legacy ``{"max_cell_density": 2500, "number_SulciCount": 2}`` dict,
+      whose keys are looked up in :data:`CONSTRAINT_TO_COLUMN` and which is
+      always an upper bound — that was the only thing the old solver could
+      express.
+
+    Unknown keys and malformed rows are dropped with a message rather than
+    raising, so a stale saved configuration cannot break a run.
+    """
+    if not constraints:
+        return []
+
+    normalized: list[dict] = []
+
+    if isinstance(constraints, dict):
+        for key, value in constraints.items():
+            if value is None:
+                continue
+            column = CONSTRAINT_TO_COLUMN.get(key, key)
+            try:
+                normalized.append({"column": column, "op": "<=", "value": float(value)})
+            except (TypeError, ValueError):
+                print(f"[Optimization] Ignoring constraint '{key}': "
+                      f"non-numeric bound {value!r}.")
+        return normalized
+
+    for row in constraints:
+        try:
+            column = str(row["column"])
+            op = str(row.get("op", "<=")).strip()
+            value = float(row["value"])
+        except (TypeError, ValueError, KeyError):
+            print(f"[Optimization] Ignoring malformed constraint: {row!r}")
+            continue
+        if op not in ("<=", ">="):
+            print(f"[Optimization] Ignoring constraint on '{column}': "
+                  f"unsupported operator {op!r}.")
+            continue
+        normalized.append({"column": column, "op": op, "value": value})
+    return normalized
 
 
 class MyProblem(Problem):
@@ -67,22 +126,20 @@ class MyProblem(Problem):
         # front, so in practice nothing is dropped here.
         self.objectives = [o for o in (objectives or [])
                            if OBJ_TO_COLUMN.get(o, o) in self.df.columns]
-        self.constraints = constraints or {}
+        self.constraints = normalize_constraints(constraints)
         self.objective_directions = objective_directions or {}
 
         # A constraint only applies when its column is present. Building the
         # active list once keeps n_constr in step with out["G"] — counting a
         # constraint here that _evaluate then skips makes pymoo fail.
         self.active_constraints = []
-        for key, column in CONSTRAINT_TO_COLUMN.items():
-            bound = self.constraints.get(key)
-            if bound is None:
-                continue
+        for row in self.constraints:
+            column = row["column"]
             if column not in self.df.columns:
-                print(f"[Optimization] Ignoring constraint '{key}': "
-                      f"column '{column}' not in data.")
+                print(f"[Optimization] Ignoring constraint on '{column}': "
+                      f"column not in data.")
                 continue
-            self.active_constraints.append((column, float(bound)))
+            self.active_constraints.append((column, row["op"], row["value"]))
 
         super().__init__(
             n_var=1,
@@ -120,9 +177,12 @@ class MyProblem(Problem):
 
         out["F"] = np.column_stack(F)
 
-        # g(x) ≤ 0 — each active constraint is an upper bound on its column.
-        G = [(values(column) - bound).reshape(-1, 1)
-             for column, bound in self.active_constraints]
+        # pymoo treats a constraint as satisfied when g(x) ≤ 0, so an upper
+        # bound is (value - bound) and a lower bound is its mirror image.
+        G = []
+        for column, op, bound in self.active_constraints:
+            val = values(column)
+            G.append(((val - bound) if op == "<=" else (bound - val)).reshape(-1, 1))
         if G:
             out["G"] = np.column_stack(G)
 
@@ -142,10 +202,13 @@ def optimization(
         parent: Qt parent widget for message boxes.
         df1: DataFrame with one row per slice and metric columns.
         out_dir: Directory for output Excel and scatter plots.
-        objectives: List of objective names (keys of ``obj_to_column``).
+        objectives: Objective names. Normally plain ``df1`` column names
+            (``"LGI"``, ``"Compactness"``); the legacy keys of
+            :data:`OBJ_TO_COLUMN` still resolve.
         objective_directions: Dict mapping objective → ``"maximize"``/``"minimize"``.
-        constraints: Dict of upper-bound constraints, e.g.
-            ``{"max_cell_density": 2500, "number_SulciCount": 2}``.
+        constraints: Constraints in either format accepted by
+            :func:`normalize_constraints`, e.g.
+            ``[{"column": "SulciCount", "op": ">=", "value": 2}]``.
         algorithms: ``"NSGA-II"`` or ``"NSGA-III"``.
         n_gen: Number of generations (termination criterion).
 
@@ -190,10 +253,10 @@ def optimization(
 
     # Coerce the columns in play to numbers and drop rows that have no value
     # for one of them — a NaN would silently poison the Pareto front.
+    constraints = normalize_constraints(constraints)
     required_cols = sorted({OBJ_TO_COLUMN.get(obj, obj) for obj in objectives}
-                           | {col for key, col in CONSTRAINT_TO_COLUMN.items()
-                              if (constraints or {}).get(key) is not None
-                              and col in df1.columns})
+                           | {row["column"] for row in constraints
+                              if row["column"] in df1.columns})
     df1 = df1.copy()
     for col in required_cols:
         df1[col] = pd.to_numeric(df1[col], errors="coerce")
@@ -252,7 +315,6 @@ def optimization(
     termination = get_termination("n_gen", n_gen)
 
     # Save optimization configuration for reproducibility.
-    constraints = constraints or {}
     params_txt_path = os.path.join(out_dir, "optimization_parameters.txt")
     with open(params_txt_path, "w", encoding="utf-8") as f:
         f.write("Optimization Parameters\n")
@@ -270,8 +332,8 @@ def optimization(
             f.write(f"  - {obj}: {objective_directions.get(obj, 'maximize')}\n")
         if constraints:
             f.write("Constraints:\n")
-            for key, value in constraints.items():
-                f.write(f"  - {key}: {value}\n")
+            for row in constraints:
+                f.write(f"  - {row['column']} {row['op']} {row['value']}\n")
         else:
             f.write("Constraints: none\n")
     print(f"[Optimization] Saved optimization parameters: {params_txt_path}")
@@ -280,38 +342,28 @@ def optimization(
     res = minimize(problem, algorithm, termination, seed=1, verbose=True, evaluator=Evaluator())
 
     print(res)
-    # Results in a DataFrame for better readability
-    results_with_indices = pd.DataFrame(
-        {
-            objectives[i]: (
-                -res.F[:, i]
-                if str(objective_directions.get(objectives[i], "maximize")).lower() == "maximize"
-                else res.F[:, i]
-            )
-            for i in range(len(objectives))
-        }
-    )
 
+    # Every constraint can be violated at once, in which case pymoo returns no
+    # solution at all. Reported here, because reading res.X below would
+    # otherwise fail with an opaque TypeError.
+    if res.X is None or res.F is None:
+        summary = "\n".join(f"  - {row['column']} {row['op']} {row['value']}"
+                            for row in constraints)
+        print("[Optimization] No feasible solution — constraints unsatisfiable.")
+        QMessageBox.critical(
+            parent, "Optimization Failed",
+            "No slice satisfies all of the constraints:\n\n"
+            f"{summary}\n\n"
+            "Relax or disable a constraint and try again.")
+        return None, [], 0
 
-    # Display of Pareto-optimal solutions
-    mask = pd.Series([True] * len(df1))
-    if "perimeter_rate" in objectives and "perimeter_rate" in results_with_indices.columns and "LGI" in df1.columns:
-        mask &= df1["LGI"].isin(results_with_indices["perimeter_rate"])
-    if "cell_density" in objectives and "cell_density" in results_with_indices.columns and "CellDensity" in df1.columns:
-        mask &= df1["CellDensity"].isin(results_with_indices["cell_density"])
-    if "max_min_d_value" in objectives and "max_min_d_value" in results_with_indices.columns and "MinDepth" in df1.columns:
-        mask &= df1["MinDepth"].isin(results_with_indices["max_min_d_value"])
-    if "min_min_d_value" in objectives and "min_min_d_value" in results_with_indices.columns and "MinDepth" in df1.columns:
-        mask &= df1["MinDepth"].isin(results_with_indices["min_min_d_value"])
-    if "mean_d_value" in objectives and "mean_d_value" in results_with_indices.columns and "MeanDepth" in df1.columns:
-        mask &= df1["MeanDepth"].isin(results_with_indices["mean_d_value"])
-    if "max_d_value" in objectives and "max_d_value" in results_with_indices.columns and "MaxDepth" in df1.columns:
-        mask &= df1["MaxDepth"].isin(results_with_indices["max_d_value"]) 
-    if "area" in objectives and "area" in results_with_indices.columns and "area" in df1.columns:
-        mask &= df1["area"].isin(results_with_indices["area"])  
-
-    
-    filtered_df1 = df1[mask].reset_index(drop=True)
+    # Each decision variable *is* a row index, so the Pareto rows are read back
+    # directly. Matching on objective values instead (df[col].isin(...)) would
+    # also pull in any other row that happens to share a value, and could not
+    # be written for columns not known ahead of time.
+    indices = np.floor(np.asarray(res.X, dtype=float)).astype(int).flatten()
+    indices = np.unique(np.clip(indices, 0, len(df1) - 1))
+    filtered_df1 = df1.iloc[indices].reset_index(drop=True)
     pd.set_option('display.max_columns', None)
     pd.set_option('display.width', None)
     pd.set_option('display.max_colwidth', None)
