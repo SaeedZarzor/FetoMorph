@@ -4,6 +4,7 @@
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21383500.svg)](https://doi.org/10.5281/zenodo.21383500)
 
+![Front image](assets/Front_image.png)
 
 FetoMorph is a desktop platform that standardizes the measurement and analysis of fetal brain morphology, enabling consistent validation across different computational models of fetal brain development. It extracts quantitative descriptors including surface area, perimeter, volume, gyrification, compactness, curvature, and sulcal profiles from 2D image slices, 3D NIfTI volumes, and STL/VTK surface meshes.
 
