@@ -10,7 +10,8 @@ FetoMorph is a desktop platform that standardizes the measurement and analysis o
 
 By applying the same analysis pipeline to simulated and real fetal brain data, FetoMorph provides a unified framework for comparing model outputs with age-specific reference statistics. Its Gestational Age Similarity Profile (GASP) evaluates how closely each simulation reproduces realistic developmental morphology and timing.
 
-Built with PySide6 (Qt6), VTK, OpenCV, and an ONNX deep-learning model for slice-kind classification.
+Built with PySide6 (Qt6), VTK, OpenCV, and an ONNX deep-learning model.
+
 ---
 
 ## Table of Contents
