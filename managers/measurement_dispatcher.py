@@ -1292,7 +1292,7 @@ class MeasurementDispatcher:
                 os.makedirs(out_dir, exist_ok=True)
                 
                 self.mw.current_output_dir = out_dir
-                source_label, dims, depth, saved_pngs, valid_slices = compute_stl_sulci_depth (self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction)
+                source_label, dims, depth, saved_pngs, valid_slices = compute_stl_sulci_depth (self, file_path=self.mw.current_path, out_dir=out_dir, min_contour_area=self.mw.cnt_threshold, slice_thickness=self.mw.slice_thickness, Slice_direction=self.mw.slice_direction, fill_cross_section=self.mw.settings.fill_cross_section)
             
                 if source_label == "not_brain":
                     QMessageBox.warning(self.mw, "Mesh ignored", "The computation has been canceled")

@@ -389,6 +389,7 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
                     "(in-plane)"),
                 "Slice thickness": float(pixel_size_y),
                 "Filtered threshold (mm²)": float(min_contour_area),
+                "Sulcus depth threshold (mm)": float(sulcus_depth_min("mm")),
                 "Perimeter method": perimeter_method,
                 "Isotropic spacing used": perimeter_method == "crofton",
                 "Contour simplification enabled": bool(simplify_contours_for_perimeter),
@@ -1136,9 +1137,11 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
                                     depth_mm = d *mm_per_fixed
 
                                     # Depth filter: keep defects within
-                                    # SULCI_DEPTH_MIN_FRACTION..SULCI_DEPTH_MAX_FRACTION
-                                    # of brain IS-extent. dims[2] is in cm, ×10 → mm.
-                                    if (SULCI_DEPTH_MIN_FRACTION * _is_extent_mm) < depth_mm < (SULCI_DEPTH_MAX_FRACTION * _is_extent_mm):
+                                    # SULCUS_TERTIARY_MIN_FRACTION..SULCUS_PRIMARY_MAX_FRACTION
+                                    # of brain IS-extent AND above the global mm
+                                    # floor (Sulcus Depth Threshold), matching
+                                    # compute_nifti_allmarks. dims[2] cm ×10 → mm.
+                                    if (SULCUS_TERTIARY_MIN_FRACTION * _is_extent_mm) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * _is_extent_mm) and depth_mm > sulcus_depth_min("mm"):
                                         sulcus_class = classify_sulcus_depth(depth_mm, _is_extent_mm)
                                         marker_color = SULCUS_CLASS_COLORS[sulcus_class]
                                         depth_sets[sulcus_class].append(depth_mm)
@@ -1192,7 +1195,11 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
             "Max sulci depth (mm)": (round(float(max(total_depth_mm)), 4) if total_depth_mm else None),
             "Mean sulci depth (mm)": (round(float(overall_mean), 4) if overall_mean is not None else None),
         }
-        sheet = build_measurement_sheet(file_path, "Sulci depth", results_rows, {}, totals)
+        parameters = {
+            "Filtered threshold (mm²)": float(min_contour_area),
+            "Sulcus depth threshold (mm)": float(sulcus_depth_min("mm")),
+        }
+        sheet = build_measurement_sheet(file_path, "Sulci depth", results_rows, parameters, totals)
         xlsx_path = os.path.join(out_dir, "Brain_Sulci.xlsx")
         write_results_workbook(xlsx_path, [sheet])
             

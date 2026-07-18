@@ -534,6 +534,7 @@ def compute_stl_allmarks(
             "Pixel spacing": "0.1 mm/pixel (rendering); per-slice from cube",
             "Slice thickness": float(slice_thickness),
             "Filtered threshold (mm²)": float(min_contour_area),
+            "Sulcus depth threshold (mm)": float(sulcus_depth_min("mm")),
             "Slice direction": Slice_direction,
             "Length unit": "cm",
             "Perimeter method": perimeter_method,
@@ -603,6 +604,7 @@ def compute_stl_lGI(
     perimeter_method: str = DEFAULT_PERIMETER_METHOD,
     simplify_contours_for_perimeter: bool = DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
     contour_simplify_epsilon: float = DEFAULT_CONTOUR_SIMPLIFY_EPSILON,
+    fill_cross_section: bool = DEFAULT_FILL_CROSS_SECTION,
 ):
     """Compute the gyrification index (GI) from an STL mesh via slice rendering.
 
@@ -701,7 +703,7 @@ def compute_stl_lGI(
                          i_resolution=1, j_resolution=1)
         p.clear()
         p.add_mesh(scale_cube, color="red", lighting=False)
-        p.add_mesh(section, color="black", lighting=False)
+        p.add_mesh(fill_section_polydata(section) if fill_cross_section else section, color="#B4B4B4", lighting=False)
         prepare_orthographic_slice_render(p, getattr(p, sd["view_fn_name"]))
 
         # Screenshot (array for processing, file for debugging)
@@ -715,20 +717,24 @@ def compute_stl_lGI(
         kernel_size_px = _to_kernel_px(kernel_size_mm, mm_per_px)
 
 
-        # Prepare masks / contours (pixel space)
+        # Prepare masks / contours (pixel space). Mirror the All-Hallmarks
+        # pipeline so the enclosed (outer) and inner surface contours are drawn
+        # identically here — RETR_CCOMP + split so section holes/cavities are
+        # detected the same way. Sulci markers are intentionally NOT drawn.
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         h_img, w_img = bgr.shape[:2]
         thickness, _, _ = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         # Binary for contours
         bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
-        contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
 
-        # Inner contours: exclude red ref + area filter
-        inner_candidates = contours_exclude(contours, red_rect, bw.shape)
-        inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) * (mm_per_px ** 2) > float(min_contour_area)]
+        # Inner surface contours: exclude red ref + area filter
+        inner_filtered, _internal_filtered = split_inner_and_internal_contours(
+            contours, hierarchy, red_rect, bw.shape, float(min_contour_area) / (mm_per_px ** 2),
+        )
         cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
         # Outer contours: rebuild a mask from ONLY the kept inner contours so
@@ -1398,7 +1404,8 @@ def compute_stl_sulci_depth(
     out_dir: str,
     min_contour_area: float = 20.0,
     slice_thickness: float = 0.5,
-    Slice_direction: str = "Y"):
+    Slice_direction: str = "Y",
+    fill_cross_section: bool = DEFAULT_FILL_CROSS_SECTION):
     """Compute sulci depths from convexity defects across STL mesh slices.
 
     Args:
@@ -1488,7 +1495,7 @@ def compute_stl_sulci_depth(
                          i_resolution=1, j_resolution=1)
         p.clear()
         p.add_mesh(scale_cube, color="red", lighting=False)
-        p.add_mesh(section, color="black", lighting=False)
+        p.add_mesh(fill_section_polydata(section) if fill_cross_section else section, color="#B4B4B4", lighting=False)
         prepare_orthographic_slice_render(p, getattr(p, sd["view_fn_name"]))
 
         # Screenshot (array for processing, file for debugging)
@@ -1501,20 +1508,24 @@ def compute_stl_sulci_depth(
             continue
 
 
-        # Prepare masks / contours (pixel space)
+        # Prepare masks / contours (pixel space). Mirror the All-Hallmarks
+        # render + inner-contour extraction (filled gray section, RETR_CCOMP +
+        # split) so the inner surface contour matches. The enclosed (outer)
+        # envelope is intentionally NOT drawn here; sulci markers go on top.
         bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         h_img, w_img = bgr.shape[:2]
         thickness, _, radius_px = image_annotation_style(h_img, w_img, style="thin")
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         # Binary for contours
         bw = threshold_binary(gray, BINARY_THRESHOLD_DEFAULT, invert=True)
-        contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, hierarchy = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
 
-        # Inner contours: exclude red ref + area filter
-        inner_candidates = contours_exclude(contours, red_rect, bw.shape)
-        inner_filtered = [c for c in inner_candidates if cv2.contourArea(c) * (mm_per_px ** 2) > float(min_contour_area)]
+        # Inner surface contours: exclude red ref + area filter
+        inner_filtered, _internal_filtered = split_inner_and_internal_contours(
+            contours, hierarchy, red_rect, bw.shape, float(min_contour_area) / (mm_per_px ** 2),
+        )
         cv2.drawContours(bgr, inner_filtered, -1, tuple(_get_viz().contour_inner_color_bgr), thickness)
 
         # Classify the rendered slice and gate the percent filter on it.
@@ -1622,6 +1633,7 @@ def compute_stl_sulci_depth(
             "Slice thickness": float(slice_thickness),
             "Slice direction": Slice_direction,
             "Filtered threshold (mm²)": float(min_contour_area),
+            "Sulcus depth threshold (mm)": float(sulcus_depth_min("mm")),
         }
         totals = {
             "Total sulci count": int(overall_n),
