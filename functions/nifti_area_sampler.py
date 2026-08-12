@@ -204,7 +204,14 @@ class NiftiAreaSampler:
 
         Note the bar is not the final one: `nifti_slice_to_image` re-measures and
         re-draws it when the PNG is written. `_redraw_exact_scale_bar` restores
-        the exact length afterwards.
+        the exact length afterwards, and writes the label.
+
+        No label is drawn here on purpose. It would be white, and where the brain
+        reaches the corner the glyphs land on tissue; the background pass inside
+        `nifti_slice_to_image` keeps only saturated pixels, so those glyphs turn
+        into background and leave text-shaped holes in the section. The bar alone
+        is what `detect_scale_bar_length` needs, and the black bar drawn later
+        covers it exactly, having the same geometry.
         """
         if bar_length_mm <= 0:
             return img
@@ -228,18 +235,7 @@ class NiftiAreaSampler:
         x2 = w - margin
         x1 = x2 - bar_px + 1
 
-        color = (255, 255, 255)
-        cv2.rectangle(img, (x1, y - thickness + 1), (x2, y), color, -1)
-
-        label = f"{int(bar_length_mm)} mm"
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.4 if min(h, w) < 256 else 0.6
-        text_thickness = 1
-        (text_w, text_h), _ = cv2.getTextSize(label, font, font_scale, text_thickness)
-        text_x = max(margin, x2 - text_w)
-        text_y = max(text_h + margin, y - thickness - 2)
-        cv2.putText(img, label, (text_x, text_y), font, font_scale, color, text_thickness, cv2.LINE_AA)
-
+        cv2.rectangle(img, (x1, y - thickness + 1), (x2, y), (255, 255, 255), -1)
         return img
 
     def _redraw_exact_scale_bar(self, png_path: str, bar_length_mm: float = 20.0) -> None:
