@@ -2,6 +2,9 @@
 
 This guide describes how to run `scripts/area_band_cli.py` for all subjects and all axes, including pial overlays.
 
+Imaging data is not part of this repository, so every path in the examples below
+is written as `<add your ... path>`. Replace those with your own locations.
+
 ## Prerequisites
 
 - Python virtual environment already created at `.venv` in this repo.
@@ -21,12 +24,10 @@ explicitly, via `--labels` or the config's `area_labels`.
 
 Point `--label-legend` / `"label_legend"` at the dataset's legend so labels are
 reported by name. Supported formats: two-column `.csv`, ITK-SnAP `.txt` label
-description, and `.xlsx`. Known legends in this repo:
-
-| dataset | legend |
-| --- | --- |
-| `assets/data/fetal_surface` | `assets/labels.xlsx` |
-| dHCP atlas (`parcellations_scaled`) | `.../MRI_atlas_dhcp/info/dhcp-atlas-summary-info-19-labels.csv` |
+description, and `.xlsx`. The legend usually ships with the dataset — for the
+dHCP atlas it is `info/dhcp-atlas-summary-info-19-labels.csv` inside the download
+(an equivalent ITK-SnAP `.txt` sits beside it). If a dataset has no legend file,
+labels are reported as bare numbers and the legend checks below are skipped.
 
 Before sampling, the CLI checks each volume and **fails** when:
 
@@ -58,13 +59,13 @@ Replace the paths if your folder layout differs.
 
 ```powershell
 python scripts\area_band_cli.py `
-  --batch-dir "assets\data\fetal_surface" `
-  --batch-out "area_band_output_multi\fetal_surface" `
+  --batch-dir "<add your dataset path>" `
+  --batch-out "<add your output path>" `
   --axis x `
   --n 20 `
   --p 0.9 `
   --labels 3 4 5 6 11 12 13 14 15 17 `
-  --label-legend "assets\labels.xlsx" `
+  --label-legend "<add your label legend path>" `
   --use-pial-overlay `
   --pial-space scanner `
   --axis-subdir `
@@ -94,19 +95,19 @@ Run all three axes with separate commands:
 
 ```powershell
 python scripts\area_band_cli.py `
-  --batch-dir "assets\data\fetal_surface" `
-  --batch-out "area_band_output_multi\fetal_surface" `
-  --axis x --n 20 --p 0.9 --labels 3 4 5 6 11 12 13 14 15 17 --label-legend "assets\labels.xlsx" --use-pial-overlay --pial-space scanner --axis-subdir --no-crosshair --pial-line-thickness 1
+  --batch-dir "<add your dataset path>" `
+  --batch-out "<add your output path>" `
+  --axis x --n 20 --p 0.9 --labels 3 4 5 6 11 12 13 14 15 17 --label-legend "<add your label legend path>" --use-pial-overlay --pial-space scanner --axis-subdir --no-crosshair --pial-line-thickness 1
 
 python scripts\area_band_cli.py `
-  --batch-dir "assets\data\fetal_surface" `
-  --batch-out "area_band_output_multi\fetal_surface" `
-  --axis y --n 20 --p 0.9 --labels 3 4 5 6 11 12 13 14 15 17 --label-legend "assets\labels.xlsx" --use-pial-overlay --pial-space scanner --axis-subdir --no-crosshair --pial-line-thickness 1
+  --batch-dir "<add your dataset path>" `
+  --batch-out "<add your output path>" `
+  --axis y --n 20 --p 0.9 --labels 3 4 5 6 11 12 13 14 15 17 --label-legend "<add your label legend path>" --use-pial-overlay --pial-space scanner --axis-subdir --no-crosshair --pial-line-thickness 1
 
 python scripts\area_band_cli.py `
-  --batch-dir "assets\data\fetal_surface" `
-  --batch-out "area_band_output_multi\fetal_surface" `
-  --axis z --n 20 --p 0.9 --labels 3 4 5 6 11 12 13 14 15 17 --label-legend "assets\labels.xlsx" --use-pial-overlay --pial-space scanner --axis-subdir --no-crosshair --pial-line-thickness 1
+  --batch-dir "<add your dataset path>" `
+  --batch-out "<add your output path>" `
+  --axis z --n 20 --p 0.9 --labels 3 4 5 6 11 12 13 14 15 17 --label-legend "<add your label legend path>" --use-pial-overlay --pial-space scanner --axis-subdir --no-crosshair --pial-line-thickness 1
 
 ## Run from a config file (with optional CLI overrides)
 
@@ -143,8 +144,8 @@ flags override config values:
 ```powershell
 python scripts\area_band_cli.py `
   --config "configs\area_band_config_dhcp_atlas.example.json" `
-  --batch-dir "assets\data\MRI_atlas_dhcp\MRI_atlas_dhcp\parcellations_scaled" `
-  --batch-out "area_band_output_multi\atlas_dhcp"
+  --batch-dir "<add your dataset path>" `
+  --batch-out "<add your output path>"
 ```
 
 Available examples:
@@ -203,8 +204,8 @@ Use `configs/area_band_config_single.json` and pass the case-specific inputs:
 ```powershell
 python scripts\area_band_cli.py `
   --config "configs\area_band_config_single.json" `
-  --file "C:\path\to\seg.nii.gz" `
-  --out "C:\path\to\out"
+  --file "<add your label volume path>" `
+  --out "<add your output path>"
 ```
 
 Tip: if you must use the batch config for a single case, clear batch mode by passing
@@ -213,11 +214,11 @@ Tip: if you must use the batch config for a single case, clear batch mode by pas
 
 ## Output layout
 
-Outputs are written under:
+Outputs are written under the `--batch-out` folder, one subfolder per case:
 ```
-area_band_output_multi\<subject>\axis_x
-area_band_output_multi\<subject>\axis_y
-area_band_output_multi\<subject>\axis_z
+<your output path>\<case>\axis_x
+<your output path>\<case>\axis_y
+<your output path>\<case>\axis_z
 ```
 
 Each axis folder includes:

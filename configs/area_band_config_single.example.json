@@ -1,7 +1,8 @@
 {
   "dataset": "single case - set label_legend and area_labels for the scheme you are running",
   "label_scheme": "fetal_surface-17",
-  "label_legend": "assets/labels.xlsx",
+  "label_legend": "",
+  "label_legend_note": "Point this at the label legend for this dataset (id -> region name). Left empty here because its location depends on where you keep your imaging data. Optional: without it labels are reported as bare numbers.",
   "label_selection_note": "White matter (3,4,5,6,11,12,13,14) + Third ventricle (15) + Ventricles caves (17), matching the batch config. Label ids are scheme-specific - swap both label_legend and area_labels together when running a different dataset.",
   "area_labels": [3, 4, 5, 6, 11, 12, 13, 14, 15, 17],
 

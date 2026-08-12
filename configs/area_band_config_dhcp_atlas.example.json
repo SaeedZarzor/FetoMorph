@@ -1,7 +1,8 @@
 {
   "dataset": "dHCP fetal atlas GW21-GW36 (parcellations_scaled)",
   "label_scheme": "dhcp-19",
-  "label_legend": "assets/data/MRI_atlas_dhcp/MRI_atlas_dhcp/info/dhcp-atlas-summary-info-19-labels.csv",
+  "label_legend": "",
+  "label_legend_note": "Point this at 'info/dhcp-atlas-summary-info-19-labels.csv' inside your copy of the dHCP atlas download (an equivalent ITK-SnAP .txt sits beside it). Left empty here because its location depends on where you unpacked the atlas.",
   "label_selection_note": "Cerebrum excluding cortex, matching what the fetal_surface runs measured (white-matter boundary). Kept: 5,6 Fetal WM L/R; 7,8 Lateral Ventricle L/R; 9 Cavum septum pellucidum; 14,15 Basal Ganglia L/R; 16,17 Thalamus L/R; 18 Third Ventricle. Dropped: 1,2 eCSF; 3,4 Cortical GM; 10 Brainstem; 11,12 Cerebellum; 13 Vermis; 19 Fourth Ventricle.",
   "area_labels": [5, 6, 7, 8, 9, 14, 15, 16, 17, 18],
 
