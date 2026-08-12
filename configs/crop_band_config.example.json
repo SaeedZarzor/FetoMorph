@@ -24,11 +24,16 @@
   "fallback_to_auto": true,
   "allow_auto_for_unset_axes": false,
 
+  "scale_bar_note": "Set pixel_size_mm to the parent slice's voxel spacing (cropping does not resample, so a crop keeps its parent's pixel size). The bar is then a real distance: round(mm / pixel_size_mm) columns. Leave scale_bar_mm null to auto-pick the longest round length fitting scale_bar_max_width_frac - bands are only tens of pixels wide, so 20 mm would swallow the frame and 10 mm is usually chosen. If pixel_size_mm is null the legacy fraction-of-width bar is drawn instead, which encodes no distance and whose scale_bar_label is not a measurement.",
   "add_scale_bar": true,
-  "scale_bar_label": "20 mm",
-  "scale_bar_fallback_frac": 0.1,
+  "pixel_size_mm": 0.5,
+  "scale_bar_mm": null,
+  "scale_bar_max_width_frac": 0.6,
   "scale_bar_top_pad_frac": 0.27,
   "scale_bar_top_pad_px": null,
-  "scale_bar_length_scale": 0.7,
-  "scale_bar_font_scale_ratio": 0.4
+  "scale_bar_font_scale_ratio": 0.4,
+
+  "scale_bar_label": "20 mm",
+  "scale_bar_fallback_frac": 0.1,
+  "scale_bar_length_scale": 0.7
 }

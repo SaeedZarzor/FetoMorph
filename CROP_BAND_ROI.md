@@ -38,6 +38,30 @@ Example:
 "allow_auto_for_unset_axes": false
 ```
 
+## Scale bar
+
+Cropping is pure pixel slicing, so a crop keeps its parent slice's pixel size.
+Set `pixel_size_mm` to that spacing (0.5 for these volumes) and the bar becomes a
+real distance, spanning exactly `round(mm / pixel_size_mm)` columns:
+
+```json
+"add_scale_bar": true,
+"pixel_size_mm": 0.5,
+"scale_bar_mm": null,
+"scale_bar_max_width_frac": 0.6
+```
+
+`scale_bar_mm` fixes the length; leaving it `null` picks the longest round length
+that fits `scale_bar_max_width_frac` of the crop width. That auto-pick matters
+because bands are only tens of pixels wide — at 0.5 mm/px a 20 mm bar is 40 px,
+which would span most of a 48 px crop, so 10 mm (20 px) is chosen instead. The
+label always states the length actually drawn.
+
+If `pixel_size_mm` is left `null`, the legacy bar is drawn instead:
+`scale_bar_length_scale × crop_width`, a fixed fraction of the frame that encodes
+no physical distance. Its `scale_bar_label` is then decoration, not a
+measurement, and must not be used to calibrate anything.
+
 ## Run command
 ```powershell
 python -m functions.crop_band_roi --config configs/crop_band_config.json

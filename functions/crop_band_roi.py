@@ -57,8 +57,15 @@ class CropBandConfig:
     scale_bar_fallback_frac: float = 0.10  # legacy; retained for backward compatibility
     scale_bar_top_pad_frac: float = 0.22  # extra white space above cropped image
     scale_bar_top_pad_px: Optional[int] = None  # explicit top pad (overrides fraction)
-    scale_bar_length_scale: float = 0.30  # scale bar length as fraction of cropped width
+    scale_bar_length_scale: float = 0.30  # legacy fallback: bar as fraction of cropped width
     scale_bar_font_scale_ratio: float = 0.6  # smaller scale-bar text
+    # Physical scale bar. Cropping is pure pixel slicing, so a crop keeps its
+    # parent's pixel size; set this and the bar becomes a real distance instead
+    # of a fraction of the frame. Left as None the legacy behaviour is kept.
+    pixel_size_mm: Optional[float] = None
+    scale_bar_mm: Optional[float] = None  # explicit bar length; None picks one that fits
+    scale_bar_max_width_frac: float = 0.6  # largest share of the crop width a bar may take
+    scale_bar_nice_mm: Tuple[float, ...] = (50.0, 25.0, 20.0, 10.0, 5.0, 2.0, 1.0)
 
 
 def _clamp(val: int, lo: int, hi: int) -> int:
@@ -143,16 +150,56 @@ def _compute_bbox(img: np.ndarray, cfg: CropBandConfig, axis: str) -> Optional[B
     return _compute_auto_bbox(img, cfg)
 
 
+def _scale_bar_length_px(width: int, cfg: CropBandConfig) -> Tuple[Optional[int], str]:
+    """Bar length in pixels and its label, for a crop `width` pixels wide.
+
+    With `pixel_size_mm` set the bar is a real distance: `round(mm / pixel_size)`,
+    spanning exactly that many columns. `scale_bar_mm` fixes the distance, or the
+    longest of `scale_bar_nice_mm` that fits `scale_bar_max_width_frac` is chosen -
+    bands are only a few dozen pixels across, so 20 mm would swallow the frame.
+
+    Without `pixel_size_mm` the legacy fraction-of-width bar is kept for backward
+    compatibility. That bar encodes no distance, so its `scale_bar_label` is not
+    a measurement; prefer setting `pixel_size_mm`.
+
+    Returns `(None, "")` when no honest bar fits.
+    """
+    width = max(1, int(width))
+    ps = cfg.pixel_size_mm
+    if ps is None or float(ps) <= 0:
+        bar_len_px = int(round(float(cfg.scale_bar_length_scale) * width))
+        return max(3, min(max(3, width - 2), bar_len_px)), str(cfg.scale_bar_label)
+
+    ps = float(ps)
+    max_px = max(3, int(round(float(cfg.scale_bar_max_width_frac) * width)))
+
+    if cfg.scale_bar_mm is not None:
+        mm = float(cfg.scale_bar_mm)
+        bar_px = int(round(mm / ps))
+        if bar_px < 1 or bar_px > width:
+            return None, ""
+        return bar_px, _format_mm(mm)
+
+    for mm in sorted((float(m) for m in cfg.scale_bar_nice_mm), reverse=True):
+        bar_px = int(round(mm / ps))
+        if 3 <= bar_px <= max_px:
+            return bar_px, _format_mm(mm)
+    return None, ""
+
+
+def _format_mm(mm: float) -> str:
+    return f"{int(mm)} mm" if float(mm).is_integer() else f"{mm:g} mm"
+
+
 def _draw_scale_bar_on_crop(cropped: np.ndarray, _source_img: np.ndarray, cfg: CropBandConfig) -> np.ndarray:
     if not cfg.add_scale_bar:
         return cropped
 
     base = cropped[:, :, :3].copy() if (cropped.ndim == 3 and cropped.shape[2] >= 3) else cv2.cvtColor(cropped, cv2.COLOR_GRAY2BGR)
     h, w = base.shape[:2]
-    # Crop-local scale bar logic:
-    # length is a direct fraction of cropped width (no detection from source image).
-    bar_len_px = int(round(float(cfg.scale_bar_length_scale) * max(1, w)))
-    bar_len_px = max(3, min(max(3, w - 2), bar_len_px))
+    bar_len_px, text = _scale_bar_length_px(w, cfg)
+    if bar_len_px is None:
+        return cropped
 
     pad = cfg.scale_bar_top_pad_px if cfg.scale_bar_top_pad_px is not None else int(round(float(cfg.scale_bar_top_pad_frac) * max(1, h)))
     pad = max(0, int(pad))
@@ -165,7 +212,6 @@ def _draw_scale_bar_on_crop(cropped: np.ndarray, _source_img: np.ndarray, cfg: C
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_thickness = 1
     fscale = (thickness / 10.0) * float(cfg.scale_bar_font_scale_ratio) + 0.25
-    text = str(cfg.scale_bar_label)
     (text_w, text_h), _ = cv2.getTextSize(text, font, fscale, font_thickness)
     gap = max(3, int(0.35 * text_h))
     y_default = margin + thickness
@@ -189,13 +235,18 @@ def _draw_scale_bar_on_crop(cropped: np.ndarray, _source_img: np.ndarray, cfg: C
     x_left = max(0, min(x_default, x_text_fit))
     y_bottom = y_default if pad <= 0 else max(1, min(max(1, pad - (gap + text_h + 2)), y_default))
 
-    return draw_new_scale_bar(
-        canvas,
-        int(bar_len_px),
-        where=(int(x_left), int(y_bottom)),
-        text=text,
-        font_scale_ratio=float(cfg.scale_bar_font_scale_ratio),
-    )
+    # Drawn here rather than via draw_new_scale_bar: that helper places the right
+    # edge at x_left + bar_len_px, which spans one column too many because both
+    # endpoints are inclusive. The bar must be exactly bar_len_px wide to mean
+    # what its label says.
+    x_right = min(w2 - 1, int(x_left) + int(bar_len_px) - 1)
+    y_top = max(0, int(y_bottom) - thickness + 1)
+    cv2.rectangle(canvas, (int(x_left), y_top), (x_right, int(y_bottom)), (0, 0, 0), -1)
+    if text:
+        ty = min(h2 - 2, int(y_bottom) + gap + text_h)
+        cv2.putText(canvas, text, (int(x_left), ty), font, fscale, (0, 0, 0),
+                    font_thickness, cv2.LINE_AA)
+    return canvas
 
 
 def _iter_images(src_dir: Path, pattern: str) -> Iterable[Path]:
@@ -338,6 +389,10 @@ def load_crop_config_from_json(path: str) -> CropBandConfig:
         scale_bar_top_pad_px=(int(data["scale_bar_top_pad_px"]) if data.get("scale_bar_top_pad_px") is not None else None),
         scale_bar_length_scale=float(data.get("scale_bar_length_scale", 0.30)),
         scale_bar_font_scale_ratio=float(data.get("scale_bar_font_scale_ratio", 0.6)),
+        pixel_size_mm=(float(data["pixel_size_mm"]) if data.get("pixel_size_mm") is not None else None),
+        scale_bar_mm=(float(data["scale_bar_mm"]) if data.get("scale_bar_mm") is not None else None),
+        scale_bar_max_width_frac=float(data.get("scale_bar_max_width_frac", 0.6)),
+        scale_bar_nice_mm=tuple(float(m) for m in data.get("scale_bar_nice_mm", (50.0, 25.0, 20.0, 10.0, 5.0, 2.0, 1.0))),
     )
 
 
@@ -377,6 +432,15 @@ def _parse_args() -> CropBandConfig:
                         help="Scale bar length as fraction of cropped image width (e.g. 0.3).")
     parser.add_argument("--scale-bar-font-scale-ratio", type=float, default=None,
                         help="Scale bar text size ratio (smaller means smaller text).")
+    parser.add_argument("--pixel-size-mm", type=float, default=None,
+                        help="Physical pixel size of the cropped images (mm/pixel). Cropping "
+                             "does not resample, so this is the parent slice's voxel spacing. "
+                             "Set it to draw a bar of real length instead of a fraction of width.")
+    parser.add_argument("--scale-bar-mm", type=float, default=None,
+                        help="Scale bar length in mm (needs --pixel-size-mm). Omit to pick the "
+                             "longest round length fitting --scale-bar-max-width-frac.")
+    parser.add_argument("--scale-bar-max-width-frac", type=float, default=None,
+                        help="Largest share of the crop width an auto-chosen bar may take (default 0.6).")
 
     args = parser.parse_args()
     if args.config:
@@ -427,6 +491,12 @@ def _parse_args() -> CropBandConfig:
             cfg.scale_bar_length_scale = args.scale_bar_length_scale
         if args.scale_bar_font_scale_ratio is not None:
             cfg.scale_bar_font_scale_ratio = args.scale_bar_font_scale_ratio
+        if args.pixel_size_mm is not None:
+            cfg.pixel_size_mm = args.pixel_size_mm
+        if args.scale_bar_mm is not None:
+            cfg.scale_bar_mm = args.scale_bar_mm
+        if args.scale_bar_max_width_frac is not None:
+            cfg.scale_bar_max_width_frac = args.scale_bar_max_width_frac
         if not cfg.band_root:
             parser.error("band_root is required in config or via --band-root")
         return cfg

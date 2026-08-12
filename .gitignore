@@ -15,6 +15,7 @@ configs/*.json
 assets/
 output/
 area_band_output_multi/
+measurements/
 docs/
 
 # Python cache/build artifacts

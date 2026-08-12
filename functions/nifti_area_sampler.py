@@ -176,11 +176,35 @@ class NiftiAreaSampler:
         if cfg.use_pial_overlay:
             self._pial_vox = load_pial_vertices_to_vox(cfg=self.cfg, affine=self.affine, shape=self.shape, file_path=self.cfg.file_path)
 
+    # A bar must be at least this tall to survive the MORPH_OPEN inside
+    # Nifti2image.detect_scale_bar_length; a thinner one is erased there and the
+    # detector returns None, which its caller cannot handle.
+    SCALE_BAR_MIN_THICKNESS_PX = 3
+
+    def _bar_px_for_mm(self, bar_length_mm: float) -> int:
+        """Pixel span of `bar_length_mm` at the current axis' in-plane spacing.
+
+        Returns 0 when the spacing metadata is unusable, so callers can skip the
+        bar rather than draw one that means nothing.
+        """
+        sx, sy = self.inplane_spacings[self.axis]
+        ref = sx if sx > 0 else sy
+        if ref <= 0:
+            return 0
+        return int(round(float(bar_length_mm) / float(ref)))
+
     def _add_scale_bar(self, img: np.ndarray, bar_length_mm: float = 20.0) -> np.ndarray:
         """Draw a metric scale bar (e.g. 20 mm) in the lower-right corner.
 
-        The bar length in pixels is derived from the in-plane voxel spacing
-        for the current slicing axis.
+        The bar spans exactly `bar_length_mm` at the in-plane voxel spacing of the
+        current slicing axis. The span is inclusive of both end columns, so the
+        right edge is `x1 + bar_px - 1`; a filled rectangle is used rather than
+        `cv2.line`, whose end caps extend past the endpoints and made the bar a
+        few pixels long.
+
+        Note the bar is not the final one: `nifti_slice_to_image` re-measures and
+        re-draws it when the PNG is written. `_redraw_exact_scale_bar` restores
+        the exact length afterwards.
         """
         if bar_length_mm <= 0:
             return img
@@ -189,32 +213,23 @@ class NiftiAreaSampler:
         if h <= 0 or w <= 0:
             return img
 
-        sx, sy = self.inplane_spacings[self.axis]
-        # Use the first non-zero spacing as reference; fall back to a
-        # reasonable fixed pixel length if spacing metadata is odd.
-        ref = sx if sx > 0 else sy
-        if ref > 0:
-            px_per_mm = 1.0 / float(ref)
-            bar_px = int(round(bar_length_mm * px_per_mm))
-        else:
-            bar_px = 0
-
-        # Clamp bar length so it is always clearly visible
-        min_bar = int(0.1 * w)
-        max_bar = int(0.4 * w)
+        bar_px = self._bar_px_for_mm(bar_length_mm)
         if bar_px <= 0:
-            bar_px = min_bar
-        bar_px = max(min_bar, min(max_bar, bar_px))
+            return img
 
-        # Larger margin to move the bar/text up, closer to the main content
         margin = int(max(10, 0.12 * min(h, w)))
-        thickness = max(2, int(0.006 * min(h, w)))
+        thickness = max(self.SCALE_BAR_MIN_THICKNESS_PX, int(0.006 * min(h, w)))
+        # A bar wider than the frame would be silently misleading, so drop it
+        # instead of clamping it to a length that no longer means bar_length_mm.
+        if bar_px > w - 2 * margin:
+            return img
+
         y = h - margin
         x2 = w - margin
-        x1 = max(margin, x2 - bar_px)
+        x1 = x2 - bar_px + 1
 
         color = (255, 255, 255)
-        cv2.line(img, (x1, y), (x2, y), color, thickness)
+        cv2.rectangle(img, (x1, y - thickness + 1), (x2, y), color, -1)
 
         label = f"{int(bar_length_mm)} mm"
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -222,10 +237,58 @@ class NiftiAreaSampler:
         text_thickness = 1
         (text_w, text_h), _ = cv2.getTextSize(label, font, font_scale, text_thickness)
         text_x = max(margin, x2 - text_w)
-        text_y = max(text_h + margin, y - int(1.5 * thickness))
+        text_y = max(text_h + margin, y - thickness - 2)
         cv2.putText(img, label, (text_x, text_y), font, font_scale, color, text_thickness, cv2.LINE_AA)
 
         return img
+
+    def _redraw_exact_scale_bar(self, png_path: str, bar_length_mm: float = 20.0) -> None:
+        """Rewrite the saved PNG's scale bar at exactly `bar_length_mm`.
+
+        `nifti_slice_to_image` discards the bar drawn above and re-creates it from
+        a pixel measurement of the render (`detect_scale_bar_length` feeding
+        `draw_new_scale_bar`), which loses a pixel to inclusive endpoints and is
+        not tied to the voxel grid at all. The true spacing is known here, so the
+        bar is rebuilt from it once the PNG is on disk.
+
+        The old bar and its label are the only near-black pixels in these renders
+        - every tissue colour is saturated, the darkest still having a 242 max
+        channel - so they can be cleared by brightness alone without touching
+        tissue.
+        """
+        if bar_length_mm <= 0:
+            return
+
+        img = cv2.imread(png_path, cv2.IMREAD_COLOR)
+        if img is None:
+            return
+
+        h, w = img.shape[:2]
+        bar_px = self._bar_px_for_mm(bar_length_mm)
+        margin = int(max(10, 0.12 * min(h, w)))
+        if bar_px <= 0 or bar_px > w - 2 * margin:
+            return
+
+        # Clear the previous bar and label.
+        img[img.max(axis=2) < 40] = (255, 255, 255)
+
+        thickness = max(self.SCALE_BAR_MIN_THICKNESS_PX, int(0.006 * min(h, w)))
+        y = h - margin
+        x2 = w - margin
+        x1 = x2 - bar_px + 1
+
+        color = (0, 0, 0)  # Nifti2image leaves a white background
+        cv2.rectangle(img, (x1, y - thickness + 1), (x2, y), color, -1)
+
+        label = f"{int(bar_length_mm)} mm"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.4 if min(h, w) < 256 else 0.6
+        (text_w, text_h), _ = cv2.getTextSize(label, font, font_scale, 1)
+        text_x = max(margin, x2 - text_w)
+        text_y = min(h - 2, y + text_h + 3)
+        cv2.putText(img, label, (text_x, text_y), font, font_scale, color, 1, cv2.LINE_AA)
+
+        cv2.imwrite(png_path, img)
 
     # ----- Axis-generic helpers -----
     def _area_at_index_axis(self, ax: int, idx: int) -> float:
@@ -594,6 +657,9 @@ class NiftiAreaSampler:
                     smooth=None,
                     smooth_strength=None,
                 )
+                # Nifti2image re-derived the bar from a pixel measurement; put
+                # back the length the voxel spacing actually implies.
+                self._redraw_exact_scale_bar(out_path, bar_length_mm=20.0)
                 saved_pngs.append(out_path)
             else:
                 saved_pngs.append(None)
