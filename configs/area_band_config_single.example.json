@@ -1,0 +1,23 @@
+{
+  "dataset": "single case - set label_legend and area_labels for the scheme you are running",
+  "label_scheme": "fetal_surface-17",
+  "label_legend": "assets/labels.xlsx",
+  "label_selection_note": "White matter (3,4,5,6,11,12,13,14) + Third ventricle (15) + Ventricles caves (17), matching the batch config. Label ids are scheme-specific - swap both label_legend and area_labels together when running a different dataset.",
+  "area_labels": [3, 4, 5, 6, 11, 12, 13, 14, 15, 17],
+
+  "paths_note": "file_path/out_dir are machine-specific and deliberately empty here. Pass --file/--out on the command line, or copy this file to configs/area_band_config_single.json (gitignored) and fill them in.",
+  "file_path": "",
+  "out_dir": "",
+
+  "axis": "z",
+  "n": 20,
+  "p": 0.9,
+  "save_png": true,
+  "profile_plot": true,
+  "show_crosshair": false,
+
+  "use_pial_overlay": true,
+  "pial_space": "scanner",
+  "pial_line_thickness": 1,
+  "pial_tolerance_mm": 0.12
+}

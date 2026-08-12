@@ -5,8 +5,45 @@ This guide describes how to run `scripts/area_band_cli.py` for all subjects and 
 ## Prerequisites
 
 - Python virtual environment already created at `.venv` in this repo.
-- Each subject folder contains `seg.nii.gz`.
-- Each subject folder also contains `lh.pial` and `rh.pial` (per-subject pials).
+- Each subject folder contains a label volume. The default name is `seg.nii.gz`;
+  datasets that name it differently set `--seg-glob` / `"seg_pattern"` (the dHCP
+  atlas ships `tissue-t30.00_dhcp-19.nii.gz`, so its config uses
+  `"seg_pattern": "tissue-*_dhcp-19.nii.gz"`).
+- Pial overlays are optional. If `lh.pial` / `rh.pial` are present and
+  `--use-pial-overlay` is set they are drawn; datasets without surfaces simply
+  run without them.
+
+## Labels
+
+There is no built-in default label list, because label ids mean different
+tissues in different segmentation schemes. Every run states its labels
+explicitly, via `--labels` or the config's `area_labels`.
+
+Point `--label-legend` / `"label_legend"` at the dataset's legend so labels are
+reported by name. Supported formats: two-column `.csv`, ITK-SnAP `.txt` label
+description, and `.xlsx`. Known legends in this repo:
+
+| dataset | legend |
+| --- | --- |
+| `assets/data/fetal_surface` | `assets/labels.xlsx` |
+| dHCP atlas (`parcellations_scaled`) | `.../MRI_atlas_dhcp/info/dhcp-atlas-summary-info-19-labels.csv` |
+
+Before sampling, the CLI checks each volume and **fails** when:
+
+- a requested label is not present in that volume, or
+- the volume contains labels the legend does not describe (the legend does not
+  belong to this dataset).
+
+It **warns** when the legend describes labels the volume lacks. It also prints
+the resolved selection by name, for example:
+
+```
+area_labels: 5 (Fetal WM Left), 6 (Fetal WM Right), 7 (Lateral Ventricle Left), ...
+```
+
+Read that line. When two schemes share an id range a list written for one stays
+valid against the other and silently selects different tissue — no automatic
+check can catch that, but the printed names make it obvious.
 
 ## Activate the virtual environment
 
@@ -21,12 +58,13 @@ Replace the paths if your folder layout differs.
 
 ```powershell
 python scripts\area_band_cli.py `
-  --batch-dir "C:\Users\Divya\git\FetoMorph\assets\data\fetal_surface" `
-  --batch-out "C:\Users\Divya\git\FetoMorph\area_band_output_multi" `
+  --batch-dir "assets\data\fetal_surface" `
+  --batch-out "area_band_output_multi\fetal_surface" `
   --axis x `
   --n 20 `
   --p 0.9 `
-  --use-default-labels `
+  --labels 3 4 5 6 11 12 13 14 15 17 `
+  --label-legend "assets\labels.xlsx" `
   --use-pial-overlay `
   --pial-space scanner `
   --axis-subdir `
@@ -35,12 +73,14 @@ python scripts\area_band_cli.py `
 ```
 
 Key inputs:
-- `--batch-dir`: Folder with subject subfolders; each must contain `seg.nii.gz`.
+- `--batch-dir`: Folder with subject subfolders; each must contain a label volume.
 - `--batch-out`: Output base folder.
 - `--axis`: One of `x`, `y`, or `z`.
 - `--n`: Number of slices to sample (default 10).
 - `--p`: Top-p fraction for band (default 0.8).
-- `--use-default-labels`: Uses built-in label list from the CLI.
+- `--labels`: Label ids to include (required; no built-in default).
+- `--label-legend`: Legend file used to name labels in messages and errors.
+- `--seg-glob`: Glob for the label volume in each case folder (default `seg.nii.gz`).
 - `--use-pial-overlay`: Enable pial overlay and auto-detect `lh.pial`/`rh.pial` per subject.
 - `--pial-space`: Use `scanner` for pials in scanner RAS.
 - `--axis-subdir`: Writes to `axis_x`, `axis_y`, or `axis_z` under each subject output.
@@ -54,57 +94,76 @@ Run all three axes with separate commands:
 
 ```powershell
 python scripts\area_band_cli.py `
-  --batch-dir "C:\Users\Divya\git\FetoMorph\assets\data\fetal_surface" `
-  --batch-out "C:\Users\Divya\git\FetoMorph\area_band_output_multi" `
-  --axis x --n 20 --p 0.9 --use-default-labels --use-pial-overlay --pial-space scanner --axis-subdir --no-crosshair --pial-line-thickness 1
+  --batch-dir "assets\data\fetal_surface" `
+  --batch-out "area_band_output_multi\fetal_surface" `
+  --axis x --n 20 --p 0.9 --labels 3 4 5 6 11 12 13 14 15 17 --label-legend "assets\labels.xlsx" --use-pial-overlay --pial-space scanner --axis-subdir --no-crosshair --pial-line-thickness 1
 
 python scripts\area_band_cli.py `
-  --batch-dir "C:\Users\Divya\git\FetoMorph\assets\data\fetal_surface" `
-  --batch-out "C:\Users\Divya\git\FetoMorph\area_band_output_multi" `
-  --axis y --n 20 --p 0.9 --use-default-labels --use-pial-overlay --pial-space scanner --axis-subdir --no-crosshair --pial-line-thickness 1
+  --batch-dir "assets\data\fetal_surface" `
+  --batch-out "area_band_output_multi\fetal_surface" `
+  --axis y --n 20 --p 0.9 --labels 3 4 5 6 11 12 13 14 15 17 --label-legend "assets\labels.xlsx" --use-pial-overlay --pial-space scanner --axis-subdir --no-crosshair --pial-line-thickness 1
 
 python scripts\area_band_cli.py `
-  --batch-dir "C:\Users\Divya\git\FetoMorph\assets\data\fetal_surface" `
-  --batch-out "C:\Users\Divya\git\FetoMorph\area_band_output_multi" `
-  --axis z --n 20 --p 0.9 --use-default-labels --use-pial-overlay --pial-space scanner --axis-subdir --no-crosshair --pial-line-thickness 1
+  --batch-dir "assets\data\fetal_surface" `
+  --batch-out "area_band_output_multi\fetal_surface" `
+  --axis z --n 20 --p 0.9 --labels 3 4 5 6 11 12 13 14 15 17 --label-legend "assets\labels.xlsx" --use-pial-overlay --pial-space scanner --axis-subdir --no-crosshair --pial-line-thickness 1
 
 ## Run from a config file (with optional CLI overrides)
 
 The CLI can load a JSON config (matching `AreaBandConfig` fields) and also accepts
-extra keys for batch runs: `batch_dir`, `batch_out`, `axis_subdir`, `all_axes`.
-Any CLI flags you pass will override the config values.
+extra keys for batch runs: `batch_dir`, `batch_out`, `axis_subdir`, `all_axes`,
+`seg_pattern`, `label_legend`. Any CLI flags you pass will override the config
+values. Keys the CLI does not recognise are ignored, so a config may carry notes
+(`dataset`, `label_scheme`, `label_selection_note`) documenting its own choices.
 
-Example config (batch, all axes) — `configs/area_band_config_batch.json`:
-```json
-{
-  "file_path": "",
-  "out_dir": "",
-  "axis": "z",
-  "n": 20,
-  "p": 0.9,
-  "save_png": true,
-  "profile_plot": true,
-  "show_crosshair": false,
-  "area_labels": [2,3,4,5,6,11,12,13,14,15,17],
-  "use_pial_overlay": true,
-  "pial_space": "scanner",
-  "pial_line_thickness": 1,
-  "batch_dir": "C:\Users\Divya\git\FetoMorph\assets\data\fetal_surface",
-  "batch_out": "C:\Users\Divya\git\FetoMorph\area_band_output_multi",
-  "axis_subdir": true,
-  "all_axes": true
-}
-```
+Prefer one config per dataset, holding its `area_labels` next to the
+`label_legend` those ids came from. A relative `label_legend` is resolved first
+as given, then relative to the config file.
 
-Run it:
+### Example configs vs local configs
+
+Input and output paths are machine-specific, so they are kept out of the repo:
+
+- `configs/*.example.json` are committed. They carry the dataset's labels,
+  legend, seg pattern and sampling settings, with `batch_dir` / `batch_out`
+  (or `file_path` / `out_dir`) left empty.
+- `configs/*.json` are gitignored local run configs.
+
+To run a dataset, copy its example and fill in the two paths:
+
 ```powershell
-python scripts\area_band_cli.py --config "C:\Users\Divya\git\FetoMorph\configs\area_band_config_batch.json"
+Copy-Item configs\area_band_config_dhcp_atlas.example.json configs\area_band_config_dhcp_atlas.json
+# edit batch_dir / batch_out, then:
+python scripts\area_band_cli.py --config "configs\area_band_config_dhcp_atlas.json"
 ```
+
+Or keep the example untouched and pass the paths on the command line, since CLI
+flags override config values:
+
+```powershell
+python scripts\area_band_cli.py `
+  --config "configs\area_band_config_dhcp_atlas.example.json" `
+  --batch-dir "assets\data\MRI_atlas_dhcp\MRI_atlas_dhcp\parcellations_scaled" `
+  --batch-out "area_band_output_multi\atlas_dhcp"
+```
+
+Available examples:
+
+| example | dataset | labels |
+| --- | --- | --- |
+| `area_band_config_batch.example.json` | `fetal_surface` subjects, batch | `3,4,5,6,11,12,13,14,15,17` |
+| `area_band_config_single.example.json` | one case | same as above |
+| `area_band_config_dhcp_atlas.example.json` | dHCP atlas GW21-GW36 | `5,6,7,8,9,14,15,16,17,18` |
+
+Both label lists are the cerebrum excluding the cortical ribbon, so the two
+datasets are measured on the same boundary (the `fetal_surface` runs omitted
+their cortex label, giving a white-matter boundary rather than a pial one). The
+lists are **not** interchangeable: ids mean different tissues in the two schemes.
 
 Override example (use different smoothing):
 ```powershell
 python scripts\area_band_cli.py `
-  --config "C:\Users\Divya\git\FetoMorph\configs\area_band_config_batch.json" `
+  --config "configs\area_band_config_batch.json" `
   --pial-line-thickness 1
 ```
 
@@ -116,13 +175,34 @@ If an invalid value is provided, the CLI prints a concise error and exits:
 area_band_cli.py: error: p must be in (0, 1]
 ```
 
+Label problems are reported the same way, naming the labels where a legend is
+available:
+
+```
+area_band_cli.py: error: seg.nii.gz: requested label(s) not in this volume: 18 (Third Ventricle)
+  volume contains: 1 (eCSF Left), 2 (eCSF Right), ...
+  Label ids are scheme-specific - check area_labels against this dataset's legend.
+```
+
+```
+area_band_cli.py: error: tissue-t30.00_dhcp-19.nii.gz: volume contains label(s) the legend does not describe: 18, 19
+  The legend does not match this volume - wrong label_legend for this dataset?
+```
+
+A batch run whose `seg_pattern` matches nothing also fails rather than reporting
+an empty result:
+
+```
+area_band_cli.py: error: no case folder under ... contained a file matching seg pattern 'seg.nii.gz'
+```
+
 ## Single run (config + CLI override)
 
 Use `configs/area_band_config_single.json` and pass the case-specific inputs:
 
 ```powershell
 python scripts\area_band_cli.py `
-  --config "C:\Users\Divya\git\FetoMorph\configs\area_band_config_single.json" `
+  --config "configs\area_band_config_single.json" `
   --file "C:\path\to\seg.nii.gz" `
   --out "C:\path\to\out"
 ```
@@ -135,9 +215,9 @@ Tip: if you must use the batch config for a single case, clear batch mode by pas
 
 Outputs are written under:
 ```
-C:\Users\Divya\git\FetoMorph\area_band_output_multi\<subject>\axis_x
-C:\Users\Divya\git\FetoMorph\area_band_output_multi\<subject>\axis_y
-C:\Users\Divya\git\FetoMorph\area_band_output_multi\<subject>\axis_z
+area_band_output_multi\<subject>\axis_x
+area_band_output_multi\<subject>\axis_y
+area_band_output_multi\<subject>\axis_z
 ```
 
 Each axis folder includes:

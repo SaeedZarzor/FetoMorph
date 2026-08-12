@@ -1,12 +1,15 @@
 {
-  "band_root": "C:\\Users\\Divya\\git\\FetoMorph\\area_band_output_multi",
+  "paths_note": "band_root is machine-specific and deliberately empty here. Copy this file to configs/crop_band_config.json (gitignored) and set it to an area-band output folder - either a single subject folder or the parent holding many.",
+  "band_root": "",
   "axes": ["axis_x", "axis_y", "axis_z"],
   "glob_pattern": "band_axis*.png",
+
+  "bbox_note": "bbox values are per-dataset: they are fractions of the rendered image, and the atlas slices are not the same size or aspect as the fetal_surface ones (221x180 axial, 180x180 coronal, 180x221 sagittal). Re-pick them per dataset rather than reusing another dataset's numbers. null means the axis is skipped unless allow_auto_for_unset_axes is true.",
   "bbox_norm": null,
   "bbox_norm_by_axis": {
     "axis_x": null,
-    "axis_y": [0.58, 0.17, 0.23, 0.33],
-    "axis_z": [0.638, 0.25, 0.25, 0.26]
+    "axis_y": null,
+    "axis_z": null
   },
   "row_fraction": [0.0, 1.0],
   "col_fraction": [0.45, 1.0],
@@ -20,6 +23,7 @@
   "validate_manual_bbox": true,
   "fallback_to_auto": true,
   "allow_auto_for_unset_axes": false,
+
   "add_scale_bar": true,
   "scale_bar_label": "20 mm",
   "scale_bar_fallback_frac": 0.1,

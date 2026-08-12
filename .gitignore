@@ -6,6 +6,11 @@ venv/
 env/
 ENV/
 
+# Local run configs: these hold machine-specific input/output paths.
+# Commit the *.example.json templates instead, and copy one to make a local run config.
+configs/*.json
+!configs/*.example.json
+
 # Project-specific generated folders
 assets/
 output/
