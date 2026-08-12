@@ -251,10 +251,11 @@ class NiftiAreaSampler:
         not tied to the voxel grid at all. The true spacing is known here, so the
         bar is rebuilt from it once the PNG is on disk.
 
-        The old bar and its label are the only near-black pixels in these renders
-        - every tissue colour is saturated, the darkest still having a 242 max
-        channel - so they can be cleared by brightness alone without touching
-        tissue.
+        The old bar and label are cleared by their lack of colour. Nifti2image's
+        background pass keeps only saturated pixels and whitens the rest, so once
+        it has run the sole neutral non-white pixels are the bar and text it drew
+        afterwards - including their anti-aliased edges, which a brightness test
+        alone leaves behind as a ghost outline.
         """
         if bar_length_mm <= 0:
             return
@@ -269,8 +270,11 @@ class NiftiAreaSampler:
         if bar_px <= 0 or bar_px > w - 2 * margin:
             return
 
-        # Clear the previous bar and label.
-        img[img.max(axis=2) < 40] = (255, 255, 255)
+        # Clear the previous bar and label, anti-aliased edges included.
+        chan_max = img.max(axis=2).astype(np.int16)
+        chan_min = img.min(axis=2).astype(np.int16)
+        neutral = (chan_max - chan_min) < 25
+        img[neutral & (chan_max < 250)] = (255, 255, 255)
 
         thickness = max(self.SCALE_BAR_MIN_THICKNESS_PX, int(0.006 * min(h, w)))
         y = h - margin
