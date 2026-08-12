@@ -181,26 +181,66 @@ class NiftiAreaSampler:
     # detector returns None, which its caller cannot handle.
     SCALE_BAR_MIN_THICKNESS_PX = 3
 
-    def _bar_px_for_mm(self, bar_length_mm: float) -> int:
-        """Pixel span of `bar_length_mm` at the current axis' in-plane spacing.
+    # Lengths a bar may take, longest first. Only used when the preferred length
+    # does not fit the frame.
+    SCALE_BAR_NICE_MM: Tuple[float, ...] = (100.0, 50.0, 25.0, 20.0, 10.0, 5.0, 2.0, 1.0)
 
-        Returns 0 when the spacing metadata is unusable, so callers can skip the
-        bar rather than draw one that means nothing.
+    def _column_spacing_mm(self) -> float:
+        """Millimetres per pixel along the image's horizontal axis.
+
+        `inplane_spacings` is ordered (row, column) for the current slicing axis,
+        and the bar is drawn horizontally, so the column spacing is the one that
+        governs its length. These differ whenever the voxels are anisotropic.
         """
-        sx, sy = self.inplane_spacings[self.axis]
-        ref = sx if sx > 0 else sy
-        if ref <= 0:
+        return float(self.inplane_spacings[self.axis][1])
+
+    def _bar_px_for_mm(self, bar_length_mm: float) -> int:
+        """Pixel span of `bar_length_mm` along the image's horizontal axis."""
+        spacing = self._column_spacing_mm()
+        if spacing <= 0:
             return 0
-        return int(round(float(bar_length_mm) / float(ref)))
+        return int(round(float(bar_length_mm) / spacing))
+
+    def _scale_bar_choice(self, h: int, w: int, preferred_mm: float) -> Optional[Tuple[float, int]]:
+        """Pick `(bar_length_mm, bar_px)` for a frame `h` x `w`.
+
+        `preferred_mm` is used when it fits inside the margins. Otherwise the
+        longest shorter round length that fits is taken, so a finer-voxel or
+        smaller dataset still gets an honest bar instead of `preferred_mm`
+        squeezed into a span that no longer matches its label.
+
+        Returns None only when even 1 mm cannot be drawn.
+        """
+        if preferred_mm <= 0 or self._column_spacing_mm() <= 0:
+            return None
+        margin = self._scale_bar_margin(h, w)
+        candidates = [float(preferred_mm)] + [
+            m for m in self.SCALE_BAR_NICE_MM if m < float(preferred_mm)
+        ]
+        for limit in (w - 2 * margin, w - 2):
+            for mm in candidates:
+                bar_px = self._bar_px_for_mm(mm)
+                if 1 <= bar_px <= limit:
+                    return mm, bar_px
+        return None
+
+    @staticmethod
+    def _scale_bar_margin(h: int, w: int) -> int:
+        return int(max(10, 0.12 * min(h, w)))
+
+    @staticmethod
+    def _scale_bar_thickness(h: int, w: int) -> int:
+        return max(NiftiAreaSampler.SCALE_BAR_MIN_THICKNESS_PX, int(0.006 * min(h, w)))
 
     def _add_scale_bar(self, img: np.ndarray, bar_length_mm: float = 20.0) -> np.ndarray:
         """Draw a metric scale bar (e.g. 20 mm) in the lower-right corner.
 
-        The bar spans exactly `bar_length_mm` at the in-plane voxel spacing of the
+        The bar spans exactly its labelled length at the column spacing of the
         current slicing axis. The span is inclusive of both end columns, so the
         right edge is `x1 + bar_px - 1`; a filled rectangle is used rather than
         `cv2.line`, whose end caps extend past the endpoints and made the bar a
-        few pixels long.
+        few pixels long. `bar_length_mm` is a preference: a shorter round length
+        is substituted when it will not fit, never a truncated one.
 
         Note the bar is not the final one: `nifti_slice_to_image` re-measures and
         re-draws it when the PNG is written. `_redraw_exact_scale_bar` restores
@@ -213,24 +253,22 @@ class NiftiAreaSampler:
         is what `detect_scale_bar_length` needs, and the black bar drawn later
         covers it exactly, having the same geometry.
         """
-        if bar_length_mm <= 0:
-            return img
-
         h, w = img.shape[:2]
         if h <= 0 or w <= 0:
             return img
 
-        bar_px = self._bar_px_for_mm(bar_length_mm)
-        if bar_px <= 0:
-            return img
+        choice = self._scale_bar_choice(h, w, bar_length_mm)
+        if choice is None:
+            # Leaving no bar would strand detect_scale_bar_length with nothing to
+            # find, and it hands None to a caller that cannot take it.
+            raise ValueError(
+                f"cannot draw a scale bar on a {w}x{h} image at "
+                f"{self._column_spacing_mm()} mm/pixel: even 1 mm does not fit"
+            )
+        _, bar_px = choice
 
-        margin = int(max(10, 0.12 * min(h, w)))
-        thickness = max(self.SCALE_BAR_MIN_THICKNESS_PX, int(0.006 * min(h, w)))
-        # A bar wider than the frame would be silently misleading, so drop it
-        # instead of clamping it to a length that no longer means bar_length_mm.
-        if bar_px > w - 2 * margin:
-            return img
-
+        margin = self._scale_bar_margin(h, w)
+        thickness = self._scale_bar_thickness(h, w)
         y = h - margin
         x2 = w - margin
         x1 = x2 - bar_px + 1
@@ -253,18 +291,17 @@ class NiftiAreaSampler:
         afterwards - including their anti-aliased edges, which a brightness test
         alone leaves behind as a ghost outline.
         """
-        if bar_length_mm <= 0:
-            return
-
         img = cv2.imread(png_path, cv2.IMREAD_COLOR)
         if img is None:
             return
 
         h, w = img.shape[:2]
-        bar_px = self._bar_px_for_mm(bar_length_mm)
-        margin = int(max(10, 0.12 * min(h, w)))
-        if bar_px <= 0 or bar_px > w - 2 * margin:
+        # Same choice as _add_scale_bar made, so the black bar lands exactly on
+        # the white one and the label states the length actually drawn.
+        choice = self._scale_bar_choice(h, w, bar_length_mm)
+        if choice is None:
             return
+        chosen_mm, bar_px = choice
 
         # Clear the previous bar and label, anti-aliased edges included.
         chan_max = img.max(axis=2).astype(np.int16)
@@ -272,7 +309,8 @@ class NiftiAreaSampler:
         neutral = (chan_max - chan_min) < 25
         img[neutral & (chan_max < 250)] = (255, 255, 255)
 
-        thickness = max(self.SCALE_BAR_MIN_THICKNESS_PX, int(0.006 * min(h, w)))
+        margin = self._scale_bar_margin(h, w)
+        thickness = self._scale_bar_thickness(h, w)
         y = h - margin
         x2 = w - margin
         x1 = x2 - bar_px + 1
@@ -280,7 +318,7 @@ class NiftiAreaSampler:
         color = (0, 0, 0)  # Nifti2image leaves a white background
         cv2.rectangle(img, (x1, y - thickness + 1), (x2, y), color, -1)
 
-        label = f"{int(bar_length_mm)} mm"
+        label = f"{int(chosen_mm)} mm" if float(chosen_mm).is_integer() else f"{chosen_mm:g} mm"
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 0.4 if min(h, w) < 256 else 0.6
         (text_w, text_h), _ = cv2.getTextSize(label, font, font_scale, 1)
