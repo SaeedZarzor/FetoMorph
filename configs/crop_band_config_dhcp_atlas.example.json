@@ -1,0 +1,46 @@
+{
+  "dataset": "dHCP fetal atlas GW21-GW36 (parcellations_scaled), cropped from the area-band sampler output",
+
+  "paths_note": "band_root is machine-specific and deliberately empty here. Copy this file to configs/crop_band_config_dhcp_atlas.json (gitignored) and point it at the sampler's atlas output root (the folder holding GW21..GW36), or at a single GW folder to crop one week.",
+  "band_root": "",
+  "axes": ["axis_y", "axis_z"],
+  "glob_pattern": "band_axis*.png",
+
+  "bbox_note": "Atlas-specific: these are fractions of the rendered frame, which is 221x180 axial (axis_z), 180x180 coronal (axis_y), 180x221 sagittal (axis_x). Do NOT reuse the fetal_surface numbers - that dataset has different frame sizes AND a different orientation. Sagittal is left null because it is not cropped, as in the previous dataset.",
+  "orientation_note": "The sampler renders each slice as flipud of the volume slice (verified: IoU 1.000 against the label volume). Volume axes are (L, A, S), so image rows run left->right hemisphere top-to-bottom, and image columns run posterior->anterior on axis_z and inferior->superior on axis_y. The interhemispheric midline sits at y = 0.494 on every week, axis and slice.",
+  "roi_note": "Each ROI is the left hemisphere's outer corner: bottom edge exactly on the midline (y = 0.4944 -> row 89 of 180, so the opposite hemisphere is excluded), holding the lateral ventricle at the inner edge together with the outer brain boundary and background beyond it. axis_z takes the anterior/frontal pole, axis_y the superior/vertex end. Both crops are 56x70 px = 28x35 mm, portrait (w/h 0.80). The coronal box was recovered by template-matching the reference crop supplied by the user (matched GW25 axis_y s04 at px 109,19-165,90, IoU 0.90); the axial box mirrors its size and framing. Deep gray is deliberately NOT the target: the crop is narrowed past basal ganglia and thalamus. They still enter at the inner edge on some slices, because the lateral ventricle sits directly against them - excluding them on every slice is only possible by moving the box off the tissue entirely, which drops the tissue fill to 26-34% and, on the axial, loses the ventricle on 192 of 320 slices.",
+  "bbox_norm": null,
+  "bbox_norm_by_axis": {
+    "axis_x": null,
+    "axis_y": [0.6056, 0.1056, 0.3111, 0.3888],
+    "axis_z": [0.687, 0.1056, 0.253, 0.3888]
+  },
+  "row_fraction": [0.0, 1.0],
+  "col_fraction": [0.45, 1.0],
+  "margin_frac": 0.05,
+  "margin_px": null,
+  "output_dirname": "brain_slices_cropped",
+  "overwrite": true,
+  "verbose": true,
+  "manifest_name": "crop_manifest.json",
+  "min_foreground_pixels": 32,
+
+  "fallback_note": "fallback_to_auto is false on purpose. With it true, any slice whose manual bbox holds less than min_foreground_pixels is silently replaced by an auto-detected bbox, so one folder would mix two different ROIs. False makes such a slice skip loudly instead.",
+  "validate_manual_bbox": true,
+  "fallback_to_auto": false,
+  "allow_auto_for_unset_axes": false,
+
+  "scale_bar_note": "pixel_size_mm is the parent slice's voxel spacing - cropping is pure pixel slicing with no resample, so the crop keeps it. The bar is then a real distance, round(mm / pixel_size_mm) columns wide. scale_bar_mm is left null so the auto-picker takes the longest round length fitting scale_bar_max_width_frac: 10 mm = 20 px at this 56 px crop width. Do NOT pin it to 20 mm to match the full slices - 20 mm is 40 px here, 71 percent of the frame. Never calibrate pixel size from a drawn bar.",
+  "add_scale_bar": true,
+  "pixel_size_mm": 0.5,
+  "scale_bar_mm": null,
+  "scale_bar_max_width_frac": 0.6,
+  "scale_bar_top_pad_frac": 0.27,
+  "scale_bar_top_pad_px": null,
+  "scale_bar_font_scale_ratio": 0.4,
+
+  "legacy_note": "Only used when pixel_size_mm is null, in which case the bar is a fraction of the crop width and its label is not a measurement.",
+  "scale_bar_label": "20 mm",
+  "scale_bar_fallback_frac": 0.1,
+  "scale_bar_length_scale": 0.7
+}

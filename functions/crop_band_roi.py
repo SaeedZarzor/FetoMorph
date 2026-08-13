@@ -529,6 +529,13 @@ def _parse_args() -> CropBandConfig:
         scale_bar_top_pad_px=args.scale_bar_top_pad_px,
         scale_bar_length_scale=args.scale_bar_length_scale if args.scale_bar_length_scale is not None else 0.30,
         scale_bar_font_scale_ratio=args.scale_bar_font_scale_ratio if args.scale_bar_font_scale_ratio is not None else 0.6,
+        # Physical-bar settings must be carried over here too. Dropping them made
+        # --pixel-size-mm a no-op without --config, so the bar silently fell back
+        # to a fraction of the width while --scale-bar-label still claimed a
+        # distance. None is a meaningful value for the first two (bar stays legacy).
+        pixel_size_mm=args.pixel_size_mm,
+        scale_bar_mm=args.scale_bar_mm,
+        scale_bar_max_width_frac=args.scale_bar_max_width_frac if args.scale_bar_max_width_frac is not None else 0.6,
     )
 
 
