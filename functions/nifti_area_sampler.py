@@ -489,12 +489,55 @@ class NiftiAreaSampler:
         finally:
             self.axis = orig
 
+    # Hues, in degrees, that replace the golden-ratio default for specific labels.
+    #
+    # `(lab * 0.61803398875) % 1.0` places any two ids **13 apart** just 12.4
+    # degrees apart in hue, which is one colour to the eye. Three such pairs fall
+    # inside the dhcp-19 selection and each puts two structures that touch into
+    # the same colour: Cortical GM 3/4 against Thalamus 16/17, and Fetal WM 5
+    # against Third Ventricle 18. The cortical ribbon could not be told from the
+    # thalamus it runs past at the midline, which is exactly where a reader looks
+    # to check the cortex is attached.
+    #
+    # Only these five move, into the gaps between the hues that stay. The bulk
+    # white matter (5, 6), the ventricles and the basal ganglia keep their
+    # colours, so the renders still read like the earlier ones. Cortex now sits
+    # 142 degrees from the WM it wraps on the left and 170 on the right, and the
+    # two hemispheres' cortex 110 degrees apart.
+    #
+    # Every entry is checked against the `gray <= 200` threshold the full-slice
+    # measurement path segments on - a brighter colour is dropped wholesale
+    # there. Tightest here is 4 at gray 190. **Re-check that before adding any
+    # id**, and note this deliberately diverges from the GUI's own palette.
+    # Each entry is (hue_degrees, value). The value is 0.95 - the same as the
+    # golden-ratio scheme - wherever that stays under the threshold. Hue 65 does
+    # not: yellow-green puts green at full value, and at 0.95 it renders gray
+    # 217, so the whole right cortex would be dropped by the segmentation. It is
+    # taken down to 0.83, which lands on gray 190.
+    LABEL_HUE_OVERRIDE: Dict[int, Tuple[float, float]] = {
+        3: (175.0, 0.95),   # Cortical GM Left  - was 307.5, magenta like Thalamus Left
+        4: (65.0, 0.83),    # Cortical GM Right - was 170.0, cyan like Thalamus Right
+        16: (285.0, 0.95),  # Thalamus Left     - was 319.9
+        17: (312.0, 0.95),  # Thalamus Right    - was 182.4
+        18: (145.0, 0.95),  # Third Ventricle   - was 44.9, orange like Fetal WM Left
+    }
+
     @staticmethod
     def _label_color_bgr(lab: int) -> Tuple[int, int, int]:
-        # Match FetoMorph._color_for_label (HSV with golden ratio), but return BGR for OpenCV.
+        """Colour for a label id, BGR for OpenCV.
+
+        Matches FetoMorph._color_for_label (HSV on a golden-ratio hue) except for
+        the ids in `LABEL_HUE_OVERRIDE_DEG`, which that scheme renders
+        indistinguishably from a structure they sit against.
+        """
         import colorsys
-        hue = (lab * 0.61803398875) % 1.0
-        r, g, b = colorsys.hsv_to_rgb(hue, 0.75, 0.95)
+        override = NiftiAreaSampler.LABEL_HUE_OVERRIDE.get(int(lab))
+        if override is not None:
+            hue_deg, value = override
+            hue = (float(hue_deg) % 360.0) / 360.0
+        else:
+            hue, value = (lab * 0.61803398875) % 1.0, 0.95
+        r, g, b = colorsys.hsv_to_rgb(hue, 0.75, value)
         return int(b * 255), int(g * 255), int(r * 255)
 
     def _overlay_labels(self, base_bgr: np.ndarray, idx: int) -> np.ndarray:
