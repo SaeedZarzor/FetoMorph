@@ -11,6 +11,10 @@ ENV/
 configs/*.json
 !configs/*.example.json
 
+# Local dependency pins: a pip freeze from one machine's environment.
+# Commit requirements.txt / requirements.win.txt instead.
+requirements.local.*
+
 # Project-specific generated folders
 assets/
 output/
