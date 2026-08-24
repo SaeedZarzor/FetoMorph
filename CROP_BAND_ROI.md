@@ -57,6 +57,37 @@ because bands are only tens of pixels wide — at 0.5 mm/px a 20 mm bar is 40 px
 which would span most of a 48 px crop, so 10 mm (20 px) is chosen instead. The
 label always states the length actually drawn.
 
+### Where the bar goes
+
+The bar is never drawn on the section. It goes in a blank strip added to the
+crop, and `scale_bar_position` picks the side:
+
+```json
+"scale_bar_position": "bottom"
+```
+
+`"bottom"` matches where the sampler puts the bar on the full slices, so neither
+set of outputs has a bar lying across tissue during measurement. `"top"` is the
+original placement and stays the default, so the `fetal_surface` config is
+unaffected. Either way the strip is grown until the bar and its label fit inside
+it, so the crop itself is never covered.
+
+For bottom placement, `scale_bar_gap_frac` sets how far the bar sits below the
+section, as a fraction of the crop height:
+
+```json
+"scale_bar_gap_frac": 0.12
+```
+
+Bands are only tens of pixels tall, so this has to scale off the crop and not off
+the padding — a gap taken as a fraction of the padding came to **2 rows** on the
+70 px atlas bands, near enough that the bar read as part of the image. At 0.12 a
+70 px band gets 8 rows, which is about the proportion the full slices leave.
+
+Note the strip makes the output taller than the crop: the 56x70 px atlas bands
+are written as 56x93 px files. A tool measuring these images must not take the
+file height for the section height.
+
 If `pixel_size_mm` is left `null`, the legacy bar is drawn instead:
 `scale_bar_length_scale × crop_width`, a fixed fraction of the frame that encodes
 no physical distance. Its `scale_bar_label` is then decoration, not a

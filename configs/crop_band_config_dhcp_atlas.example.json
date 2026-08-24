@@ -36,6 +36,10 @@
   "scale_bar_mm": null,
   "scale_bar_max_width_frac": 0.6,
   "scale_bar_top_pad_frac": 0.27,
+  "scale_bar_position_note": "Side of the crop the bar strip goes on. \"bottom\" matches where the sampler puts it on the full slices, so neither output has the bar lying on the section. \"top\" is the older placement and remains the default, so the fetal_surface config is unaffected.",
+  "scale_bar_position": "bottom",
+  "scale_bar_gap_frac": 0.12,
+  "scale_bar_gap_note": "Clearance between the section and the bar for bottom placement, as a fraction of the crop height: 0.12 of a 70 px band is 8 rows. The earlier behaviour scaled the gap off the padding instead and left only 2 rows, close enough that the bar read as part of the image. It is what makes the output 56x93 rather than 56x89; the cropped region itself is unchanged at 56x70.",
   "scale_bar_top_pad_px": null,
   "scale_bar_font_scale_ratio": 0.4,
 

@@ -225,3 +225,29 @@ Each axis folder includes:
 - `brain_slices\` PNGs with label and pial overlays.
 - `area_band_summary.json` and `area_band_run_summary.json` with metrics.
 - CSV and Excel summaries.
+
+## Scale bar
+
+Each slice PNG carries a bar of exactly 20 mm, measured from the column spacing
+of the slicing axis (a shorter round length is substituted, and stated in the
+label, if 20 mm will not fit the frame). Never calibrate a pixel size from the
+drawn bar — take it from the voxel grid, which is what the bar itself is built
+from.
+
+The bar sits in a blank strip **below** the section, not in a corner of it. On
+these volumes the brain reaches the lower-right corner in most slices, so a bar
+drawn there lay across tissue and interfered with measuring it; it was also being
+erased out of the section by the background pass that runs between the two
+scale-bar passes, taking a bar-shaped bite out of the brain with it.
+
+That makes the file taller than the section, so `brain_slices\` also holds:
+
+- `scale_bar_strip.json` — `scale_bar_strip_px`, `frame_height`, `frame_width`,
+  `image_height`.
+
+**Anything measuring these PNGs must resolve normalised coordinates against
+`frame_height`, not the file height.** `crop_band_roi` reads this sidecar and
+does exactly that, which is why its bounding boxes are unchanged by the strip; a
+tool that ignores it slides every box down by a fraction of the strip. A missing
+sidecar means a run from before the strip existed, where the bar was inside the
+frame.

@@ -24,6 +24,7 @@ Typical usage
 See functions/nifti_area_sampler.md for a detailed guide.
 """
 
+import json
 import os
 from dataclasses import dataclass, asdict
 from typing import Optional, Sequence, Tuple, List, Dict, Any
@@ -232,8 +233,116 @@ class NiftiAreaSampler:
     def _scale_bar_thickness(h: int, w: int) -> int:
         return max(NiftiAreaSampler.SCALE_BAR_MIN_THICKNESS_PX, int(0.006 * min(h, w)))
 
-    def _add_scale_bar(self, img: np.ndarray, bar_length_mm: float = 20.0) -> np.ndarray:
-        """Draw a metric scale bar (e.g. 20 mm) in the lower-right corner.
+    # Written next to the PNGs so downstream tools can tell the section's own
+    # frame from the strip appended under it. `crop_band_roi` needs it: its
+    # normalised bboxes are fractions of the frame, not of the file.
+    SCALE_BAR_SIDECAR_NAME = "scale_bar_strip.json"
+
+    @staticmethod
+    def _scale_bar_strip_top_gap(h: int) -> int:
+        """White rows left between the section and the top of the bar."""
+        return max(4, int(round(0.03 * h)))
+
+    def _scale_bar_label_metrics(self, h: int, w: int) -> Tuple[float, int]:
+        """`(font_scale, text_height)` for the label under the bar.
+
+        The height is measured from a stand-in "0 mm" rather than the real
+        label. Every length drawn here is digits plus "mm", none of which has a
+        descender, so they all render the same height - and taking it from a
+        fixed string keeps the strip one constant height per axis folder, which
+        is what the sidecar promises its readers.
+        """
+        font_scale = 0.4 if min(h, w) < 256 else 0.6
+        (_, text_h), _ = cv2.getTextSize("0 mm", cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
+        return font_scale, int(text_h)
+
+    @staticmethod
+    def _helper_bar_rows_from_bottom(h_padded: int, w: int) -> int:
+        """Rows above the bottom edge that `draw_new_scale_bar` writes into.
+
+        Its arithmetic is replicated rather than called because the answer is
+        needed before the image exists. `nifti_slice_to_image` invokes it with
+        the defaults, so `thickness_ratio=0.007`, `margin_ratio=0.08`,
+        `font_scale_ratio=0.9`, `font_thickness=1`.
+        """
+        base = min(h_padded, w)
+        thickness = max(1, int(0.007 * base))
+        margin = int(0.08 * base)
+        fscale = (thickness / 10.0) * 0.9 + 0.25
+        (_, th), _ = cv2.getTextSize("20 mm", cv2.FONT_HERSHEY_SIMPLEX, fscale, 1)
+        gap = max(3, int(0.35 * th))
+        # Bar bottom sits at h - margin; the label goes below it, and the bar is
+        # shifted up instead when that label would fall outside the frame.
+        y2 = h_padded - margin
+        shift = max(0, (y2 + gap + th) - (h_padded - 1))
+        return margin + thickness + shift
+
+    def _scale_bar_strip_px(self, h: int, w: int) -> int:
+        """Rows of blank space to append below an `h` x `w` slice for the bar.
+
+        Two things must fit, and the second is why this is not just a sum of
+        the label geometry.
+
+        1. Our own bar and label, with gaps above, between and below.
+        2. Everything `nifti_slice_to_image` draws. It runs between this
+           module's two scale-bar passes and always lays its own bar and
+           "20 mm" a fixed fraction above the *bottom* of whatever image it is
+           handed. `_redraw_exact_scale_bar` then erases those by whitening
+           neutral pixels - which turns any part of them that landed on tissue
+           into a bar-shaped hole in the section. Sizing the strip so the
+           helper's marks fall entirely inside it is what keeps the section
+           whole; that used to be handled by redrawing the final bar in exactly
+           the same place, which is no longer where the bar goes.
+
+        The helper's own margin grows with the padded height, so requirement 2
+        is a fixed point. It converges immediately in practice because the
+        margin grows by at most 0.08 of what was just added.
+        """
+        _, text_h = self._scale_bar_label_metrics(h, w)
+        thickness = self._scale_bar_thickness(h, w)
+        gap = max(3, int(round(0.35 * text_h)))
+        own = (
+            self._scale_bar_strip_top_gap(h)
+            + thickness
+            + gap
+            + text_h
+            + max(3, int(round(0.02 * h)))
+        )
+
+        strip = max(1, own)
+        for _ in range(8):
+            need = self._helper_bar_rows_from_bottom(h + strip, w)
+            if strip >= need:
+                break
+            strip = need
+        return max(own, strip)
+
+    def write_scale_bar_sidecar(self, png_dir: str, frame_h: int, frame_w: int, strip_px: int) -> None:
+        """Record the strip height alongside the PNGs it applies to."""
+        payload = {
+            "scale_bar_strip_px": int(strip_px),
+            "frame_height": int(frame_h),
+            "frame_width": int(frame_w),
+            "image_height": int(frame_h) + int(strip_px),
+            "note": (
+                "The scale bar is drawn in a blank strip below the section. "
+                "Resolve normalised boxes against frame_height, not image_height."
+            ),
+        }
+        with open(os.path.join(png_dir, self.SCALE_BAR_SIDECAR_NAME), "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+
+    def _add_scale_bar(self, img: np.ndarray, bar_length_mm: float = 20.0) -> Tuple[np.ndarray, int]:
+        """Append a strip below the slice and draw a metric scale bar in it.
+
+        Returns the padded image and the strip height, in rows.
+
+        The bar used to go in the lower-right corner of the section itself,
+        where in most slices it lay across the brain - the overlap this strip
+        exists to remove. It also fixes something less visible: a white bar over
+        tissue is turned into background by `nifti_slice_to_image`'s background
+        pass, so the section was being cut through wherever the bar crossed it,
+        and only the black bar redrawn in the same spot hid the damage.
 
         The bar spans exactly its labelled length at the column spacing of the
         current slicing axis. The span is inclusive of both end columns, so the
@@ -242,21 +351,27 @@ class NiftiAreaSampler:
         few pixels long. `bar_length_mm` is a preference: a shorter round length
         is substituted when it will not fit, never a truncated one.
 
+        The strip is filled black, matching the image background at this stage,
+        rather than the white it ends up. `detect_scale_bar_length` hunts for
+        near-white pixels in the bottom 40% of the frame, and on a white strip
+        it would lock onto the strip rather than the bar sitting in it.
+        `clean_background_keep_colored` whitens the strip later, it being
+        unsaturated.
+
         Note the bar is not the final one: `nifti_slice_to_image` re-measures and
         re-draws it when the PNG is written. `_redraw_exact_scale_bar` restores
         the exact length afterwards, and writes the label.
 
-        No label is drawn here on purpose. It would be white, and where the brain
-        reaches the corner the glyphs land on tissue; the background pass inside
-        `nifti_slice_to_image` keeps only saturated pixels, so those glyphs turn
-        into background and leave text-shaped holes in the section. The bar alone
-        is what `detect_scale_bar_length` needs, and the black bar drawn later
-        covers it exactly, having the same geometry.
+        No label is drawn here on purpose - it would have to be white, and the
+        background pass would turn it into background, leaving nothing. The bar
+        alone is what `detect_scale_bar_length` needs.
         """
         h, w = img.shape[:2]
         if h <= 0 or w <= 0:
-            return img
+            return img, 0
 
+        # Measured on the section's own frame, not the padded one, so the length
+        # chosen is unaffected by how tall the strip turns out to be.
         choice = self._scale_bar_choice(h, w, bar_length_mm)
         if choice is None:
             # Leaving no bar would strand detect_scale_bar_length with nothing to
@@ -267,37 +382,51 @@ class NiftiAreaSampler:
             )
         _, bar_px = choice
 
+        strip = self._scale_bar_strip_px(h, w)
+        padded = np.zeros((h + strip, w, img.shape[2]), dtype=img.dtype)
+        padded[:h] = img
+
         margin = self._scale_bar_margin(h, w)
         thickness = self._scale_bar_thickness(h, w)
-        y = h - margin
+        y1 = h + self._scale_bar_strip_top_gap(h)
         x2 = w - margin
         x1 = x2 - bar_px + 1
 
-        cv2.rectangle(img, (x1, y - thickness + 1), (x2, y), (255, 255, 255), -1)
-        return img
+        cv2.rectangle(padded, (x1, y1), (x2, y1 + thickness - 1), (255, 255, 255), -1)
+        return padded, strip
 
-    def _redraw_exact_scale_bar(self, png_path: str, bar_length_mm: float = 20.0) -> None:
+    def _redraw_exact_scale_bar(self, png_path: str, strip_px: int, bar_length_mm: float = 20.0) -> None:
         """Rewrite the saved PNG's scale bar at exactly `bar_length_mm`.
 
         `nifti_slice_to_image` discards the bar drawn above and re-creates it from
         a pixel measurement of the render (`detect_scale_bar_length` feeding
-        `draw_new_scale_bar`), which loses a pixel to inclusive endpoints and is
-        not tied to the voxel grid at all. The true spacing is known here, so the
-        bar is rebuilt from it once the PNG is on disk.
+        `draw_new_scale_bar`), which loses a pixel to inclusive endpoints, is
+        not tied to the voxel grid at all, and positions itself relative to the
+        bottom of the padded image rather than to the strip. The true spacing is
+        known here, so the bar is rebuilt from it once the PNG is on disk.
+
+        `strip_px` is the strip `_add_scale_bar` appended, needed to recover the
+        section's own frame height - the geometry everything else is measured
+        against.
 
         The old bar and label are cleared by their lack of colour. Nifti2image's
         background pass keeps only saturated pixels and whitens the rest, so once
         it has run the sole neutral non-white pixels are the bar and text it drew
         afterwards - including their anti-aliased edges, which a brightness test
-        alone leaves behind as a ghost outline.
+        alone leaves behind as a ghost outline. Clearing over the whole image is
+        safe because the strip is sized to contain everything that pass drew;
+        were it not, this is where a hole would appear in the section.
         """
         img = cv2.imread(png_path, cv2.IMREAD_COLOR)
         if img is None:
             return
 
-        h, w = img.shape[:2]
-        # Same choice as _add_scale_bar made, so the black bar lands exactly on
-        # the white one and the label states the length actually drawn.
+        h_full, w = img.shape[:2]
+        h = h_full - max(0, int(strip_px))
+        if h <= 0:
+            return
+        # Same choice as _add_scale_bar made, on the same frame, so the label
+        # states the length actually drawn.
         choice = self._scale_bar_choice(h, w, bar_length_mm)
         if choice is None:
             return
@@ -311,24 +440,26 @@ class NiftiAreaSampler:
 
         margin = self._scale_bar_margin(h, w)
         thickness = self._scale_bar_thickness(h, w)
-        y = h - margin
+        font_scale, text_h = self._scale_bar_label_metrics(h, w)
+        gap = max(3, int(round(0.35 * text_h)))
+
+        y1 = h + self._scale_bar_strip_top_gap(h)
+        y2 = y1 + thickness - 1
         x2 = w - margin
         x1 = x2 - bar_px + 1
 
         color = (0, 0, 0)  # Nifti2image leaves a white background
-        cv2.rectangle(img, (x1, y - thickness + 1), (x2, y), color, -1)
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, -1)
 
         label = f"{int(chosen_mm)} mm" if float(chosen_mm).is_integer() else f"{chosen_mm:g} mm"
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.4 if min(h, w) < 256 else 0.6
-        (text_w, text_h), _ = cv2.getTextSize(label, font, font_scale, 1)
-        text_x = max(margin, x2 - text_w)
-        text_y = min(h - 2, y + text_h + 3)
+        (text_w, _), _ = cv2.getTextSize(label, font, font_scale, 1)
+        text_x = max(2, min(w - text_w - 2, x2 - text_w))
+        text_y = min(h_full - 2, y2 + gap + text_h)
         cv2.putText(img, label, (text_x, text_y), font, font_scale, color, 1, cv2.LINE_AA)
 
         cv2.imwrite(png_path, img)
 
-    # ----- Axis-generic helpers -----
     def _area_at_index_axis(self, ax: int, idx: int) -> float:
         """Area (cm^2) for a given axis and integer slice index."""
         orig = self.axis
@@ -677,7 +808,8 @@ class NiftiAreaSampler:
                 if self.cfg.use_pial_overlay:
                     annotated = draw_pial_on_slice(annotated, self.axis, idx, self._pial_vox, self.spacing, self.cfg)
 
-                annotated = self._add_scale_bar(annotated, bar_length_mm=20.0)
+                frame_h, frame_w = annotated.shape[:2]
+                annotated, strip_px = self._add_scale_bar(annotated, bar_length_mm=20.0)
                 # Include sample order to avoid filename collisions when multiple
                 # sampled positions round to the same slice index.
                 out_path = os.path.join(
@@ -697,7 +829,16 @@ class NiftiAreaSampler:
                 )
                 # Nifti2image re-derived the bar from a pixel measurement; put
                 # back the length the voxel spacing actually implies.
-                self._redraw_exact_scale_bar(out_path, bar_length_mm=20.0)
+                self._redraw_exact_scale_bar(out_path, strip_px=strip_px, bar_length_mm=20.0)
+                # One strip height covers the folder: it depends only on the
+                # frame, which is fixed for a given axis. Written every slice so
+                # a run interrupted part-way still leaves a readable sidecar.
+                self.write_scale_bar_sidecar(
+                    os.path.join(cfg.out_dir, "brain_slices"),
+                    frame_h=frame_h,
+                    frame_w=frame_w,
+                    strip_px=strip_px,
+                )
                 saved_pngs.append(out_path)
             else:
                 saved_pngs.append(None)

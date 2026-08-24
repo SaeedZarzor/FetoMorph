@@ -57,6 +57,15 @@ class CropBandConfig:
     scale_bar_fallback_frac: float = 0.10  # legacy; retained for backward compatibility
     scale_bar_top_pad_frac: float = 0.22  # extra white space above cropped image
     scale_bar_top_pad_px: Optional[int] = None  # explicit top pad (overrides fraction)
+    # Which side of the crop the bar strip goes on. "top" is the original
+    # behaviour; "bottom" matches where the sampler now puts it on full slices,
+    # keeping the two sets of outputs consistent to read and to measure.
+    scale_bar_position: str = "top"
+    # Clearance between the section and the bar, as a fraction of the crop
+    # height, for "bottom" placement. Only 2 rows were left on the 70 px atlas
+    # bands before this existed, close enough that the bar read as part of the
+    # image; the full slices leave roughly 12% of their height.
+    scale_bar_gap_frac: float = 0.12
     scale_bar_length_scale: float = 0.30  # legacy fallback: bar as fraction of cropped width
     scale_bar_font_scale_ratio: float = 0.6  # smaller scale-bar text
     # Physical scale bar. Cropping is pure pixel slicing, so a crop keeps its
@@ -68,8 +77,32 @@ class CropBandConfig:
     scale_bar_nice_mm: Tuple[float, ...] = (50.0, 25.0, 20.0, 10.0, 5.0, 2.0, 1.0)
 
 
+SCALE_BAR_SIDECAR_NAME = "scale_bar_strip.json"
+
+
 def _clamp(val: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, val))
+
+
+def _scale_bar_strip_px(src_dir: Path) -> int:
+    """Rows the sampler appended below each slice to hold its scale bar.
+
+    The bar is no longer drawn inside the section - it sits in a strip under it -
+    so a slice PNG is taller than the frame these bboxes were measured against.
+    Normalised boxes have to be resolved against the frame, or every `y` slides
+    down by a fraction of the strip; on the coronal atlas boxes that is enough
+    to cross the interhemispheric midline and take in the wrong hemisphere.
+
+    No sidecar means an older run with the bar inside the frame, hence no strip.
+    """
+    path = src_dir / SCALE_BAR_SIDECAR_NAME
+    if not path.is_file():
+        return 0
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            return max(0, int(json.load(fh).get("scale_bar_strip_px", 0)))
+    except (ValueError, OSError, TypeError):
+        return 0
 
 
 def _bbox_from_mask(mask: np.ndarray, img_w: int, img_h: int, margin: int) -> Optional[BBox]:
@@ -110,8 +143,11 @@ def _bbox_has_foreground(img: np.ndarray, bbox: BBox, min_pixels: int) -> bool:
     return int(fg_mask.sum()) >= int(min_pixels)
 
 
-def _compute_auto_bbox(img: np.ndarray, cfg: CropBandConfig) -> Optional[BBox]:
-    h, w = img.shape[:2]
+def _compute_auto_bbox(img: np.ndarray, cfg: CropBandConfig, strip_px: int = 0) -> Optional[BBox]:
+    # Search the section only: the scale-bar strip is not part of the image the
+    # row fractions describe, and a box grown into it would carry the bar along.
+    h = max(1, img.shape[0] - max(0, int(strip_px)))
+    w = img.shape[1]
     # Auto-detect from foreground content within a column/row window.
     r0 = _clamp(int(cfg.row_fraction[0] * h), 0, h)
     r1 = _clamp(int(cfg.row_fraction[1] * h), r0 + 1, h)
@@ -132,8 +168,9 @@ def _compute_auto_bbox(img: np.ndarray, cfg: CropBandConfig) -> Optional[BBox]:
     return x0 + c0, y0 + r0, x1 + c0, y1 + r0
 
 
-def _compute_bbox(img: np.ndarray, cfg: CropBandConfig, axis: str) -> Optional[BBox]:
-    h, w = img.shape[:2]
+def _compute_bbox(img: np.ndarray, cfg: CropBandConfig, axis: str, strip_px: int = 0) -> Optional[BBox]:
+    h = max(1, img.shape[0] - max(0, int(strip_px)))
+    w = img.shape[1]
     manual_norm: Optional[Tuple[float, float, float, float]] = None
     if cfg.bbox_norm is not None:
         manual_norm = cfg.bbox_norm
@@ -147,7 +184,7 @@ def _compute_bbox(img: np.ndarray, cfg: CropBandConfig, axis: str) -> Optional[B
         if not cfg.fallback_to_auto:
             return None
 
-    return _compute_auto_bbox(img, cfg)
+    return _compute_auto_bbox(img, cfg, strip_px=strip_px)
 
 
 def _scale_bar_length_px(width: int, cfg: CropBandConfig) -> Tuple[Optional[int], str]:
@@ -192,6 +229,12 @@ def _format_mm(mm: float) -> str:
 
 
 def _draw_scale_bar_on_crop(cropped: np.ndarray, _source_img: np.ndarray, cfg: CropBandConfig) -> np.ndarray:
+    """Add a blank strip to the crop and draw the scale bar in it.
+
+    `cfg.scale_bar_position` chooses the side. "bottom" matches where the
+    sampler puts the bar on full slices; either way the bar never sits on the
+    section, which is the point of the strip.
+    """
     if not cfg.add_scale_bar:
         return cropped
 
@@ -201,11 +244,13 @@ def _draw_scale_bar_on_crop(cropped: np.ndarray, _source_img: np.ndarray, cfg: C
     if bar_len_px is None:
         return cropped
 
+    at_bottom = str(cfg.scale_bar_position).strip().lower() == "bottom"
+
     pad = cfg.scale_bar_top_pad_px if cfg.scale_bar_top_pad_px is not None else int(round(float(cfg.scale_bar_top_pad_frac) * max(1, h)))
     pad = max(0, int(pad))
 
-    # Estimate geometry first so we can enforce enough top white space for
-    # both the bar and the label ("20 mm") above the cropped content.
+    # Estimate geometry first so we can enforce enough white space for both the
+    # bar and the label ("20 mm") clear of the cropped content.
     base2 = max(1, min(h + max(1, pad), w))
     thickness = max(1, int(0.007 * base2))
     margin = max(4, int(0.08 * base2))
@@ -215,25 +260,38 @@ def _draw_scale_bar_on_crop(cropped: np.ndarray, _source_img: np.ndarray, cfg: C
     (text_w, text_h), _ = cv2.getTextSize(text, font, fscale, font_thickness)
     gap = max(3, int(0.35 * text_h))
     y_default = margin + thickness
-    # Minimum padding needed to keep label fully in the white strip.
-    needed_pad = y_default + gap + text_h + 4
+    # Clearance between section and bar when the strip is below it. Scaled off
+    # the crop height rather than off the padding, so it does not collapse on a
+    # small band: 0.06 * pad came to 2 rows on the atlas crops.
+    lead = max(6, int(round(float(cfg.scale_bar_gap_frac) * max(1, h))))
+    # Minimum padding needed to keep the label fully inside the strip. y_default
+    # already carries the thickness; the bottom form has to add it explicitly.
+    needed_pad = (lead + thickness if at_bottom else y_default) + gap + text_h + 4
     if pad < needed_pad:
         pad = int(needed_pad)
 
     if pad > 0:
         canvas = np.full((h + pad, w, 3), 255, dtype=np.uint8)
-        canvas[pad:pad + h, :, :] = base
+        if at_bottom:
+            canvas[0:h, :, :] = base
+        else:
+            canvas[pad:pad + h, :, :] = base
     else:
         canvas = base
 
-    # Keep bar+text fully inside the canvas (top-right in the top padding strip).
     h2, w2 = canvas.shape[:2]
 
-    # Start from top-right, but move left if needed so label fits too.
+    # Start from the right edge, but move left if needed so the label fits too.
     x_default = max(0, w2 - margin - int(bar_len_px))
     x_text_fit = max(0, w2 - margin - int(text_w))
     x_left = max(0, min(x_default, x_text_fit))
-    y_bottom = y_default if pad <= 0 else max(1, min(max(1, pad - (gap + text_h + 2)), y_default))
+    if pad <= 0:
+        y_bottom = y_default
+    elif at_bottom:
+        # Bar a clear `lead` rows under the section, label below it again.
+        y_bottom = min(h2 - 1, h + lead + thickness - 1)
+    else:
+        y_bottom = max(1, min(max(1, pad - (gap + text_h + 2)), y_default))
 
     # Drawn here rather than via draw_new_scale_bar: that helper places the right
     # edge at x_left + bar_len_px, which spans one column too many because both
@@ -289,6 +347,9 @@ def _crop_single_subject(cfg: CropBandConfig, root: Path) -> List[Dict[str, str]
             continue
         dst_dir = src_dir.parent / cfg.output_dirname
         dst_dir.mkdir(parents=True, exist_ok=True)
+        strip_px = _scale_bar_strip_px(src_dir)
+        if cfg.verbose and strip_px:
+            print(f"[crop] {axis}: excluding {strip_px}px scale-bar strip; boxes resolve against the section frame")
 
         for img_path in _iter_images(src_dir, cfg.glob_pattern):
             img = cv2.imread(str(img_path), cv2.IMREAD_UNCHANGED)
@@ -297,7 +358,7 @@ def _crop_single_subject(cfg: CropBandConfig, root: Path) -> List[Dict[str, str]
                     print(f"[crop] failed to read {img_path}")
                 continue
 
-            bbox = _compute_bbox(img, cfg, axis)
+            bbox = _compute_bbox(img, cfg, axis, strip_px=strip_px)
             if bbox is None:
                 if cfg.verbose:
                     print(f"[crop] no foreground found for {img_path}, skipping")
@@ -387,6 +448,8 @@ def load_crop_config_from_json(path: str) -> CropBandConfig:
         scale_bar_fallback_frac=float(data.get("scale_bar_fallback_frac", 0.10)),
         scale_bar_top_pad_frac=float(data.get("scale_bar_top_pad_frac", 0.22)),
         scale_bar_top_pad_px=(int(data["scale_bar_top_pad_px"]) if data.get("scale_bar_top_pad_px") is not None else None),
+        scale_bar_position=str(data.get("scale_bar_position", "top")),
+        scale_bar_gap_frac=float(data.get("scale_bar_gap_frac", 0.12)),
         scale_bar_length_scale=float(data.get("scale_bar_length_scale", 0.30)),
         scale_bar_font_scale_ratio=float(data.get("scale_bar_font_scale_ratio", 0.6)),
         pixel_size_mm=(float(data["pixel_size_mm"]) if data.get("pixel_size_mm") is not None else None),
@@ -428,6 +491,10 @@ def _parse_args() -> CropBandConfig:
                         help="Top white padding as fraction of cropped height.")
     parser.add_argument("--scale-bar-top-pad-px", type=int, default=None,
                         help="Top white padding in pixels (overrides fraction).")
+    parser.add_argument("--scale-bar-position", choices=("top", "bottom"), default=None,
+                        help="Side of the crop the scale-bar strip goes on (default: top).")
+    parser.add_argument("--scale-bar-gap-frac", type=float, default=None,
+                        help="Clearance between section and bar, as a fraction of crop height, for bottom placement.")
     parser.add_argument("--scale-bar-length-scale", type=float, default=None,
                         help="Scale bar length as fraction of cropped image width (e.g. 0.3).")
     parser.add_argument("--scale-bar-font-scale-ratio", type=float, default=None,
@@ -487,6 +554,10 @@ def _parse_args() -> CropBandConfig:
             cfg.scale_bar_top_pad_frac = args.scale_bar_top_pad_frac
         if args.scale_bar_top_pad_px is not None:
             cfg.scale_bar_top_pad_px = args.scale_bar_top_pad_px
+        if args.scale_bar_position is not None:
+            cfg.scale_bar_position = args.scale_bar_position
+        if args.scale_bar_gap_frac is not None:
+            cfg.scale_bar_gap_frac = args.scale_bar_gap_frac
         if args.scale_bar_length_scale is not None:
             cfg.scale_bar_length_scale = args.scale_bar_length_scale
         if args.scale_bar_font_scale_ratio is not None:
@@ -527,6 +598,8 @@ def _parse_args() -> CropBandConfig:
         scale_bar_fallback_frac=args.scale_bar_fallback_frac if args.scale_bar_fallback_frac is not None else 0.10,
         scale_bar_top_pad_frac=args.scale_bar_top_pad_frac if args.scale_bar_top_pad_frac is not None else 0.22,
         scale_bar_top_pad_px=args.scale_bar_top_pad_px,
+        scale_bar_position=args.scale_bar_position or "top",
+        scale_bar_gap_frac=args.scale_bar_gap_frac if args.scale_bar_gap_frac is not None else 0.12,
         scale_bar_length_scale=args.scale_bar_length_scale if args.scale_bar_length_scale is not None else 0.30,
         scale_bar_font_scale_ratio=args.scale_bar_font_scale_ratio if args.scale_bar_font_scale_ratio is not None else 0.6,
         # Physical-bar settings must be carried over here too. Dropping them made
