@@ -167,6 +167,23 @@ The `<stem>` level is dropped for a single mesh; `--no-axis-subdir` drops the
 axis level, which then puts the output beyond `crop_band_roi`'s reach — it
 identifies a subject by the presence of `axis_<a>/brain_slices`.
 
+### `scale_bar_strip.json`
+
+Both picture sets write one, next to their own PNGs. The scale bar sits in a
+blank strip appended *below* the section, so a PNG is taller than the frame that
+normalised crop boxes are fractions of; the sidecar is how `crop_band_roi`
+recovers the frame. Its keys are that tool's, not ours — it reads
+`scale_bar_strip_px` and treats a sidecar without it as a run from before the
+strip existed, meaning no strip at all. That failure is invisible in the output:
+the crop still lands, just low by `y_norm * strip_px` — 18 px at mid-height on a
+217 px outline frame, enough for a coronal box to cross the midline into the
+other hemisphere.
+
+To crop the outlines, write them where the tool looks: `--outline-dirname
+brain_slices`, **without** `--fill-png`. The two together are refused, because
+both sets would claim the same sidecar for different frames — the outlines have
+their own bounds, and `--outline-pitch` can rescale them again.
+
 ## Perimeter and LGI: which column to use
 
 Sealing the mesh rounds off fine sulcal detail, which biases any perimeter

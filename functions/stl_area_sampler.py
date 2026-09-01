@@ -480,13 +480,39 @@ def _draw_outline_scale_bar(canvas: np.ndarray, frame_h: int, strip_px: int,
 
 def _write_outline_sidecar(out_dir: str, frame_h: int, frame_w: int,
                            strip_px: int, pitch_mm: float) -> None:
-    """Record the bar strip so a cropper can exclude it, as the sampler does."""
+    """Record the bar strip so a cropper can exclude it, as the sampler does.
+
+    The key names are not ours to choose: ``crop_band_roi`` reads
+    ``scale_bar_strip_px`` and nothing else, and it silently treats a sidecar
+    without that key as a run from before the strip existed - i.e. no strip at
+    all. That is the one failure mode this file exists to prevent, and it is
+    invisible in the output: the crop lands, just in the wrong place. Every
+    normalised box then resolves against the full image height instead of the
+    section frame, sliding down by ``y_norm * strip_px`` - on a 217px outline
+    frame with its 37px strip, 18px at mid-height, which is how a coronal box
+    crosses the interhemispheric midline into the other hemisphere.
+
+    So this mirrors ``NiftiAreaSampler.write_scale_bar_sidecar`` field for
+    field. Both are read by the same function, and outlines can be written
+    straight into ``brain_slices/`` (``--outline-dirname``) where they are the
+    set it reads. ``mm_per_px`` is the one addition - the mesh path knows its
+    own pitch, and a cropped outline needs it for ``--pixel-size-mm``.
+    """
+    payload = {
+        "scale_bar_strip_px": int(strip_px),
+        "frame_height": int(frame_h),
+        "frame_width": int(frame_w),
+        "image_height": int(frame_h) + int(strip_px),
+        "mm_per_px": float(pitch_mm),
+        "note": (
+            "The scale bar is drawn in a blank strip below the section. "
+            "Resolve normalised boxes against frame_height, not image_height."
+        ),
+    }
     try:
         with open(os.path.join(out_dir, "scale_bar_strip.json"), "w",
                   encoding="utf-8") as f:
-            json.dump({"frame_h": int(frame_h), "frame_w": int(frame_w),
-                       "strip_px": int(strip_px),
-                       "mm_per_px": float(pitch_mm)}, f, indent=2)
+            json.dump(payload, f, indent=2)
     except Exception as ex:
         print(f"[StlAreaBand] Failed to write outline sidecar: {ex}")
 

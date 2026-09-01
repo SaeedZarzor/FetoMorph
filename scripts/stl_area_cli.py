@@ -230,7 +230,7 @@ def main() -> int:
                     help="Do not draw the mesh cross-section outlines")
     ap.add_argument("--outline-dirname", default=None,
                     help="Folder for the outlines (default brain_slices_outline). "
-                         "Pass 'brain_slices' together with --no-png to make the "
+                         "Pass 'brain_slices', without --fill-png, to make the "
                          "outlines the set crop_band_roi reads")
     ap.add_argument("--outline-pitch", type=float, default=None, dest="outline_pitch_mm",
                     help="mm per pixel for the outlines (default: --pitch)")
@@ -265,6 +265,22 @@ def main() -> int:
         ap.error("an output directory is required (--out or out_dir in --config)")
     if not stl_dir and not stl_path:
         ap.error("a mesh is required (--stl, --stl-dir, or stl_path/stl_dir in --config)")
+
+    # Both picture sets write scale_bar_strip.json into their own folder, and
+    # the outlines are rendered after the sampler - so aiming them at
+    # brain_slices/ while the filled PNGs are also going there leaves one
+    # sidecar describing the wrong frame. The two frames differ (the outlines
+    # have their own bounds, and --outline-pitch can change their scale again),
+    # so crop_band_roi would resolve every box against a height that belongs to
+    # the other set. Cheap to refuse, and invisible if we do not.
+    outline_dirname = args.outline_dirname or cfg_kwargs.get("outline_dirname")
+    fill_png = bool(args.fill_png or cfg_kwargs.get("save_png"))
+    if outline_dirname == "brain_slices" and fill_png and not args.no_outline:
+        ap.error("--outline-dirname brain_slices cannot be combined with "
+                 "--fill-png: both sets would write brain_slices/"
+                 "scale_bar_strip.json for different frames. Drop --fill-png "
+                 "to crop the outlines, or leave the outlines in their own "
+                 "folder.")
 
     axes: List[str]
     if args.all_axes or extra.get("all_axes"):
