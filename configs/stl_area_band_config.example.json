@@ -1,0 +1,30 @@
+{
+  "dataset": "Surface meshes (STL/VTK/PLY/OBJ), one per gestational week",
+  "labels_note": "A surface carries no labels, so there is no area_labels/label_legend here. Whichever regions you want measured have to be chosen upstream, when the mesh is generated.",
+  "axis_note": "x/y/z are the mesh's own axes. No anatomical meaning is claimed - a surface has no orientation convention we can trust, so do not read these as axial/coronal/sagittal without checking the dataset.",
+
+  "paths_note": "stl_dir/out_dir are machine-specific and deliberately empty here. Copy this file to configs/stl_area_band_config.json (gitignored) and fill them in, or pass --stl-dir/--out on the command line.",
+  "stl_dir": "",
+  "out_dir": "",
+  "axes": ["z"],
+
+  "n": 20,
+  "p": 0.9,
+
+  "solidify_note": "The mesh is voxelised, closed in 3D to seal its holes, then flood-filled from the grid border so the interior is whatever the outside cannot reach. Without this, open cross-sections make the area profile meaningless and the maximum lands on an artefact.",
+  "pitch_mm": 0.25,
+  "seal": 1,
+  "seal_note": "Sealing radius in voxels; the kernel is (2*seal+1)^3. This is the only step that erodes real sulcal detail, so keep it as small as will still seal. Raise it only if solid_volume_cm3 comes out far below mesh_volume_cm3, which means the fill leaked.",
+
+  "kernel_mm": 5.0,
+  "kernel_note": "Outer-perimeter closing size in millimetres, converted to pixels for the sampler. Specified in mm because a fixed pixel count is a different physical operation at every pitch: at 0.25 mm/vox the sampler's default of 5 px is a 1.25 mm closing, which finds no sulci and reports LGI ~= 1.00.",
+
+  "keep_nifti": false,
+  "keep_nifti_note": "The intermediate solid volume is written to a temp directory and deleted. Set true (and optionally nifti_dir) to keep it - roughly 25 MB per mesh at pitch 0.25.",
+
+  "save_png": true,
+  "profile_plot": true,
+  "show_crosshair": true,
+  "scale_to_mm": true,
+  "require_brain": false
+}
