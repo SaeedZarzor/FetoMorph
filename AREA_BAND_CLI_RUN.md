@@ -154,7 +154,15 @@ Available examples:
 | --- | --- | --- |
 | `area_band_config_batch.example.json` | `fetal_surface` subjects, batch | `3,4,5,6,11,12,13,14,15,17` |
 | `area_band_config_single.example.json` | one case | same as above |
-| `area_band_config_dhcp_atlas.example.json` | dHCP atlas GW21-GW36 | `5,6,7,8,9,14,15,16,17,18` |
+| `area_band_config_dhcp_atlas.example.json` | dHCP atlas GW21-GW36, `parcellations_scaled` | `5,6,7,8,9,14,15,16,17,18` |
+| `area_band_config_dhcp_atlas_cortex.example.json` | same, cortical GM included | `3,4,5,6,7,8,9,14,15,16,17,18` |
+| `area_band_config_dhcp_atlas_truesize.example.json` | dHCP atlas GW21-GW36, clean labels at true size (**needs a rescale step**) | `5,6,7,8,9,14,15,16,17,18` |
+| `area_band_config_dhcp_atlas_truesize_cortex.example.json` | same, cortical GM included | `3,4,5,6,7,8,9,14,15,16,17,18` |
+
+For size-aware work use the `truesize` pair. They cannot be pointed at an atlas
+folder directly - see
+[True-size dHCP atlas](#true-size-dhcp-atlas-the-root-to-use-for-size-aware-work)
+below.
 
 Both label lists are the cerebrum excluding the cortical ribbon, so the two
 datasets are measured on the same boundary (the `fetal_surface` runs omitted
@@ -167,6 +175,106 @@ python scripts\area_band_cli.py `
   --config "configs\area_band_config_batch.json" `
   --pial-line-thickness 1
 ```
+
+## True-size dHCP atlas (the root to use for size-aware work)
+
+The atlas ships two parcellation roots and **neither is usable as-is** for
+size-aware slice measurement:
+
+- `parcellations_scaled` is clean - one connected component per structure - but
+  has brain size normalised out (bbox flat at about 81x102x81 mm on every week),
+  so absolute area and perimeter carry no growth signal.
+- `parcellations_orig_size` preserves true size but is a badly
+  nearest-neighbour-warped parcellation. **This is what produces visible dots and
+  white lines in the renders.** At GW36 it holds **66,413 connected components
+  across 12 labels**, 63,305 of them 8 voxels or smaller against only 12 larger
+  than 1000. Its isolated-voxel rate is **35-65 per mille on all 16 weeks versus
+  0.03-0.10 in the scaled root**, and it carries 3,265 interior background hole
+  components against 22. The small midline structures are shattered and
+  volume-inflated 1.7-2.7x: cavum septum pellucidum arrives as 2,833 pieces whose
+  largest holds just **35.7%** of its volume, third ventricle as 1,032 pieces /
+  37.1%.
+
+**Do not try to filter the speckle out.** A 3x3x3 majority vote costs CSP 45.7%
+of its volume, third ventricle 34.7% and lateral ventricle L 20.5% - they are
+thin sheets, outvoted by the surrounding white matter - and drags GW36 coronal
+LGI from 1.749 to 1.581. Surgical speck removal (dissolve components under N
+voxels, refill from the nearest label) is no better: CSP still drifts 41-53% at
+every threshold tried, because roughly **64% of its voxels genuinely are specks**.
+There is nothing to recover locally.
+
+### The fix: rescale the clean labels to true size
+
+The two roots turn out to be related by a near-pure per-axis scale about the
+brain centre, so the clean labels can be resampled to the true size:
+
+```powershell
+python scripts\rescale_atlas_to_true_size.py `
+  --scaled-root "<atlas>\parcellations_scaled" `
+  --orig-root   "<atlas>\parcellations_orig_size" `
+  --dst         "<atlas>\parcellations_truesize" `
+  --label-legend "<atlas>\info\dhcp-atlas-summary-info-19-labels.csv"
+```
+
+The scale is measured from a **debris-free** mask (largest connected component,
+holes filled) - on the raw mask the floating specks around the orig_size brain
+inflate its bounding box and the scale comes out wrong. Resampling is
+nearest-neighbour, because any smooth interpolation would average label ids,
+which is the very defect that ruins GW27/GW28 in `parcellations_orig_size`.
+
+Result: Dice against the orig_size brain 0.9898 (GW21) to 0.9965 (GW32), extents
+matched exactly, and at GW36 **92 components instead of 66,413** with area within
+1.3% and LGI moving only 1.749 -> 1.735. At GW21 LGI goes 1.382 -> 1.299, that
+drop being the speckle-inflated perimeter coming off. All 16 weeks are present.
+
+Then point the `truesize` config's `batch_dir` at that root and run the CLI
+normally.
+
+**Shape is the scaled atlas's; size is the original-size atlas's.** State both
+wherever the numbers are reported - it is a methodological choice, not a repair
+of the original-size volumes. Never mix this root with a raw
+`parcellations_orig_size` run in one workbook.
+### Reading the results against the scaled run
+
+- **Dimensionless ratios (LGI) are comparable. Anything with units is not.**
+  The scaled atlas holds the bbox flat at about 81x102x81 mm across all weeks;
+  this root grows 51x62x48 mm at GW21 to 89x105x88 mm at GW36.
+- **Both roots carry all 16 weeks.** GW22's scaled file is named
+  `tissue-t22_dhcp-19.nii.gz`, without the `.00` every other week has, so a
+  glob finds it but a hardcoded `tissue-t22.00_...` name does not.
+- **GW27 and GW28 are not degraded here.** Their interpolated-label defect
+  belongs to `parcellations_orig_size` (see the warning below); the labels in
+  this root come from the clean scaled volumes, and the original-size data is
+  only ever read to measure a bounding box.
+- **The crop ROIs from `crop_band_config_dhcp_atlas*.json` do not transfer.**
+  Brain centring in the frame is identical between the roots, so the midline
+  constraint survives, but the fixed normalised box no longer lands on the same
+  anatomy. Tissue fill inside the coronal box is flat at 58-61% across the
+  scaled weeks and ramps 16% -> 67% at true size, so at GW21 the box is 84%
+  background. A true-size crop needs a brain-bbox-relative ROI, not a
+  frame-relative one.
+
+### Never point the sampler at `parcellations_orig_size` directly
+
+Besides the speckle, three separate things break, and the second one breaks
+silently:
+
+1. Every volume is `(180, 221, 180, 1)`. That trailing axis is a degenerate
+   singleton, not a time series and not per-label probability maps, but left in
+   place it makes `NiftiAreaSampler.mask` 4D, so `self.shape` gains a fourth
+   entry and each "2D" slice comes out as `(221, 180, 1)`.
+2. **GW27 and GW28 are float64 with continuously interpolated label values**
+   (~2.7M distinct values, and a background of denormal noise around `1e-81`
+   rather than exact zero). The sampler masks with `np.isin` against integer
+   ids, which is an exact float comparison, so those two weeks resolve to **5
+   and 13 mask voxels** - blank slices. Nothing catches it: `_check_labels`
+   applies `np.rint` before testing membership, so it reports labels 1-19
+   present and passes.
+3. Case folders are named `21`..`36`, where `parcellations_scaled` uses
+   `GW21`..`GW36`, so output folders would not line up between runs.
+
+Use `scripts/rescale_atlas_to_true_size.py` instead. It reads the original-size
+volumes only to measure a debris-free bounding box, so none of the above applies.
 
 ## Validation errors
 
