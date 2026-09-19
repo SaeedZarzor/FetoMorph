@@ -41,36 +41,47 @@ the outputs are directly comparable.
 
 ## Prerequisites
 
-- Python virtual environment already created at `.venv` in this repo.
+- Python 3.12 (the version used by the current project environment).
 - A mesh, or a folder of them. Files starting with `._` are skipped: those are
   macOS AppleDouble sidecars, which carry the `.stl` suffix but hold no geometry.
 
+For a first-time Windows setup from the repository root:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.win.txt
+```
+
+If `.venv` already exists, only activate it.
+
 ## Running
 
-Single mesh:
+Single mesh (PowerShell):
 
-```bash
-.venv/Scripts/python.exe scripts/stl_area_cli.py \
-  --stl "<add your mesh path>/29.stl" \
-  --out "<add your output path>" \
+```powershell
+python scripts\stl_area_cli.py `
+  --stl "<add your mesh path>\29.stl" `
+  --out "<add your output path>" `
   --axis z --n 20 --p 0.9
 ```
 
 Every mesh in a folder:
 
-```bash
-.venv/Scripts/python.exe scripts/stl_area_cli.py \
-  --stl-dir "<add your mesh folder>" \
-  --out "<add your output path>" \
+```powershell
+python scripts\stl_area_cli.py `
+  --stl-dir "<add your mesh folder>" `
+  --out "<add your output path>" `
   --axis z --n 20 --p 0.9
 ```
 
 All three axes:
 
-```bash
-.venv/Scripts/python.exe scripts/stl_area_cli.py \
-  --stl-dir "<add your mesh folder>" \
-  --out "<add your output path>" \
+```powershell
+python scripts\stl_area_cli.py `
+  --stl-dir "<add your mesh folder>" `
+  --out "<add your output path>" `
   --all-axes --n 20 --p 0.9
 ```
 
@@ -78,6 +89,11 @@ From a config: copy `configs/stl_area_band_config.example.json` to
 `configs/stl_area_band_config.json` (gitignored), fill in `stl_dir`/`out_dir`,
 then `--config configs/stl_area_band_config.json`. Command-line flags override
 the config file.
+
+Other useful controls include `--nifti-dir`, `--no-scale-to-mm`, `--no-outline`,
+`--outline-line-px`, `--no-profile-plot`, `--no-crosshair`, `--draw-contours`,
+and `--quiet`. Run `python scripts\stl_area_cli.py --help` for the complete
+option list.
 
 ## Settings that matter
 

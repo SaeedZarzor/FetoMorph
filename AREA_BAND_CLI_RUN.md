@@ -7,7 +7,7 @@ is written as `<add your ... path>`. Replace those with your own locations.
 
 ## Prerequisites
 
-- Python virtual environment already created at `.venv` in this repo.
+- Python 3.12 (the version used by the current project environment).
 - Each subject folder contains a label volume. The default name is `seg.nii.gz`;
   datasets that name it differently set `--seg-glob` / `"seg_pattern"` (the dHCP
   atlas ships `tissue-t30.00_dhcp-19.nii.gz`, so its config uses
@@ -15,6 +15,17 @@ is written as `<add your ... path>`. Replace those with your own locations.
 - Pial overlays are optional. If `lh.pial` / `rh.pial` are present and
   `--use-pial-overlay` is set they are drawn; datasets without surfaces simply
   run without them.
+
+For a first-time Windows setup from the repository root:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.win.txt
+```
+
+If `.venv` already exists, only activate it.
 
 ## Labels
 
@@ -77,17 +88,27 @@ Key inputs:
 - `--batch-dir`: Folder with subject subfolders; each must contain a label volume.
 - `--batch-out`: Output base folder.
 - `--axis`: One of `x`, `y`, or `z`.
+- `--all-axes`: Run `x`, `y`, and `z` in one command; axis subdirectories are
+  enabled automatically.
 - `--n`: Number of slices to sample (default 10).
 - `--p`: Top-p fraction for band (default 0.8).
 - `--labels`: Label ids to include (required; no built-in default).
 - `--label-legend`: Legend file used to name labels in messages and errors.
 - `--seg-glob`: Glob for the label volume in each case folder (default `seg.nii.gz`).
 - `--use-pial-overlay`: Enable pial overlay and auto-detect `lh.pial`/`rh.pial` per subject.
+- `--pial-lh` / `--pial-rh`: Explicit surface paths for a single case or for a
+  nonstandard layout.
 - `--pial-space`: Use `scanner` for pials in scanner RAS.
 - `--axis-subdir`: Writes to `axis_x`, `axis_y`, or `axis_z` under each subject output.
 - `--no-crosshair`: Disables the crosshair overlay.
 - `--pial-line-thickness`: Pial overlay line thickness in pixels.
 - `--no-pial-overlay`: Disable pial overlay (overrides config).
+- `--no-png` / `--no-profile-plot`: Disable slice PNGs or the profile plot.
+
+For `scanner` space, vertices are mapped through the matching NIfTI affine. Use
+`--pial-space tkr` only for surfaces in FreeSurfer tkregister RAS. The loader
+first looks for `lh.pial` and `rh.pial` beside the segmentation; explicit
+`--pial-lh` and `--pial-rh` paths override that lookup.
 
 ## Batch run for each axis
 
@@ -108,6 +129,10 @@ python scripts\area_band_cli.py `
   --batch-dir "<add your dataset path>" `
   --batch-out "<add your output path>" `
   --axis z --n 20 --p 0.9 --labels 3 4 5 6 11 12 13 14 15 17 --label-legend "<add your label legend path>" --use-pial-overlay --pial-space scanner --axis-subdir --no-crosshair --pial-line-thickness 1
+```
+
+The same run can be launched once with `--all-axes` instead of issuing three
+commands. It writes separate `axis_x`, `axis_y`, and `axis_z` directories.
 
 ## Run from a config file (with optional CLI overrides)
 
@@ -318,7 +343,6 @@ python scripts\area_band_cli.py `
 
 Tip: if you must use the batch config for a single case, clear batch mode by passing
 `--batch-dir "none"` and `--batch-out "none"` so the CLI treats them as empty.
-```
 
 ## Output layout
 
@@ -332,7 +356,26 @@ Outputs are written under the `--batch-out` folder, one subfolder per case:
 Each axis folder includes:
 - `brain_slices\` PNGs with label and pial overlays.
 - `area_band_summary.json` and `area_band_run_summary.json` with metrics.
-- CSV and Excel summaries.
+- `area_band_slices.csv` and `.xlsx` with run metadata and one row per sampled
+  slice.
+- `area_profile_axis0.csv`, `area_profile_axis1.csv`, and
+  `area_profile_axis2.csv`, plus `area_profiles.png` when profile plotting is
+  enabled.
+
+Important result fields:
+
+| field | meaning |
+| --- | --- |
+| `x_max`, `left`, `right` | Normalised positions along the selected axis. `left` and `right` bound the region whose area is at least `p * f_max`. |
+| `x_max_idx`, `left_idx`, `right_idx` | Corresponding voxel indices. |
+| `x_max_mm`, `left_mm`, `right_mm` | Corresponding positions in millimetres from index zero. |
+| `f_max` | Maximum selected-label cross-sectional area in cm². |
+| `band_length_mm` | Physical distance between the left and right band boundaries. |
+| `area_cm2` | Selected-label area of one sampled slice in cm². |
+| `perimeter_mm` | Sum of the external selected-mask contour lengths in millimetres. |
+| `perimeter_convex_mm` | External perimeter after morphological closing; this is the LGI denominator despite the historical field name. |
+| `lgi` | `perimeter_mm / perimeter_convex_mm` for that slice. |
+| `pos`, `idx`, `pos_mm` | Normalised slice position, voxel index, and distance from index zero in millimetres. |
 
 ## Scale bar
 

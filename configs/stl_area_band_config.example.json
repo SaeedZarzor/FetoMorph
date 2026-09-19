@@ -22,7 +22,7 @@
   "keep_nifti": false,
   "keep_nifti_note": "The intermediate solid volume is written to a temp directory and deleted. Set true (and optionally nifti_dir) to keep it - roughly 25 MB per mesh at pitch 0.25.",
 
-  "save_png": true,
+  "save_png": false,
   "profile_plot": true,
   "show_crosshair": true,
   "scale_to_mm": true,
