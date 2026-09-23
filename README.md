@@ -21,6 +21,7 @@ Built with PySide6 (Qt6), VTK, and OpenCV.
   - [Curvature Analysis](#curvature-analysis)
   - [Hausdorff Distance](#hausdorff-distance)
   - [Batch Processing](#batch-processing)
+  - [Batch Measurement Reports](#batch-measurement-reports)
   - [Multi-Objective Optimization](#multi-objective-optimization)
   - [FreeSurfer Integration](#freesurfer-integration)
   - [Visualization](#visualization)
@@ -54,16 +55,25 @@ Built with PySide6 (Qt6), VTK, and OpenCV.
    ```
 
 2. Create and activate a virtual environment:
+
+   macOS / Linux:
+
    ```bash
    python3 -m venv venv
-   source venv/bin/activate        # macOS / Linux
-   venv\Scripts\activate           # Windows
+   source venv/bin/activate
+   ```
+
+   Windows PowerShell:
+
+   ```powershell
+   py -m venv venv
+   .\venv\Scripts\Activate.ps1
    ```
 
 3. Install dependencies:
    ```bash
-   pip install --upgrade pip
-   pip install -r requirements.txt
+   python -m pip install --upgrade pip
+   python -m pip install -r requirements.txt
    ```
 
 ### Core Dependencies
@@ -106,7 +116,7 @@ The main window opens at 1200x900 with a ribbon toolbar, menu bar, 2D/3D viewer,
 | NIfTI Volumes | `.nii`, `.nii.gz` |
 | VTK Legacy | `.vtk` |
 | STL Meshes | `.stl` |
-| FreeSurfer Surfaces | `.pial`, `.white`, `.inflated`, `.sphere` |
+| FreeSurfer Surfaces | `.pial`, `.white`, `.inflated` |
 
 ### Output
 
@@ -179,6 +189,35 @@ Compare two contours with:
 - All hallmark measurements computed per image
 - Dynamic threshold adjustment when LGI falls below 1
 - Annotated output images and Excel summary generated automatically
+
+### Batch Measurement Reports
+
+This branch includes a reproducible command-line workflow that runs the image
+measurement pipeline across gestational-week and anatomical-axis folders. It
+writes one Excel report per folder and can add statistical summaries and
+boxplots to each workbook.
+
+Run the supplied full-slice example configuration:
+
+```powershell
+python scripts\run_master_measurement_reports.py --config scripts\master_measurement_reports_config.example.json
+```
+
+Run the cropped-slice configuration:
+
+```powershell
+python scripts\run_master_measurement_reports.py --config scripts\master_measurement_reports_cropped_config.example.json
+```
+
+Analyze the generated workbooks:
+
+```powershell
+python scripts\analyze_master_measurement_reports.py --input-root measurements
+```
+
+See [scripts/run_master_measurement_reports.md](scripts/run_master_measurement_reports.md)
+for configuration fields, calibration choices, review images, output layout,
+and additional examples.
 
 ### Multi-Objective Optimization
 
@@ -276,37 +315,56 @@ FetoMorph/
 │
 ├── widgets/                  # Custom UI dialogs and components
 │   ├── scaled_image_label.py       # 2D image viewer with measurements
-│   ├── VTK_Viewer.py               # 3D VTK rendering widget
-│   ├── Contour_threshold.py        # Contour threshold dialog
-│   ├── Kernel_size.py              # Morphology kernel size dialog
-│   ├── Slice_thickness.py          # Slice thickness dialog
-│   ├── Unit_scale.py               # Unit and pixel size dialog
-│   ├── Scalebar_set_scale.py       # Scale-bar calibration dialog
-│   ├── OptionsDialog.py            # Processing options dialog
-│   ├── GeometryDialog.py           # 3D mesh dimension editor
-│   ├── RegionDock.py               # NIfTI region selection dock
-│   ├── GestationalWeeksDialog.py   # Gestational week and axis selector
-│   ├── ImageBrowserDialog.py       # Thumbnail image browser
+│   ├── vtk_viewer.py               # 3D VTK rendering widget
+│   ├── contour_threshold.py        # Contour threshold dialog
+│   ├── kernel_size.py              # Morphology kernel size dialog
+│   ├── slice_thickness.py          # Slice thickness dialog
+│   ├── unit_scale.py               # Unit and pixel size dialog
+│   ├── scalebar_set_scale.py       # Scale-bar calibration dialog
+│   ├── options_dialog.py           # Processing options dialog
+│   ├── geometry_dialog.py          # 3D mesh dimension editor
+│   ├── region_dock.py              # NIfTI region selection dock
+│   ├── gestational_weeks_dialog.py # Gestational week and axis selector
+│   ├── image_browser_dialog.py     # Thumbnail image browser
 │   ├── optimization_widgets.py     # Optimization configuration dialog
-│   └── Recent_paths.py             # Recent file management
+│   └── recent_paths.py             # Recent file management
+│
+├── managers/                 # Application state, files, views, and dispatch
+│   ├── file_manager.py
+│   ├── measurement_dispatcher.py
+│   ├── metrics_store.py
+│   ├── settings_manager.py
+│   └── view_manager.py
 │
 ├── functions/                # Measurement and processing algorithms
 │   ├── measurements_image.py       # 2D image morphometrics
-│   ├── measurements_Nifti.py       # NIfTI volumetric analysis
+│   ├── measurements_nifti.py       # NIfTI volumetric analysis
 │   ├── measurements_stl.py         # STL mesh measurements
 │   ├── measurements_vtk.py         # VTK mesh measurements
-│   ├── measurement_Batch.py        # Batch image processing
+│   ├── measurement_batch.py        # Batch image processing
 │   ├── curvature.py                # Curvature profiling
 │   ├── hausdorff.py                # Hausdorff distance computation
-│   ├── Nifti2image.py              # NIfTI to PNG slice extraction
-│   ├── Nifti2Stl.py                # NIfTI to STL conversion
+│   ├── nifti_to_image.py           # NIfTI to PNG slice extraction
+│   ├── nifti_to_stl.py             # NIfTI to STL conversion
 │   ├── pial_to_stl.py              # FreeSurfer pial to STL
 │   ├── nii_extractor.py            # FreeSurfer region extraction
 │   └── optimization.py             # NSGA-II/III optimization
 │
 ├── helpers/                  # Utility modules
-│   ├── Helpers.py                  # Common helper functions
-│   └── Read_Excel.py               # Excel file reading
+│   ├── helpers.py                  # Common helper functions
+│   ├── read_excel.py               # Excel file reading
+│   ├── check_mesh.py               # Mesh validation
+│   └── slice_kind_classifier.py    # ONNX slice classifier
+│
+├── scripts/                  # Batch reporting and model utilities
+│   ├── run_master_measurement_reports.py
+│   ├── analyze_master_measurement_reports.py
+│   ├── master_measurement_reports_config.example.json
+│   ├── master_measurement_reports_cropped_config.example.json
+│   └── run_master_measurement_reports.md
+│
+├── models/
+│   └── slice_kind_cnn.onnx         # Slice-orientation classifier
 │
 ├── assets/
 │   └── icons/                # UI icons (PNG)
