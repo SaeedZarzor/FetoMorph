@@ -114,9 +114,9 @@ until data of the matching kind (image / mesh / volume) is loaded.</p>
   <li><b>Hausdorff distance</b> — the maximum shape difference between two
       contours; useful for comparing a simulation to a target.</li>
   <li><b>Similarity Profile (GASP)</b> — the validation tool. It scores the
-      measured brain against per-week reference statistics (weeks 24–36) and
-      reports the best-matching gestational age plus a per-metric breakdown and a
-      profile chart. It runs from an imported image, hand-entered values, or the
+      measured brain against per-week reference statistics (weeks 24–38 for full
+      slices, 24–36 for cropped) and reports the best-matching gestational age
+      plus a per-metric breakdown and a profile chart. It runs from an imported image, hand-entered values, or the
       current mesh section. Cropped/simulated inputs are scored with the
       scale-free normalized metrics. Method, penalties and weights are set in
       <i>Adjustments → GASP Options</i> and <i>Settings → Preferences</i>.</li>

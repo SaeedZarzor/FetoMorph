@@ -99,7 +99,7 @@ class UnitScaleDialog(QDialog):
         btns.rejected.connect(self.reject)
         form.addRow(btns)
         
-        btn_scalebar = btns.addButton("Set from scalebar…", QDialogButtonBox.ActionRole)
+        btn_scalebar = btns.addButton("Set auto scale from scalebar…", QDialogButtonBox.ActionRole)
         btn_scalebar.clicked.connect(self._start_scalebar)
 
     def _update_suffix(self, unit: str):

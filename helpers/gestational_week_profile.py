@@ -1,7 +1,7 @@
 """Gestational-week reference statistics loaded from a CSV.
 
 Mirrors the per-week structure documented in ``profile_info.md`` (metadata
-plus three metric-summary tables) for gestational weeks 24-36.
+plus three metric-summary tables) for gestational weeks 24-38.
 """
 
 from dataclasses import dataclass
@@ -118,7 +118,7 @@ class GestationalWeekProfile:
     for every metric listed on :class:`WeekProfile`.
     """
 
-    VALID_RANGE = range(24, 37)
+    VALID_RANGE = range(24, 39)   # weeks 24-38 (STL full-slice reference)
     AXES = ("axial", "coronal", "sagittal")
 
     def __init__(self, csv_path: str | Path) -> None:

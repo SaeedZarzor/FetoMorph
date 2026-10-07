@@ -212,7 +212,7 @@ class SettingsManager:
 
         if dlg.exec() != QDialog.Accepted:
             if dlg._get_status():
-                ok = self.set_scale_from_scalebar()
+                ok = self.auto_set_scale_from_scalebar()
                 return ok
             else:
                 return False
@@ -228,6 +228,104 @@ class SettingsManager:
         self.pixel_size = scale
 
         print(f"[Units] {unit}  |  [Scale] {scale} {unit}/pixel  —  {os.path.basename(self.mw.current_path)}")
+        return True
+
+    def auto_set_scale_from_scalebar(self) -> bool:
+        """Read the scale bar burned into the current image and set the scale.
+
+        Detects the bar and OCRs its label, then shows what was found for
+        confirmation. Falls back to the manual draw-a-line flow when nothing
+        readable is found or the user asks for it.
+
+        Returns:
+            True if a scale was set, False if cancelled or unreadable.
+        """
+        if self.mw.current_kind != "image":
+            QMessageBox.information(
+                self.mw, "Auto Scale",
+                "Open a 2D image to read its scalebar.")
+            return False
+        path = self.mw.current_path
+        if not path or not os.path.isfile(path):
+            QMessageBox.information(self.mw, "Auto Scale", "Load an image first.")
+            return False
+
+        from helpers.scalebar_reader import measure_scalebar_contours, read_scalebar
+        from widgets.scalebar_auto_dialog import ScalebarAutoDialog
+
+        img = cv2.imread(path, cv2.IMREAD_COLOR)
+        if img is None:
+            QMessageBox.warning(self.mw, "Auto Scale",
+                                f"Could not read the image:\n{path}")
+            return False
+
+        print("[Auto Scale] Searching for a scalebar…")
+        try:
+            reading = read_scalebar(img)
+        except Exception as ex:
+            logger.error("Scalebar reading failed: %s", ex)
+            QMessageBox.critical(self.mw, "Auto Scale Failed",
+                                 f"{type(ex).__name__}: {ex}")
+            return False
+
+        if reading is None:
+            print("[Auto Scale] No readable scalebar found.")
+            ask = QMessageBox.question(
+                self.mw, "Auto Scale",
+                "No scalebar could be read from this image.\n\n"
+                "Measure it by hand instead?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if ask == QMessageBox.Yes:
+                return self.set_scale_from_scalebar()
+            return False
+
+        print(f"[Auto Scale] {reading.summary()}")
+        # The drawn bar is ink on the slice, so the brain segmentation counts
+        # it as a contour; measure how much area it adds so the dialog can
+        # offer to filter it out via the contour-area threshold.
+        contours = measure_scalebar_contours(img, reading)
+        dlg = ScalebarAutoDialog(reading, img, parent=self.mw,
+                                 contours=contours,
+                                 current_threshold=float(self.cnt_threshold))
+        if dlg.exec() != QDialog.Accepted:
+            if dlg.outcome() == ScalebarAutoDialog.MANUAL:
+                return self.set_scale_from_scalebar()
+            print("[Auto Scale] Canceled.")
+            return False
+
+        try:
+            px_per_unit, unit = dlg.values()
+        except ValueError as ex:
+            QMessageBox.warning(self.mw, "Auto Scale", str(ex))
+            return False
+        if px_per_unit <= 0:
+            QMessageBox.warning(self.mw, "Auto Scale", "Scale must be positive.")
+            return False
+
+        self.units_length = unit
+        size_per_px = 1.0 / px_per_unit
+        self.pixel_size = size_per_px
+        self.image_scales[path] = float(size_per_px)
+        # Mark the image as already carrying a scalebar so the measurement
+        # exporters do not draw a second one over the original.
+        self.image_scale_from_scalebar[path] = True
+
+        print(f"[Auto Scale] {reading.bar_px:.0f} px = {dlg.len_spin.value():g} {unit}  "
+              f"→ pixel size {size_per_px:.6f} {unit}/pixel for {os.path.basename(path)}")
+
+        # Raise the contour-area threshold past the bar so it drops out of
+        # every area / perimeter / sulci measurement on this image.
+        new_threshold = dlg.contour_threshold_mm2()
+        if new_threshold is not None:
+            previous = float(self.cnt_threshold)
+            self.cnt_threshold = float(new_threshold)
+            bar_mm2 = contours.scalebar_max_px2 * size_per_px ** 2
+            print(f"[Auto Scale] Contour area threshold {previous:.2f} → "
+                  f"{self.cnt_threshold:.2f} mm² to exclude the scalebar "
+                  f"({bar_mm2:.1f} mm² across {contours.count} contour(s)).")
+        elif contours is not None and not contours.is_safe():
+            print("[Auto Scale] Scalebar contour area is too close to the brain "
+                  "contour to filter out safely; threshold left unchanged.")
         return True
 
     def set_scale_from_scalebar(self) -> bool:

@@ -13,6 +13,7 @@ area_band_output_multi/
 docs/
 numbered_batch_full/
 numbered_batch_cropped/
+STL_results/
 
 # Python cache/build artifacts
 __pycache__/

@@ -2610,8 +2610,12 @@ class MeasurementDispatcher:
         """
         # Cropped sub-slices (not_full_slice) are compared against the cropped
         # reference; full MRI slices against the full-slice reference.
+        # The full-slice reference is the STL-derived sheet
+        # (gestational_week_reference_STL.csv, weeks 24-38, one uniform pixel
+        # size); the older combined sheet (gestational_week_reference_combine.csv,
+        # weeks 24-36, mixed pixel sizes) is kept in Examples/ for reference only.
         examples_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Examples")
-        full_csv = os.path.join(examples_dir, "gestational_week_reference.csv")
+        full_csv = os.path.join(examples_dir, "gestational_week_reference_STL.csv")
         cropped_csv = os.path.join(examples_dir, "gestational_week_cropped_reference.csv")
         is_cropped = self._is_cropped_slice(measured)
         csv_path = cropped_csv if is_cropped else full_csv

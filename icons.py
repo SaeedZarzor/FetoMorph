@@ -28,7 +28,10 @@ def set_icons(ui, assets: Path) -> None:
         "act_save_data":        "icons/save.png",
         "act_export_metrics":   "icons/export_to_excel.png",
         "act_set_image_scale":  "icons/scale.png",
-        "act_set_scale":        "icons/scale_bar.png",
+        # "act_set_scale":        "icons/scale_bar.png",
+        # Shares the scalebar artwork with the manual tool; the button labels
+        # ("Set Scale From Scalebar" / "Auto Scale From Scalebar") separate them.
+        "act_auto_scale":       "icons/scale_bar.png",
         "act_kernel_size":      "icons/kernel.png",
         "act_annotate_square":  "icons/crop_1.png",
         "act_cnt_threshold":    "icons/threshold.png",
