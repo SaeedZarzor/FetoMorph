@@ -32,6 +32,7 @@ class FileManager:
         self.current_output_dir: str | None = None
         self.current_output_3D_slices: str | None = None
         self.last_annotated_path: str | None = None
+        self.last_mask_path: str | None = None
         self.recent = RecentPaths("YourOrg", "YourApp")
 
     # ------------------------------------------------------------------
@@ -328,6 +329,10 @@ class FileManager:
             QMessageBox.critical(mw, "Open Failed", "Could not read image file.")
             return
         mw.image_label.setImage(pm)
+        # A crop/mask derived from the previous image must not leak into the
+        # measurements of the newly loaded one.
+        self.last_annotated_path = None
+        self.last_mask_path = None
         mw.view.show_widget(mw.image_label)
         mw.view.set_slice_controls(False)
         if hasattr(mw, "zoom_controls"):

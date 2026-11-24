@@ -34,6 +34,7 @@ def set_icons(ui, assets: Path) -> None:
         "act_auto_scale":       "icons/scale_bar.png",
         "act_kernel_size":      "icons/kernel.png",
         "act_annotate_square":  "icons/crop_1.png",
+        "act_draw_mask":        "icons/mask.png",
         "act_cnt_threshold":    "icons/threshold.png",
         "act_meas_allmarks":    "icons/hallmarks.png",
         "act_meas_area":        "icons/area.png",

@@ -235,6 +235,7 @@ class MainWindow(QMainWindow):
     current_output_dir     = _file_prop("current_output_dir")
     current_output_3D_slices = _file_prop("current_output_3D_slices")
     last_annotated_path    = _file_prop("last_annotated_path")
+    last_mask_path         = _file_prop("last_mask_path")
     recent                 = _file_prop("recent")
 
     del _file_prop
@@ -444,6 +445,7 @@ class MainWindow(QMainWindow):
         Adjustments_menu.addAction(self.act_cavity_options)
 
         self.act_annotate_square = QAction("Annotation…", self); self.act_annotate_square.setShortcut(QKeySequence("Ctrl+Shift+A"));self.act_annotate_square.setToolTip("Drag a square on the image and save the crop to the temp folder"); self.act_annotate_square.triggered.connect(self.annotate_square); Adjustments_menu.addAction(self.act_annotate_square)
+        self.act_draw_mask = QAction("Draw Mask…", self); self.act_draw_mask.setShortcut(QKeySequence("Ctrl+Alt+M")); self.act_draw_mask.setToolTip("Paint a mask over the image; it is saved as a new image (same size and pixel size) and all further measurements run on it"); self.act_draw_mask.triggered.connect(self.draw_mask); Adjustments_menu.addAction(self.act_draw_mask)
         self.act_upscale_image = QAction("Upscale Image…", self); self.act_upscale_image.setShortcut(QKeySequence("Ctrl+Shift+U")); self.act_upscale_image.setToolTip("Smooth LANCZOS upscale + sharpen the current image and reload it"); self.act_upscale_image.triggered.connect(self.upscale_current_image); Adjustments_menu.addAction(self.act_upscale_image)
         self.act_choose_regions = QAction("ROI selection…", self); self.act_choose_regions.setShortcut(QKeySequence("Ctrl+Shift+R"));self.act_choose_regions.setToolTip("Pick label IDs to include when processing NIfTI Hallmarks"); self.act_choose_regions.triggered.connect(self.choose_regions_dock);Adjustments_menu.addAction(self.act_choose_regions)
         self.act_set_physical_dim = QAction("Mesh dimensions…", self);self.act_set_physical_dim.setToolTip("Define the physical dimensions of the VTK mesh."); self.act_set_physical_dim.triggered.connect(self.settings.load_mesh_and_ask_geometry);Adjustments_menu.addAction(self.act_set_physical_dim)
@@ -498,6 +500,7 @@ class MainWindow(QMainWindow):
             self.act_save_data,
             self.act_choose_regions,
             self.act_annotate_square,
+            self.act_draw_mask,
             self.act_nitfi2png,
             self.act_slice_thickness,
             self.act_meas_curvature,
@@ -535,7 +538,7 @@ class MainWindow(QMainWindow):
         print("Application started. Progress output will appear here.")
 
         self.all_actions = {self.act_show_results, self.act_Reset, self.act_close, self.act_quit, self.act_imp_img, self.act_imp_vtk, self.act_imp_stl, self.act_imp_nii, self.act_save, self.act_save_data, self.act_export_metrics, self.act_meas_allmarks, self.act_meas_perimeter, self.act_meas_area, self.act_meas_volumes, self.act_meas_lgi, self.act_meas_sulci, self.act_meas_curvature, self.act_meas_compactness, self.act_hausdorf, self.act_set_custom_label,  self.act_set_image_scale, # self.act_set_scale, 
-        self.act_auto_scale,  self.act_kernel_size, self.act_perimeter_options, self.act_slice_thickness,  self.act_cnt_threshold, self.act_sulcus_depth_threshold, self.act_contour_outer, self.act_contour_subtract, self.act_contour_internal_only, self.act_cavity_options, self.act_annotate_square, self.act_choose_regions, self.act_optimization, self.act_nitfi2png, self.act_niftiextractor, self.act_pial_to_stl, self.act_pial_merge, self.act_img_batch, self.act_set_physical_dim}
+        self.act_auto_scale,  self.act_kernel_size, self.act_perimeter_options, self.act_slice_thickness,  self.act_cnt_threshold, self.act_sulcus_depth_threshold, self.act_contour_outer, self.act_contour_subtract, self.act_contour_internal_only, self.act_cavity_options, self.act_annotate_square, self.act_draw_mask, self.act_choose_regions, self.act_optimization, self.act_nitfi2png, self.act_niftiextractor, self.act_pial_to_stl, self.act_pial_merge, self.act_img_batch, self.act_set_physical_dim}
         self._update_process_actions()
     
 
@@ -607,6 +610,7 @@ class MainWindow(QMainWindow):
         self.ribbon.add_action("Adjustments", self.act_slice_kind_override)
         self.ribbon.add_action("Adjustments", self.act_cavity_options)
         self.ribbon.add_action("Adjustments", self.act_annotate_square)
+        self.ribbon.add_action("Adjustments", self.act_draw_mask)
         self.ribbon.add_action("Adjustments", self.act_upscale_image)
         self.ribbon.add_action("Adjustments", self.act_choose_regions)
         self.ribbon.add_action("Adjustments", self.act_set_physical_dim)
@@ -890,6 +894,7 @@ class MainWindow(QMainWindow):
         # Upscaling is a 2-D raster operation — only enabled when an image is
         # loaded (re-enabled in the "image" branch below).
         self.act_upscale_image.setEnabled(False)
+        self.act_draw_mask.setEnabled(False)
 
         if kind == "stl" or (kind is not None and kind.startswith("vtk")):
             is_planar = self._flat_axis is not None
@@ -950,6 +955,7 @@ class MainWindow(QMainWindow):
 
         elif kind == "image":
             self._set_contour_accounting_enabled(True)
+            self.act_draw_mask.setEnabled(True)
             self.act_meas_area.setEnabled(True)
             self.act_meas_perimeter.setEnabled(True)
             self.act_meas_compactness.setEnabled(True)
@@ -1013,7 +1019,7 @@ class MainWindow(QMainWindow):
     
     def reset_view(self):
         """Reload the original file, clear all on-screen annotations, and reset navigation."""
-        for meth in ("cancel_square_selection", "cancel_scalebar_measure", "clear_annotations", "clear_line_annotations"):
+        for meth in ("cancel_square_selection", "cancel_scalebar_measure", "clear_annotations", "clear_line_annotations", "clear_mask_overlay"):
             if hasattr(self.image_label, meth):
                 getattr(self.image_label, meth)()
 
@@ -1021,6 +1027,7 @@ class MainWindow(QMainWindow):
         kind = self.current_kind
         path = self.current_path
         self.last_annotated_path = None
+        self.last_mask_path = None
         self.nav_tb.hide()
         self.vtk_view.delete_slice_section()
         if not path or not os.path.exists(path):
@@ -1348,6 +1355,98 @@ class MainWindow(QMainWindow):
         print(f"[Upscale] {src} → {out_path} ({scale}x)")
         try:
             self.statusBar().showMessage(f"Upscaled {scale}× → {out_path}", 5000)
+        except Exception:
+            logger.debug("statusBar showMessage failed", exc_info=True)
+
+    def draw_mask(self):
+        """Paint a mask over the current 2-D image and measure on it from now on.
+
+        The mask is saved (default ``<image dir>/<name>_mask.png``, or the
+        session temp folder if the dialog is cancelled) as black ROI on a white
+        background with the same width/height (and DPI) as the original.
+        It becomes ``last_annotated_path``, which every image measurement
+        reads instead of the original; the pixel size stays keyed on
+        ``current_path`` (the original), so the calibration is unchanged.
+        Reset (or loading another file) goes back to the original.
+        """
+        from widgets.mask_editor_window import MaskEditorWindow
+
+        if self.current_kind != "image" or not self.current_path:
+            QMessageBox.warning(self, "Draw Mask", "Load a 2-D image first.")
+            return
+        if self.image_label.is_mask_painting():
+            return
+
+        # Paint over the original, not a measurement result that may be on screen.
+        original = QImage(self.current_path)
+        if original.isNull():
+            QMessageBox.warning(self, "Draw Mask", f"Could not read image:\n{self.current_path}")
+            return
+        self.view.show_widget(self.image_label)
+        self.image_label.setImage(QPixmap.fromImage(original))
+
+        # Continue editing the previous mask of this image, if any.
+        initial = None
+        if self.last_mask_path and os.path.exists(self.last_mask_path):
+            prev = cv2.imread(self.last_mask_path, cv2.IMREAD_GRAYSCALE)
+            if prev is not None:
+                initial = prev < 128
+
+        if getattr(self, "_mask_window", None) is None:
+            # floating tool window; shows/hides itself with the label's mask mode
+            self._mask_window = MaskEditorWindow(self.image_label, self)
+
+        def _on_done(mask):
+            if not mask.any():
+                QMessageBox.warning(self, "Draw Mask", "The mask is empty — measurements stay on the current image.")
+                return
+            h, w = mask.shape
+            out = np.full((h, w, 3), 255, np.uint8)
+            out[mask] = 0
+            qimg = QImage(out.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+            qimg.setDotsPerMeterX(original.dotsPerMeterX())
+            qimg.setDotsPerMeterY(original.dotsPerMeterY())
+
+            # Default next to the original; cancelling the dialog keeps the
+            # mask in the session temp folder (deleted when the app closes).
+            base = os.path.splitext(os.path.basename(self.current_path))[0]
+            default = os.path.join(os.path.dirname(self.current_path), f"{base}_mask.png")
+            out_path, _ = QFileDialog.getSaveFileName(self, "Save Mask Image", default, "PNG image (*.png)")
+            if not out_path:
+                from datetime import datetime
+                out_dir = os.path.join(self.temp_dir, "masks"); os.makedirs(out_dir, exist_ok=True)
+                out_path = os.path.join(out_dir, f"{base}_mask_{datetime.now():%Y%m%d_%H%M%S}.png")
+            elif not out_path.lower().endswith(".png"):
+                out_path += ".png"
+            if os.path.abspath(out_path) == os.path.abspath(self.current_path):
+                QMessageBox.warning(self, "Draw Mask", "Choose a different file name — the original image must not be overwritten.")
+                return
+            if not qimg.save(out_path, "PNG"):
+                QMessageBox.warning(self, "Draw Mask", "Failed to save the mask image.")
+                return
+
+            self.last_annotated_path = out_path
+            self.last_mask_path = out_path
+            if self.current_path in self.settings.image_scales:
+                self.settings.image_scales[out_path] = self.settings.image_scales[self.current_path]
+            msg = f"[Mask] Saved {w}x{h} mask ({int(mask.sum())} px) → {out_path}; measurements now use the mask"
+            print(msg)
+            try:
+                self.statusBar().showMessage(f"Saved mask: {out_path}", 5000)
+            except Exception:
+                logger.debug("statusBar showMessage failed", exc_info=True)
+
+        def _on_cancel():
+            try:
+                self.statusBar().showMessage("Mask editing cancelled.", 3000)
+            except Exception:
+                logger.debug("statusBar showMessage failed", exc_info=True)
+
+        self.image_label.start_mask_paint(_on_done, _on_cancel, initial_mask=initial)
+        try:
+            self.statusBar().showMessage(
+                "Mask: click points to draw a spline outline (double-click a point = corner), click the first point / Enter "
+                "to fill (B = brush, S = spline, E = eraser, Ctrl+Z undo). Enter again saves, Esc cancels.")
         except Exception:
             logger.debug("statusBar showMessage failed", exc_info=True)
 

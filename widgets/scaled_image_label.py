@@ -7,6 +7,16 @@ rectangle annotations can also be added programmatically.
 """
 
 from deps import *
+from PySide6.QtCore import QPointF
+from PySide6.QtGui import QPolygonF
+
+
+MASK_COLOR = QColor(255, 60, 60)
+MASK_OPACITY = 0.45
+MASK_UNDO_LIMIT = 30
+SPLINE_COLOR = QColor(255, 220, 0)
+SPLINE_HANDLE_PX = 9          # widget-px radius for grabbing/closing on a point
+SPLINE_SAMPLES_PER_SEG = 24
 
 
 class ScaledImageLabel(QLabel):
@@ -14,9 +24,12 @@ class ScaledImageLabel(QLabel):
     Aspect-fit image label with:
       - scalebar measurement mode (click-drag line, reports pixel length)
       - square selection mode with QRubberBand, returns image-rect + cropped QImage
+      - mask painting mode (spline or brush/eraser in image pixels, image-sized overlay)
     It draws self._pix manually; QLabel's built-in pixmap is *not* used.
     """
     zoomChanged = Signal(float)
+    maskBrushChanged = Signal(int)
+    maskModeChanged = Signal(bool)
 
     def __init__(self, parent=None):
         """Initialise the scaled image label.
@@ -65,6 +78,25 @@ class ScaledImageLabel(QLabel):
         # ---- persistent line annotations ----
         self._line_annots: list[dict] = []  # [{p1, p2, label, color}]
 
+        # ---- mask painting state ----
+        # ARGB32 overlay with the same size as the pixmap; alpha > 0 = masked.
+        self._mask_img: QImage | None = None
+        self._mask_active: bool = False
+        self._mask_erase: bool = False           # eraser toggle (right-drag always erases)
+        self._mask_stroke_erase: bool = False    # erase state of the stroke in progress
+        self._mask_brush_px: int = 10            # brush diameter in *image* pixels
+        self._mask_last_img: QPointF | None = None
+        self._mask_cursor_w: QPoint | None = None
+        self._mask_undo: list[QImage] = []
+        self._mask_backup: QImage | None = None  # restored on cancel
+        self._mask_finished_cb = None            # callable(np.ndarray bool HxW) -> None
+        self._mask_cancel_cb = None
+        self._mask_tool: str = "spline"          # "spline" | "brush"
+        self._spline_pts: list[QPointF] = []     # pending control points (image coords)
+        self._spline_drag_idx: int | None = None
+        self._spline_corner: list[bool] = []     # parallel to _spline_pts; True = sharp corner
+        self._spline_closed_snapshot = None      # (pts, corners) of a shape closed by the last click
+
     # ---------------- public API ----------------
     def hasImage(self) -> bool:
         """Return True if a non-null pixmap is loaded."""
@@ -84,10 +116,12 @@ class ScaledImageLabel(QLabel):
         self._zoom_factor = 1.0
         self._pan_dx = 0
         self._pan_dy = 0
+        self._drop_mask()
         self.update()
 
     def clearImage(self):
         """Remove the displayed pixmap and repaint."""
+        self._drop_mask()
         self._pix = QPixmap()
         self._zoom_factor = 1.0
         self._pan_dx = 0
@@ -224,6 +258,350 @@ class ScaledImageLabel(QLabel):
         if self._annots:
             self._annots.pop()
             self.update()
+
+    # --- mask painting mode ---
+    def start_mask_paint(self, finished_cb, cancel_cb=None, initial_mask: np.ndarray | None = None):
+        """Enable painting of an image-sized mask over the pixmap.
+
+        Spline tool (default, ``S``): click to place points; a smooth closed
+        curve runs through them. Drag a point to move it, right-click or
+        Backspace removes the last one, double-clicking a point toggles it
+        between smooth and a sharp corner, and clicking the first point or
+        pressing Enter closes and fills the shape (or cuts it out when the
+        eraser is on).
+        Brush tool (``B``): left-drag paints (or erases when the eraser is
+        on), right-drag always erases, ``[``/``]`` change the brush.
+        Both: middle-drag pans when zoomed, ``E`` toggles the eraser, ``F``
+        fills enclosed holes, Ctrl+Z undoes, Enter finishes and Esc cancels.
+
+        Args:
+            finished_cb: ``callable(mask)`` called on finish with a bool
+                ``(H, W)`` array matching the pixmap size.
+            cancel_cb: Optional ``callable()`` called when the user cancels.
+            initial_mask: Optional bool ``(H, W)`` array to continue editing.
+        """
+        if self._pix.isNull():
+            return
+        w, h = self._pix.width(), self._pix.height()
+        if initial_mask is not None and initial_mask.shape[:2] == (h, w):
+            self._mask_img = self._array_to_mask_image(initial_mask)
+        elif self._mask_img is None or self._mask_img.size() != self._pix.size():
+            self._mask_img = QImage(w, h, QImage.Format_ARGB32)
+            self._mask_img.fill(Qt.transparent)
+        self._mask_backup = self._mask_img.copy()
+        self._mask_undo.clear()
+        self._mask_active = True
+        self._mask_erase = False
+        self._mask_last_img = None
+        self._reset_spline()
+        self._mask_finished_cb = finished_cb
+        self._mask_cancel_cb = cancel_cb
+        self.set_mask_brush_size(max(3, min(w, h) // 60))
+        self._apply_mask_cursor()
+        self.setFocus()
+        self.maskModeChanged.emit(True)
+        self.update()
+
+    def finish_mask_paint(self):
+        """Leave mask mode and hand the painted mask to the finish callback."""
+        if not self._mask_active:
+            return
+        self.commit_spline()  # a shape still being drawn counts as part of the mask
+        cb = self._mask_finished_cb
+        mask = self.mask_array()
+        self._end_mask_mode()
+        if callable(cb) and mask is not None:
+            cb(mask)
+
+    def cancel_mask_paint(self):
+        """Leave mask mode and restore the mask as it was before editing."""
+        if not self._mask_active:
+            return
+        cb = self._mask_cancel_cb
+        self._mask_img = self._mask_backup
+        self._end_mask_mode()
+        if callable(cb):
+            cb()
+
+    def clear_mask_overlay(self):
+        """Cancel mask mode (without callbacks) and remove the mask overlay."""
+        self._drop_mask()
+        self.update()
+
+    def is_mask_painting(self) -> bool:
+        """Return True while mask painting mode is active."""
+        return self._mask_active
+
+    def mask_array(self) -> np.ndarray | None:
+        """Return the current mask as a bool ``(H, W)`` array, or None."""
+        if self._mask_img is None:
+            return None
+        img = self._mask_img.convertToFormat(QImage.Format_ARGB32)
+        w, h = img.width(), img.height()
+        buf = np.frombuffer(img.constBits(), dtype=np.uint8, count=img.sizeInBytes())
+        argb = buf.reshape(h, img.bytesPerLine())[:, : w * 4].reshape(h, w, 4)
+        # Format_ARGB32 is stored as B, G, R, A in memory on little-endian hosts.
+        alpha = argb[..., 3] if sys.byteorder == "little" else argb[..., 0]
+        return alpha >= 128
+
+    def mask_brush_size(self) -> int:
+        """Return the brush diameter in image pixels."""
+        return int(self._mask_brush_px)
+
+    def set_mask_brush_size(self, px: int):
+        """Set the brush diameter in image pixels (clamped to 1..500)."""
+        px = int(max(1, min(500, px)))
+        if px != self._mask_brush_px:
+            self._mask_brush_px = px
+            self.maskBrushChanged.emit(px)
+            self.update()
+
+    def set_mask_erase(self, on: bool):
+        """Toggle the eraser for left-drag strokes."""
+        self._mask_erase = bool(on)
+
+    def mask_erase(self) -> bool:
+        """Return True when left-drag erases."""
+        return self._mask_erase
+
+    def mask_tool(self) -> str:
+        """Return the active mask tool: ``"spline"`` or ``"brush"``."""
+        return self._mask_tool
+
+    def set_mask_tool(self, tool: str):
+        """Switch between the ``"spline"`` and ``"brush"`` mask tools."""
+        if tool not in ("spline", "brush") or tool == self._mask_tool:
+            return
+        self._mask_tool = tool
+        self._reset_spline()
+        self._mask_last_img = None
+        if self._mask_active:
+            self._apply_mask_cursor()
+        self.maskBrushChanged.emit(self._mask_brush_px)  # lets toolbars resync
+        self.update()
+
+    def spline_point_count(self) -> int:
+        """Return the number of pending (not yet closed) spline points."""
+        return len(self._spline_pts)
+
+    def remove_last_spline_point(self):
+        """Drop the most recently placed spline point."""
+        if self._spline_pts:
+            self._spline_pts.pop()
+            self._spline_corner.pop()
+            self.update()
+
+    def commit_spline(self) -> bool:
+        """Close the pending spline and fill it into the mask (undoable).
+
+        Fills the shape, or cuts it out when the eraser is on. Needs at least
+        three points; returns True when something was committed.
+        """
+        if not self._mask_active or self._mask_img is None or len(self._spline_pts) < 3:
+            return False
+        curve = self.spline_curve(self._spline_pts, closed=True, corners=self._spline_corner)
+        self._push_mask_undo()
+        p = QPainter(self._mask_img)
+        try:
+            p.setRenderHint(QPainter.Antialiasing, False)  # keep the mask binary
+            if self._mask_erase:
+                p.setCompositionMode(QPainter.CompositionMode_Clear)
+            p.setPen(Qt.NoPen)
+            p.setBrush(MASK_COLOR)
+            p.drawPolygon(QPolygonF(curve), Qt.WindingFill)
+        finally:
+            p.end()
+        self._reset_spline()
+        self.update()
+        return True
+
+    def _reset_spline(self):
+        self._spline_pts = []
+        self._spline_corner = []
+        self._spline_drag_idx = None
+        self._spline_closed_snapshot = None
+
+    def toggle_spline_corner(self, idx: int):
+        """Switch pending point ``idx`` between smooth and a sharp corner."""
+        if 0 <= idx < len(self._spline_corner):
+            self._spline_corner[idx] = not self._spline_corner[idx]
+            self.update()
+
+    @staticmethod
+    def spline_curve(pts: list[QPointF], closed: bool, corners: list[bool] | None = None,
+                     samples: int = SPLINE_SAMPLES_PER_SEG) -> list[QPointF]:
+        """Sample a centripetal Catmull-Rom spline through ``pts``.
+
+        The curve passes through every control point; the centripetal
+        parameterisation avoids the loops/cusps a uniform spline makes when
+        points are unevenly spaced. Points flagged in ``corners`` are sharp:
+        the neighbouring segments treat them as end points (mirrored phantom
+        neighbour), so the curve meets there at an angle instead of smoothly.
+        """
+        n = len(pts)
+        if n < 2:
+            return list(pts)
+        P = np.array([[q.x(), q.y()] for q in pts], dtype=float)
+        if closed:
+            ext = np.vstack([P[-1], P, P[0], P[1]])
+            nseg = n
+        else:
+            # mirror the end points so the curve starts/ends on them
+            ext = np.vstack([2 * P[0] - P[1], P, 2 * P[-1] - P[-2]])
+            nseg = n - 1
+        out: list[QPointF] = []
+        t = np.linspace(0.0, 1.0, samples, endpoint=False)[:, None]
+        for i in range(nseg):
+            p0, p1, p2, p3 = ext[i], ext[i + 1], ext[i + 2], ext[i + 3]
+            if corners:
+                if corners[i]:
+                    p0 = 2 * p1 - p2
+                if corners[(i + 1) % n]:
+                    p3 = 2 * p2 - p1
+            d01 = max(np.linalg.norm(p1 - p0) ** 0.5, 1e-6)
+            d12 = max(np.linalg.norm(p2 - p1) ** 0.5, 1e-6)
+            d23 = max(np.linalg.norm(p3 - p2) ** 0.5, 1e-6)
+            # tangents of the centripetal Catmull-Rom (Barry-Goldman form),
+            # rescaled to the [0, 1] segment parameter
+            m1 = (p1 - p0) / d01 - (p2 - p0) / (d01 + d12) + (p2 - p1) / d12
+            m2 = (p2 - p1) / d12 - (p3 - p1) / (d12 + d23) + (p3 - p2) / d23
+            m1 *= d12
+            m2 *= d12
+            h00 = 2 * t**3 - 3 * t**2 + 1
+            h10 = t**3 - 2 * t**2 + t
+            h01 = -2 * t**3 + 3 * t**2
+            h11 = t**3 - t**2
+            seg = h00 * p1 + h10 * m1 + h01 * p2 + h11 * m2
+            out.extend(QPointF(float(x), float(y)) for x, y in seg)
+        if not closed:
+            out.append(QPointF(pts[-1]))
+        return out
+
+    def _spline_hit(self, pos: QPoint) -> int | None:
+        """Index of the pending spline point under widget pos, if any."""
+        best, best_d = None, float(SPLINE_HANDLE_PX)
+        for i, q in enumerate(self._spline_pts):
+            w = self._image_to_widget_f(q)
+            d = ((w.x() - pos.x()) ** 2 + (w.y() - pos.y()) ** 2) ** 0.5
+            if d <= best_d:
+                best, best_d = i, d
+        return best
+
+    def _image_to_widget_f(self, pt_img: QPointF) -> QPointF:
+        tgt = self._scaled_target_rect()
+        iw, ih = max(1, self._pix.width()), max(1, self._pix.height())
+        return QPointF(tgt.x() + pt_img.x() * tgt.width() / iw,
+                       tgt.y() + pt_img.y() * tgt.height() / ih)
+
+    def _apply_mask_cursor(self):
+        self.setCursor(Qt.CrossCursor if self._mask_tool == "spline" else Qt.BlankCursor)
+
+    def undo_mask(self):
+        """Undo the last spline point, or else the last stroke / fill / clear."""
+        if self._mask_active and self._spline_pts:
+            self.remove_last_spline_point()
+            return
+        if self._mask_active and self._mask_undo:
+            self._mask_img = self._mask_undo.pop()
+            self.update()
+
+    def clear_mask(self):
+        """Erase the whole mask (undoable)."""
+        if self._mask_active and self._mask_img is not None:
+            self._push_mask_undo()
+            self._mask_img.fill(Qt.transparent)
+            self.update()
+
+    def fill_mask_holes(self):
+        """Fill regions fully enclosed by painted pixels (undoable).
+
+        Lets the user trace only the outline and fill the interior in one step.
+        """
+        mask = self.mask_array() if self._mask_active else None
+        if mask is None or not mask.any():
+            return
+        h, w = mask.shape
+        # Flood the background from outside a 1-px padded border; whatever
+        # the flood can't reach is enclosed by the painted outline.
+        padded = np.zeros((h + 2, w + 2), np.uint8)
+        padded[1:-1, 1:-1] = mask.astype(np.uint8) * 255
+        flood = padded.copy()
+        cv2.floodFill(flood, np.zeros((h + 4, w + 4), np.uint8), (0, 0), 128)
+        filled = (flood[1:-1, 1:-1] != 128)
+        self._push_mask_undo()
+        self._mask_img = self._array_to_mask_image(filled)
+        self.update()
+
+    def _push_mask_undo(self):
+        if self._mask_img is None:
+            return
+        self._mask_undo.append(self._mask_img.copy())
+        if len(self._mask_undo) > MASK_UNDO_LIMIT:
+            self._mask_undo.pop(0)
+
+    def _end_mask_mode(self):
+        self._mask_active = False
+        self._mask_last_img = None
+        self._mask_cursor_w = None
+        self._mask_finished_cb = None
+        self._mask_cancel_cb = None
+        self._mask_backup = None
+        self._mask_undo.clear()
+        self._reset_spline()
+        self.unsetCursor()
+        self.maskModeChanged.emit(False)
+        self.update()
+
+    def _drop_mask(self):
+        if self._mask_active:
+            self._end_mask_mode()
+        self._mask_img = None
+
+    @staticmethod
+    def _array_to_mask_image(mask: np.ndarray) -> QImage:
+        h, w = mask.shape[:2]
+        img = QImage(w, h, QImage.Format_ARGB32)
+        img.fill(Qt.transparent)
+        if mask.any():
+            sel = QImage(np.ascontiguousarray(mask.astype(np.uint8) * 255).data,
+                         w, h, w, QImage.Format_Alpha8).copy()
+            p = QPainter(img)
+            p.fillRect(img.rect(), MASK_COLOR)
+            p.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+            p.drawImage(0, 0, sel)
+            p.end()
+        return img
+
+    def _widget_to_image_f(self, pt: QPoint) -> QPointF | None:
+        """Map widget point -> fractional image coords (not clamped to the image)."""
+        if self._pix.isNull():
+            return None
+        tgt = self._scaled_target_rect()
+        if tgt.width() <= 0 or tgt.height() <= 0:
+            return None
+        return QPointF((pt.x() - tgt.x()) * self._pix.width() / tgt.width(),
+                       (pt.y() - tgt.y()) * self._pix.height() / tgt.height())
+
+    def _mask_stroke_to(self, pt_img: QPointF):
+        """Paint (or erase) a round-capped segment from the last point to pt_img."""
+        if self._mask_img is None:
+            return
+        p = QPainter(self._mask_img)
+        try:
+            p.setRenderHint(QPainter.Antialiasing, False)  # keep the mask binary
+            if self._mask_stroke_erase:
+                p.setCompositionMode(QPainter.CompositionMode_Clear)
+            p.setPen(QPen(MASK_COLOR, self._mask_brush_px, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            start = self._mask_last_img if self._mask_last_img is not None else pt_img
+            if start == pt_img:
+                p.drawPoint(pt_img)
+            else:
+                p.drawLine(start, pt_img)
+        finally:
+            p.end()
+        self._mask_last_img = QPointF(pt_img)
+        self.update()
+
     # ---------------- sizing ----------------
     def sizeHint(self) -> QSize:
         """Return the preferred size for layout negotiation."""
@@ -256,6 +634,25 @@ class ScaledImageLabel(QLabel):
         
         try:
             p.drawPixmap(tgt.topLeft(), scaled)
+
+            # mask overlay (+ brush outline while painting)
+            if self._mask_img is not None:
+                p.save()
+                p.setOpacity(MASK_OPACITY)
+                p.drawImage(tgt, self._mask_img)
+                p.restore()
+            if self._mask_active and self._mask_tool == "spline" and self._spline_pts:
+                self._paint_spline_preview(p)
+            if self._mask_active and self._mask_tool == "brush" and self._mask_cursor_w is not None:
+                r = self._mask_brush_px * tgt.width() / max(1, self._pix.width()) / 2.0
+                p.save()
+                p.setRenderHint(QPainter.Antialiasing, True)
+                p.setBrush(Qt.NoBrush)
+                p.setPen(QPen(QColor(0, 0, 0), 3))
+                p.drawEllipse(QPointF(self._mask_cursor_w), r, r)
+                p.setPen(QPen(QColor(255, 255, 255) if not self._mask_erase else QColor(0, 200, 255), 1))
+                p.drawEllipse(QPointF(self._mask_cursor_w), r, r)
+                p.restore()
 
             # overlay the scalebar measurement line
             if self._measure_active and self._measure_p1_img is not None and self._measure_p2_img is not None:
@@ -354,6 +751,47 @@ class ScaledImageLabel(QLabel):
             p.end()
             
 
+    def _paint_spline_preview(self, p: QPainter):
+        """Draw the pending spline: curve through the points (and the cursor),
+        a dashed closing segment, and grab handles."""
+        pts = list(self._spline_pts)
+        cursor_img = None
+        if self._mask_cursor_w is not None and self._spline_drag_idx is None:
+            cursor_img = self._widget_to_image_f(self._mask_cursor_w)
+            # snapping onto the first point means "close": don't add a ghost point
+            if cursor_img is not None and len(pts) >= 3 and self._spline_hit(self._mask_cursor_w) == 0:
+                cursor_img = None
+        live = pts + ([cursor_img] if cursor_img is not None else [])
+        live_corners = self._spline_corner + ([False] if cursor_img is not None else [])
+        col = QColor(0, 200, 255) if self._mask_erase else SPLINE_COLOR
+        p.save()
+        try:
+            p.setRenderHint(QPainter.Antialiasing, True)
+            if len(live) >= 3:
+                closed_w = [self._image_to_widget_f(q) for q in self.spline_curve(live, closed=True, corners=live_corners)]
+                fill = QColor(col); fill.setAlpha(50)
+                p.setPen(Qt.NoPen); p.setBrush(fill)
+                p.drawPolygon(QPolygonF(closed_w))
+                p.setBrush(Qt.NoBrush)
+                p.setPen(QPen(col, 1, Qt.DashLine))
+                p.drawPolyline(QPolygonF(closed_w))
+            if len(live) >= 2:
+                open_w = [self._image_to_widget_f(q)
+                          for q in self.spline_curve(live, closed=False, corners=live_corners)]
+                p.setPen(QPen(col, 1)); p.drawPolyline(QPolygonF(open_w))
+            hover = self._spline_hit(self._mask_cursor_w) if self._mask_cursor_w is not None else None
+            for i, q in enumerate(pts):
+                w = self._image_to_widget_f(q)
+                r = 4.5 if (i == hover or (i == 0 and len(pts) >= 3)) else 3.0
+                p.setPen(QPen(QColor(0, 0, 0), 1))
+                p.setBrush(QColor(255, 255, 255) if i == 0 else col)
+                if self._spline_corner[i]:
+                    p.drawRect(QRectF(w.x() - r, w.y() - r, 2 * r, 2 * r))  # corner = square
+                else:
+                    p.drawEllipse(w, r, r)
+        finally:
+            p.restore()
+
     # ---------------- coord mapping ----------------
     def _scaled_target_rect(self) -> QRect:
         """Where the pixmap is drawn inside the label (fit with aspect)."""
@@ -417,17 +855,58 @@ class ScaledImageLabel(QLabel):
 
     # ---------------- mouse / key handling ----------------
     def mousePressEvent(self, e):
-        # pan start (only when zoomed in and no active measurement/selection mode)
-        if (
-            e.button() == Qt.LeftButton
-            and self._zoom_factor > 1.0
-            and not self._line_measure_active
-            and not self._measure_active
-            and not self._sel_active
+        # pan start (only when zoomed in and no active measurement/selection
+        # mode; while painting a mask the middle button pans instead)
+        if self._zoom_factor > 1.0 and (
+            (
+                e.button() == Qt.LeftButton
+                and not self._line_measure_active
+                and not self._measure_active
+                and not self._sel_active
+                and not self._mask_active
+            )
+            or (e.button() == Qt.MiddleButton and self._mask_active)
         ):
             self._pan_active = True
             self._pan_last_pos = QPoint(e.pos())
             self.setCursor(Qt.ClosedHandCursor)
+            e.accept()
+            return
+
+        # spline: left adds a point / grabs a point / clicks the first point
+        # to close; right removes the last point
+        if self._mask_active and self._mask_tool == "spline" and e.button() in (Qt.LeftButton, Qt.RightButton):
+            if e.button() == Qt.RightButton:
+                self.remove_last_spline_point()
+            else:
+                hit = self._spline_hit(e.pos())
+                self._spline_closed_snapshot = None
+                if hit == 0 and len(self._spline_pts) >= 3:
+                    # kept so a double-click on the first point can reopen the
+                    # shape and make that point a corner instead
+                    snapshot = (list(self._spline_pts), list(self._spline_corner))
+                    if self.commit_spline():
+                        self._spline_closed_snapshot = snapshot
+                elif hit is not None:
+                    self._spline_drag_idx = hit
+                else:
+                    pt = self._widget_to_image_f(e.pos())
+                    if pt is not None:
+                        self._spline_pts.append(pt)
+                        self._spline_corner.append(False)
+                        self._spline_drag_idx = len(self._spline_pts) - 1  # drag right after placing
+                self.update()
+            e.accept()
+            return
+
+        # mask stroke start (left paints/erases per toggle, right always erases)
+        if self._mask_active and e.button() in (Qt.LeftButton, Qt.RightButton):
+            pt = self._widget_to_image_f(e.pos())
+            if pt is not None:
+                self._push_mask_undo()
+                self._mask_stroke_erase = self._mask_erase or e.button() == Qt.RightButton
+                self._mask_last_img = None
+                self._mask_stroke_to(pt)
             e.accept()
             return
 
@@ -488,6 +967,21 @@ class ScaledImageLabel(QLabel):
             e.accept()
             return
 
+        # mask brush cursor + stroke continuation
+        if self._mask_active:
+            self._mask_cursor_w = QPoint(e.pos())
+            if self._spline_drag_idx is not None and e.buttons() & Qt.LeftButton:
+                pt = self._widget_to_image_f(e.pos())
+                if pt is not None and self._spline_drag_idx < len(self._spline_pts):
+                    self._spline_pts[self._spline_drag_idx] = pt
+            if self._mask_last_img is not None and e.buttons() & (Qt.LeftButton | Qt.RightButton):
+                pt = self._widget_to_image_f(e.pos())
+                if pt is not None:
+                    self._mask_stroke_to(pt)
+            self.update()
+            e.accept()
+            return
+
         # straight-line live tracking
         if self._line_measure_active and self._line_p1_img is not None:
             pt = self._widget_to_image(e.pos())
@@ -531,10 +1025,17 @@ class ScaledImageLabel(QLabel):
         super().mouseMoveEvent(e)
 
     def mouseReleaseEvent(self, e):
-        if self._pan_active and e.button() == Qt.LeftButton:
+        if self._pan_active and e.button() in (Qt.LeftButton, Qt.MiddleButton):
             self._pan_active = False
             self._pan_last_pos = None
-            self.setCursor(Qt.ArrowCursor)
+            self.setCursor(Qt.BlankCursor if self._mask_active else Qt.ArrowCursor)
+            e.accept()
+            return
+
+        # mask stroke end
+        if self._mask_active and e.button() in (Qt.LeftButton, Qt.RightButton):
+            self._mask_last_img = None
+            self._spline_drag_idx = None
             e.accept()
             return
 
@@ -578,7 +1079,70 @@ class ScaledImageLabel(QLabel):
 
         super().mouseReleaseEvent(e)
 
+    def mouseDoubleClickEvent(self, e):
+        # double-click on a point toggles it between smooth and a sharp corner.
+        # On empty space the first click already placed a point, so this makes
+        # that new point a corner.
+        if self._mask_active and self._mask_tool == "spline" and e.button() == Qt.LeftButton:
+            self._spline_drag_idx = None
+            if self._spline_closed_snapshot is not None:
+                # the first click closed the shape on point 0 — reopen it
+                pts, corners = self._spline_closed_snapshot
+                self._spline_closed_snapshot = None
+                if self._mask_undo:
+                    self._mask_img = self._mask_undo.pop()
+                self._spline_pts, self._spline_corner = pts, corners
+                self.toggle_spline_corner(0)
+            else:
+                hit = self._spline_hit(e.pos())
+                if hit is not None:
+                    self.toggle_spline_corner(hit)
+            e.accept()
+            return
+        super().mouseDoubleClickEvent(e)
+
+    def leaveEvent(self, e):
+        if self._mask_active:
+            self._mask_cursor_w = None
+            self.update()
+        super().leaveEvent(e)
+
     def keyPressEvent(self, e):
+        if self._mask_active:
+            key = e.key()
+            step = max(1, self._mask_brush_px // 5)
+            if key == Qt.Key_Escape:
+                if self._spline_pts:
+                    self._reset_spline()           # drop the shape in progress only
+                    self.update()
+                else:
+                    self.cancel_mask_paint()
+            elif key in (Qt.Key_Return, Qt.Key_Enter):
+                if not self.commit_spline():       # first Enter closes a pending spline
+                    self.finish_mask_paint()
+            elif key in (Qt.Key_Backspace, Qt.Key_Delete):
+                self.remove_last_spline_point()
+            elif key == Qt.Key_S:
+                self.set_mask_tool("spline")
+            elif key == Qt.Key_B:
+                self.set_mask_tool("brush")
+            elif key == Qt.Key_BracketLeft:
+                self.set_mask_brush_size(self._mask_brush_px - step)
+            elif key == Qt.Key_BracketRight:
+                self.set_mask_brush_size(self._mask_brush_px + step)
+            elif key == Qt.Key_E:
+                self.set_mask_erase(not self._mask_erase)
+                self.maskBrushChanged.emit(self._mask_brush_px)  # lets toolbars resync
+                self.update()
+            elif key == Qt.Key_F:
+                self.fill_mask_holes()
+            elif key == Qt.Key_Z and e.modifiers() & Qt.ControlModifier:
+                self.undo_mask()
+            else:
+                super().keyPressEvent(e)
+                return
+            e.accept()
+            return
         if e.key() == Qt.Key_Escape:
             if self._line_measure_active:
                 self.cancel_line_measure()
