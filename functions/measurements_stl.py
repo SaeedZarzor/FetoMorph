@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from deps import *
 from helpers.helpers import (
+    iter_hull_edge_sulci,
     compute_kernel_convex,
     contours_exclude,
     fill_section_polydata,
@@ -58,7 +59,6 @@ from managers.visualization_settings import get_active as _get_viz
 from constants import (
     BINARY_THRESHOLD_DEFAULT,
     DEFAULT_KERNEL_SIZE_MM,
-    DEFECT_FIXED_POINT,
     SULCUS_TERTIARY_MIN_FRACTION,
     SULCUS_PRIMARY_MAX_FRACTION,
     DEFAULT_CAVITY_CORRECTION_ENABLED,
@@ -341,30 +341,21 @@ def compute_stl_allmarks(
         depth_sets = empty_depth_sets()
         if inner_filtered:
             for cnt in inner_filtered:
-                hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)  # Compute convex hull
-                if hull is not None and np.all(np.diff(hull.ravel()) > 0) and len(hull) >= 3 and len(cnt) > 3:
-                    defects = cv2.convexityDefects(cnt, hull)
-                    if defects is not None:
-                        for i in range(defects.shape[0]):
-                            s, e, f, d = defects[i, 0]
-                            start = tuple(cnt[s][0])
-                            end = tuple(cnt[e][0])
-                            far = tuple(cnt[f][0])
-                            bgr = cv2.line(bgr, start, end, list(_get_viz().measurement_line_color_bgr), thickness)
-                            if d > DEFECT_FIXED_POINT:
-                                depth_mm = d * mm_per_px / DEFECT_FIXED_POINT
-                                if use_percent_filter:
-                                    keep = (SULCUS_TERTIARY_MIN_FRACTION * max_dim) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * max_dim) and depth_mm > sulcus_depth_min("mm")
-                                else:
-                                    keep = depth_mm > sulcus_depth_min("mm")
-                                if keep:
-                                    if use_percent_filter:
-                                        sulcus_class = classify_sulcus_depth(depth_mm, max_dim)
-                                    else:
-                                        sulcus_class = "unclassified"
-                                    marker_color = SULCUS_CLASS_COLORS[sulcus_class]
-                                    depth_sets[sulcus_class].append(depth_mm)
-                                    bgr = cv2.circle(bgr, far, radius_px, marker_color, -1)
+                for start, end, sulci in iter_hull_edge_sulci(cnt, sulcus_depth_min("mm"), spacing=(mm_per_px, mm_per_px)):
+                    bgr = cv2.line(bgr, start, end, list(_get_viz().measurement_line_color_bgr), thickness)
+                    for far, depth_mm in sulci:
+                        if use_percent_filter:
+                            keep = (SULCUS_TERTIARY_MIN_FRACTION * max_dim) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * max_dim) and depth_mm > sulcus_depth_min("mm")
+                        else:
+                            keep = depth_mm > sulcus_depth_min("mm")
+                        if keep:
+                            if use_percent_filter:
+                                sulcus_class = classify_sulcus_depth(depth_mm, max_dim)
+                            else:
+                                sulcus_class = "unclassified"
+                            marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                            depth_sets[sulcus_class].append(depth_mm)
+                            bgr = cv2.circle(bgr, far, radius_px, marker_color, -1)
 
         depth = flatten_depth_sets(depth_sets)
         print(f"[STL All Hallmarks] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")
@@ -1536,31 +1527,21 @@ def compute_stl_sulci_depth(
         depth_sets = empty_depth_sets()
         if inner_filtered:
             for cnt in inner_filtered:
-                hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)  # Compute convex hull
-                if hull is not None and np.all(np.diff(hull.ravel()) > 0) and len(hull) >= 3 and len(cnt) > 3:
-                    defects = cv2.convexityDefects(cnt, hull)
-                    if defects is not None:
-                        for i in range(defects.shape[0]):
-                            s, e, f, d = defects[i, 0]
-                            start = tuple(cnt[s][0])
-                            end = tuple(cnt[e][0])
-                            far = tuple(cnt[f][0])
-                            bgr = cv2.line(bgr, start, end, list(_get_viz().measurement_line_color_bgr), thickness)
-                            if d > DEFECT_FIXED_POINT:
-                                mm_per_fixed = mm_per_px / DEFECT_FIXED_POINT
-                                depth_mm = d *mm_per_fixed
-                                if use_percent_filter:
-                                    keep = (SULCUS_TERTIARY_MIN_FRACTION * max_dim) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * max_dim) and depth_mm > sulcus_depth_min("mm")
-                                else:
-                                    keep = depth_mm > sulcus_depth_min("mm")
-                                if keep:
-                                    if use_percent_filter:
-                                        sulcus_class = classify_sulcus_depth(depth_mm, max_dim)
-                                    else:
-                                        sulcus_class = "unclassified"
-                                    marker_color = SULCUS_CLASS_COLORS[sulcus_class]
-                                    depth_sets[sulcus_class].append(depth_mm)
-                                    bgr = cv2.circle(bgr, far, radius_px, marker_color, -1)
+                for start, end, sulci in iter_hull_edge_sulci(cnt, sulcus_depth_min("mm"), spacing=(mm_per_px, mm_per_px)):
+                    bgr = cv2.line(bgr, start, end, list(_get_viz().measurement_line_color_bgr), thickness)
+                    for far, depth_mm in sulci:
+                        if use_percent_filter:
+                            keep = (SULCUS_TERTIARY_MIN_FRACTION * max_dim) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * max_dim) and depth_mm > sulcus_depth_min("mm")
+                        else:
+                            keep = depth_mm > sulcus_depth_min("mm")
+                        if keep:
+                            if use_percent_filter:
+                                sulcus_class = classify_sulcus_depth(depth_mm, max_dim)
+                            else:
+                                sulcus_class = "unclassified"
+                            marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                            depth_sets[sulcus_class].append(depth_mm)
+                            bgr = cv2.circle(bgr, far, radius_px, marker_color, -1)
 
         depth = flatten_depth_sets(depth_sets)
         print(f"[STL Sulci depth] slice {idx}: kind={slice_kind} ({slice_kind_conf:.2f}), {format_sulcus_class_summary(depth_sets)}")

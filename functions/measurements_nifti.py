@@ -7,9 +7,9 @@ then integrates across slices to obtain whole-brain volume (cm³), surface
 area (cm²), and aggregate depth statistics.
 
 Voxel sizes are read from the NIfTI header (``get_zooms``).  Because
-voxels can be anisotropic, depth conversion uses
-``defect_mm_per_px_and_fixed`` to project defect vectors onto the
-physical coordinate system.
+voxels can be anisotropic, sulcus depths come from
+:func:`helpers.helpers.iter_hull_edge_sulci` with the per-axis voxel spacing,
+which projects each sulcus onto its hull chord in physical coordinates.
 """
 
 from __future__ import annotations
@@ -18,13 +18,13 @@ from deps import *
 from scipy.ndimage import binary_opening, binary_closing, label
 from nibabel.affines import apply_affine
 from helpers.helpers import (
+    iter_hull_edge_sulci,
     compactness_2D,
     mask_perimeter_mm,
     compute_kernel_convex,
     lateral_area_simpson,
     volume_simpson,
     total_surface_area_simpson,
-    defect_mm_per_px_and_fixed,
     image_annotation_style,
     SULCUS_CLASS_COLORS,
     SULCUS_CLASSES,
@@ -40,7 +40,7 @@ from helpers.helpers import (
 )
 from helpers.cavities import cavity_correction_nifti, CavityCorrection
 from constants import (
-    DEFAULT_KERNEL_SIZE_MM, DEFECT_FIXED_POINT,
+    DEFAULT_KERNEL_SIZE_MM,
     SULCUS_TERTIARY_MIN_FRACTION, SULCUS_PRIMARY_MAX_FRACTION,
     DEFAULT_CAVITY_CORRECTION_ENABLED, DEFAULT_CAVITY_AREA_THRESHOLD_MM2,
     DEFAULT_PERIMETER_METHOD, DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
@@ -268,34 +268,18 @@ def compute_nifti_allmarks(parent, file_path: str, out_dir: str, valid_labels: s
             depth_sets = empty_depth_sets()
             if filtered_contours:
                 for cnt in filtered_contours:
-                    hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)  # Compute convex hull
-                    if hull is not None and len(hull) >= 3 and len(cnt) > 3 and np.all(np.diff(hull.ravel()) > 0):
-                        defects = cv2.convexityDefects(cnt, hull)
-                        if defects is not None:
-                            for i in range(defects.shape[0]):
-                                s, e, f, d = defects[i, 0]
-                                start = tuple(cnt[s][0])
-                                end = tuple(cnt[e][0])
-                                far = tuple(cnt[f][0])
-                                annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
-                                if d > DEFECT_FIXED_POINT:
-                                    if pixel_size_x!=pixel_size_z:
-                                        mm_per_px, mm_per_fixed = defect_mm_per_px_and_fixed(start, end, far, pixel_size_x, pixel_size_z)
-                                        if mm_per_fixed is None:
-                                            continue  # degenerate edge (start == end)
-                                    else:
-                                        mm_per_fixed = pixel_size_x / DEFECT_FIXED_POINT
+                    for start, end, sulci in iter_hull_edge_sulci(cnt, sulcus_depth_min("mm"), spacing=(pixel_size_x, pixel_size_z)):
+                        annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
+                        for far, depth_mm in sulci:
 
-                                    depth_mm = d *mm_per_fixed
-
-                                    # Depth filter: keep defects within
-                                    # SULCI_DEPTH_MIN_FRACTION..SULCI_DEPTH_MAX_FRACTION
-                                    # of brain IS-extent. dims[2] is in cm, ×10 → mm.
-                                    if (SULCUS_TERTIARY_MIN_FRACTION * _is_extent_mm) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * _is_extent_mm) and depth_mm > sulcus_depth_min("mm"):
-                                        sulcus_class = classify_sulcus_depth(depth_mm, _is_extent_mm)
-                                        marker_color = SULCUS_CLASS_COLORS[sulcus_class]
-                                        depth_sets[sulcus_class].append(depth_mm)
-                                        annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
+                            # Depth filter: keep defects within
+                            # SULCI_DEPTH_MIN_FRACTION..SULCI_DEPTH_MAX_FRACTION
+                            # of brain IS-extent. dims[2] is in cm, ×10 → mm.
+                            if (SULCUS_TERTIARY_MIN_FRACTION * _is_extent_mm) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * _is_extent_mm) and depth_mm > sulcus_depth_min("mm"):
+                                sulcus_class = classify_sulcus_depth(depth_mm, _is_extent_mm)
+                                marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                                depth_sets[sulcus_class].append(depth_mm)
+                                annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
 
             depth = flatten_depth_sets(depth_sets)
             print(f"[NIfTI All Hallmarks] slice {idx}: {format_sulcus_class_summary(depth_sets)}")
@@ -1015,11 +999,13 @@ def compute_nifti_lGI(parent, file_path: str, out_dir: str,  valid_labels: set[i
 
         
 def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_labels: set[int], min_contour_area: float=30,):
-    """Compute sulci depths from convexity defects across NIfTI coronal slices.
+    """Compute sulci depths across NIfTI coronal slices.
 
     For each slice, extracts contours, computes convex hulls, and measures
-    defect depths.  Anisotropic voxels are handled via
-    ``defect_mm_per_px_and_fixed``.
+    every sulcus (local depth maximum) along each hull edge, not only the
+    single deepest point ``cv2.convexityDefects`` reports.  Anisotropic voxels
+    are handled by passing the per-axis voxel spacing to
+    :func:`helpers.helpers.iter_hull_edge_sulci`.
 
     Args:
         parent: Qt parent widget for message boxes.
@@ -1116,36 +1102,20 @@ def compute_nifti_sulci_depth(parent, file_path: str, out_dir: str,  valid_label
             depth_sets = empty_depth_sets()
             if filtered_contours:
                 for cnt in filtered_contours:
-                    hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)  # Compute convex hull
-                    if hull is not None and len(hull) >= 3 and len(cnt) > 3 and np.all(np.diff(hull.ravel()) > 0):
-                        defects = cv2.convexityDefects(cnt, hull)
-                        if defects is not None:
-                            for i in range(defects.shape[0]):
-                                s, e, f, d = defects[i, 0]
-                                start = tuple(cnt[s][0])
-                                end = tuple(cnt[e][0])
-                                far = tuple(cnt[f][0])
-                                annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
-                                if d > DEFECT_FIXED_POINT:
-                                    if pixel_size_x!=pixel_size_z:
-                                        mm_per_px, mm_per_fixed = defect_mm_per_px_and_fixed(start, end, far, pixel_size_x, pixel_size_z)
-                                        if mm_per_fixed is None:
-                                            continue  # degenerate edge (start == end)
-                                    else:
-                                        mm_per_fixed = pixel_size_x / DEFECT_FIXED_POINT
+                    for start, end, sulci in iter_hull_edge_sulci(cnt, sulcus_depth_min("mm"), spacing=(pixel_size_x, pixel_size_z)):
+                        annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
+                        for far, depth_mm in sulci:
 
-                                    depth_mm = d *mm_per_fixed
-
-                                    # Depth filter: keep defects within
-                                    # SULCUS_TERTIARY_MIN_FRACTION..SULCUS_PRIMARY_MAX_FRACTION
-                                    # of brain IS-extent AND above the global mm
-                                    # floor (Sulcus Depth Threshold), matching
-                                    # compute_nifti_allmarks. dims[2] cm ×10 → mm.
-                                    if (SULCUS_TERTIARY_MIN_FRACTION * _is_extent_mm) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * _is_extent_mm) and depth_mm > sulcus_depth_min("mm"):
-                                        sulcus_class = classify_sulcus_depth(depth_mm, _is_extent_mm)
-                                        marker_color = SULCUS_CLASS_COLORS[sulcus_class]
-                                        depth_sets[sulcus_class].append(depth_mm)
-                                        annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
+                            # Depth filter: keep defects within
+                            # SULCUS_TERTIARY_MIN_FRACTION..SULCUS_PRIMARY_MAX_FRACTION
+                            # of brain IS-extent AND above the global mm
+                            # floor (Sulcus Depth Threshold), matching
+                            # compute_nifti_allmarks. dims[2] cm ×10 → mm.
+                            if (SULCUS_TERTIARY_MIN_FRACTION * _is_extent_mm) < depth_mm < (SULCUS_PRIMARY_MAX_FRACTION * _is_extent_mm) and depth_mm > sulcus_depth_min("mm"):
+                                sulcus_class = classify_sulcus_depth(depth_mm, _is_extent_mm)
+                                marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                                depth_sets[sulcus_class].append(depth_mm)
+                                annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
 
             depth = flatten_depth_sets(depth_sets)
             print(f"[NIfTI Sulci depth] slice {idx}: {format_sulcus_class_summary(depth_sets)}")

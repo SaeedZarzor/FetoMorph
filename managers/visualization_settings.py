@@ -84,6 +84,12 @@ class VizDefaults:
     # forces that kind for every measurement via classify_slice_kind().
     slice_kind_override: str = "auto"
 
+    # --- Import performance ---
+    # Downscale very large 2-D images (> DOWNSCALE_MAX_MEGAPIXELS) in the
+    # background on import, to keep measurements fast. The original file is
+    # never modified.
+    auto_downscale_images: bool = True
+
 
 _DEFAULTS = VizDefaults()
 _DEFAULTS_DICT = asdict(_DEFAULTS)

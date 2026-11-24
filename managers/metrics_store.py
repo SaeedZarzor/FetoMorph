@@ -245,6 +245,12 @@ class MetricsStore:
         if sk is not None:
             row["SliceKind"] = sk
 
+        # The Sulcus Depth Threshold decides which sulci are counted, so every row
+        # that records sulci values also records the threshold it was measured with.
+        if "sulci_depth" in vals or "sulci_depth_sets" in vals:
+            from helpers.helpers import sulcus_depth_min
+            row["SulcusDepthThreshold"] = float(sulcus_depth_min("mm"))
+
         sd = vals.pop("sulci_depth", None)
         if sd is not None:
             if isinstance(sd, (list, tuple)):
@@ -472,6 +478,7 @@ class MetricsStore:
             "Contour mode",
             "Slice direction",
             "Length unit",
+            "Sulcus depth threshold (mm)",
         ) + extra_metric_columns
 
         def _pixel_spacing(r: dict) -> str | None:
@@ -512,6 +519,7 @@ class MetricsStore:
                     "Contour mode": r.get("ContourMode"),
                     "Slice direction": r.get("SliceDirection"),
                     "Length unit": r.get("LengthUnit"),
+                    "Sulcus depth threshold (mm)": r.get("SulcusDepthThreshold"),
                 }
                 for k in metric_keys:
                     row_dict[k] = r.get(k)

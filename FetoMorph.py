@@ -699,6 +699,8 @@ class MainWindow(QMainWindow):
         if getattr(self, "_shutting_down", False):
             return
         self._shutting_down = True
+        try: self.file_mgr.shutdown()
+        except Exception as e: print(f"Warning: image job shutdown failed: {e}")
 
         # Block user input
         self.setEnabled(False)
@@ -777,7 +779,7 @@ class MainWindow(QMainWindow):
         if not local: return
         print(f"Dropped: {local}")
         eext = ext(local)
-        if eext in IMAGE_EXTS: self.file_mgr.load_image(local)
+        if eext in IMAGE_EXTS: self.file_mgr.load_image(local, downscale=True)
         elif eext in NIFTI_EXTS: self.file_mgr.load_nifti(local)
         elif eext == ".stl": self.file_mgr.load_stl(local)
         elif eext == ".vtk": self.file_mgr.load_vtk(local)

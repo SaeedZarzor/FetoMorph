@@ -10,6 +10,7 @@ from __future__ import annotations
 from deps import *
 from PySide6.QtWidgets import QCheckBox, QColorDialog
 
+from constants import DOWNSCALE_MAX_MEGAPIXELS
 from managers.visualization_settings import VisualizationSettings, defaults
 
 
@@ -497,7 +498,26 @@ class PreferencesDialog(QDialog):
         self.chk_zoom_controls = QCheckBox()
         self._add_row(lay, "Show zoom controls:", self.chk_zoom_controls,
             "When on, the image zoom toolbar is visible above the viewer.")
+
+        self.chk_auto_downscale = QCheckBox()
+        self._add_row(lay, "Auto-downscale large images:", self.chk_auto_downscale,
+            f"When on, imported 2-D images above {DOWNSCALE_MAX_MEGAPIXELS:g} megapixels are "
+            "reduced in the background (original file untouched) so measurements stay fast. "
+            "Applies to images imported after the change.")
+        # ``clicked`` fires only on user clicks (not on programmatic setChecked).
+        self.chk_auto_downscale.clicked.connect(self._on_auto_downscale_clicked)
         return page
+
+    def _on_auto_downscale_clicked(self, checked: bool) -> None:
+        if checked:
+            return
+        QMessageBox.warning(
+            self, "Auto-downscale disabled",
+            "Automatic downscaling is turned off.\n\n"
+            f"Images larger than {DOWNSCALE_MAX_MEGAPIXELS:g} megapixels will be processed at full "
+            "resolution. Measurements on them can be very slow and use a lot of memory, "
+            "and the application may become unresponsive.\n\n"
+            "Re-enable this option if processing becomes too slow.")
 
     # ----- (de)serialization between widgets and settings -----
 
@@ -521,6 +541,7 @@ class PreferencesDialog(QDialog):
 
         self.chk_label_overlay.setChecked(bool(vs.show_label_overlay))
         self.chk_zoom_controls.setChecked(bool(vs.show_zoom_controls))
+        self.chk_auto_downscale.setChecked(bool(vs.auto_downscale_images))
         self.btn_vtk_bg.setColor(_rgbf_to_qcolor(vs.vtk_background_rgbf))
         self.btn_vtk_surface.setColor(_rgbf_to_qcolor(vs.vtk_surface_rgbf))
 
@@ -553,6 +574,7 @@ class PreferencesDialog(QDialog):
             "scalebar_thickness_multiplier": float(self.spin_scalebar_thickness.value()),
             "show_label_overlay": bool(self.chk_label_overlay.isChecked()),
             "show_zoom_controls": bool(self.chk_zoom_controls.isChecked()),
+            "auto_downscale_images": bool(self.chk_auto_downscale.isChecked()),
             "vtk_background_rgbf": _qcolor_to_rgbf(self.btn_vtk_bg.color()),
             "vtk_surface_rgbf": _qcolor_to_rgbf(self.btn_vtk_surface.color()),
         }

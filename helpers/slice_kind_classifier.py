@@ -28,22 +28,37 @@ _input_name: str | None = None
 _load_failed = False
 
 
-def _manual_override() -> "SliceKind | None":
+_FORCE_FULL = "full"   # override value: always a full slice, orientation from the classifier
+
+
+def _manual_override() -> "str | None":
     """Return the user's manual slice-kind override, or ``None`` for auto.
 
     Read lazily from :class:`VisualizationSettings` so this module stays
-    importable without Qt and avoids a circular import at load time. Any value
-    other than the four valid kinds (including ``"auto"``) means "use the
-    classifier".
+    importable without Qt and avoids a circular import at load time. Valid
+    values are the four kinds, or ``"full"`` (treat every image as a full slice,
+    ignoring a "not a full slice" verdict). Anything else (including ``"auto"``)
+    means "use the classifier".
     """
     try:
         from managers.visualization_settings import get_active
         value = str(getattr(get_active(), "slice_kind_override", "auto")).strip().lower()
     except Exception:
         return None
-    if value in _LABELS:
-        return value  # type: ignore[return-value]
+    if value in _LABELS or value == _FORCE_FULL:
+        return value
     return None
+
+
+_warned_full_no_model = False
+
+
+def _warn_full_without_model() -> None:
+    global _warned_full_no_model
+    if not _warned_full_no_model:
+        _warned_full_no_model = True
+        print("[Slice Kind] WARNING: 'full' forced but the slice-kind model is unavailable; "
+              "orientation cannot be determined, reporting 'axial'.")
 
 
 def _get_session():
@@ -119,16 +134,25 @@ def classify_slice_kind(image_bgr: np.ndarray) -> tuple[SliceKind, float]:
 
         A manual override set via Adjustments → "Slice Kind Override…" short-
         circuits the classifier entirely and returns the forced kind.
+
+        The override ``"full"`` (used by the master report script's
+        ``--slice-kind full``) forces "this is a full slice": the classifier's
+        "not a full slice" verdict is ignored and the best-matching full kind
+        (sagittal / coronal / axial) is returned with confidence 1.0.
     """
     override = _manual_override()
-    if override is not None:
-        return (override, 1.0)
+    force_full = override == _FORCE_FULL
+    if override is not None and not force_full:
+        return (override, 1.0)  # type: ignore[return-value]
 
     if image_bgr is None or not isinstance(image_bgr, np.ndarray) or image_bgr.size == 0:
         return ("not_full_slice", 0.0)
 
     sess = _get_session()
     if sess is None:
+        if force_full:
+            _warn_full_without_model()
+            return ("axial", 1.0)   # orientation unknown without the model
         return ("not_full_slice", 0.0)
 
     if image_bgr.ndim == 3:
@@ -142,6 +166,9 @@ def classify_slice_kind(image_bgr: np.ndarray) -> tuple[SliceKind, float]:
     logits = sess.run(None, {_input_name: x})[0][0]
     e = np.exp(logits - logits.max())
     probs = e / e.sum()
+    if force_full:
+        # Ignore "not_full_slice" (last class): pick the best full orientation.
+        return (_LABELS[int(probs[:3].argmax())], 1.0)
     idx = int(probs.argmax())
     return (_LABELS[idx], float(probs[idx]))
 

@@ -24,6 +24,7 @@ from helpers.helpers import (
     SULCUS_CLASS_COLORS,
     classify_sulcus_depth,
     sulcus_depth_min,
+    iter_hull_edge_sulci,
     empty_depth_sets,
     flatten_depth_sets,
     format_sulcus_class_summary,
@@ -36,7 +37,6 @@ from constants import (
     DEFAULT_PERIMETER_METHOD,
     DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
     DEFAULT_CONTOUR_SIMPLIFY_EPSILON,
-    DEFECT_FIXED_POINT,
     MIN_PIXEL_SIZE_FOR_DEPTH_LABELS,
     SULCUS_PRIMARY_MAX_FRACTION,
     SULCUS_TERTIARY_MIN_FRACTION,
@@ -101,7 +101,7 @@ def compute_image_allmarks(
         1. Threshold → extract inner contours (brain boundary).
         2. Morphological close → extract outer contours (sulci filled).
         3. GI = exterior perimeter / closed-envelope perimeter.
-        4. Convexity defects → sulci depths.
+        4. Every local depth maximum along each hull edge → sulci depths.
 
     Args:
         file_path: Path to a brain-slice image.
@@ -227,75 +227,68 @@ def compute_image_allmarks(
     comp = (compactness_2D(area, perimeter)
             if perimeter_outer_envelope is not None else None)
 
-    # --- Sulci depth via convexity defects ---
+    # --- Sulci depth: every local depth maximum along each convex-hull edge ---
     # When use_percent_filter is True (full MRI slices), depths are split into
     # four named sets (primary / secondary / tertiary / unclassified). The flat
     # `depth` list returned to the dispatcher is the union of all four.
     depth_sets = empty_depth_sets()
+    # Every local depth maximum between hull points s and e is a sulcus, not
+    # only the single deepest one cv2.convexityDefects reports per edge. The
+    # prominence is the Sulcus Depth Threshold (Adjustments) in pixels.
+    prominence_px = sulcus_depth_min(unit) / max(float(pixel_size), 1e-12)
     for cnt in filtered_contours:
-        hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
-        if hull is not None and len(hull) >= 3 and len(cnt) > 3 and np.all(np.diff(hull.ravel()) > 0):
-            defects = cv2.convexityDefects(cnt, hull)
+        for start, end, sulci in iter_hull_edge_sulci(cnt, prominence_px):
+            annotated = cv2.line(annotated, start, end, list(_get_viz().measurement_line_color_bgr), thickness)
+            for far, depth_px in sulci:
+                # Physical depth. Full MRI slices use a percent-of-slice-length
+                # window; cropped bands keep the original fixed-millimeter threshold.
+                depth_value = depth_px * pixel_size
+                if use_percent_filter:
+                    keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length) and depth_value > sulcus_depth_min(unit)
+                else:
+                    keep = depth_value > sulcus_depth_min(unit)
 
-            if defects is not None:
-                for i in range(defects.shape[0]):
-                    # s = start index, e = end index, f = farthest point index
-                    # d = depth in OpenCV 8.8 fixed-point (divide by 256 → pixels)
-                    s, e, f, d = defects[i, 0]
-                    start = tuple(cnt[s][0])
-                    end = tuple(cnt[e][0])
-                    far = tuple(cnt[f][0])
-                    annotated = cv2.line(annotated, start, end, list(_get_viz().measurement_line_color_bgr), thickness)
-                    # Convert fixed-point depth to physical units. Full MRI
-                    # slices use a percent-of-slice-length window; cropped
-                    # bands keep the original fixed-millimeter threshold.
-                    depth_value = d * pixel_size / DEFECT_FIXED_POINT
+                # Classify by % of slice_length (full MRI slices only).
+                if keep:
                     if use_percent_filter:
-                        keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length) and depth_value > sulcus_depth_min(unit)
+                        sulcus_class = classify_sulcus_depth(depth_value, slice_length)
                     else:
-                        keep = depth_value > sulcus_depth_min(unit)
+                        sulcus_class = "unclassified"
 
-                    # Classify by % of slice_length (full MRI slices only).
-                    if keep:
-                        if use_percent_filter:
-                            sulcus_class = classify_sulcus_depth(depth_value, slice_length)
+                    marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                    depth_sets[sulcus_class].append(depth_value)
+                    annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
+                    # Skip numeric labels when pixel_size is small (dense
+                    # images would otherwise be cluttered by overlapping
+                    # text); the marker circle is still drawn.
+                    if pixel_size <= MIN_PIXEL_SIZE_FOR_DEPTH_LABELS:
+                        label = f"{depth_value:.2f} {unit}"
+                        label_scale = font_scale * float(_get_viz().sulcus_label_scale_multiplier)
+                        label_thickness = max(1, thickness - 1)
+                        (label_w, label_h), _ = cv2.getTextSize(
+                            label, cv2.FONT_HERSHEY_SIMPLEX, label_scale, label_thickness
+                        )
+                        # Place the label on the same side of the image as the
+                        # sulcus: right half -> text to the right of the marker,
+                        # left half -> text to the left (grows outward).
+                        if far[0] >= W / 2:
+                            tx = int(far[0] + radius_px + 4)
                         else:
-                            sulcus_class = "unclassified"
-
-                        marker_color = SULCUS_CLASS_COLORS[sulcus_class]
-                        depth_sets[sulcus_class].append(depth_value)
-                        annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
-                        # Skip numeric labels when pixel_size is small (dense
-                        # images would otherwise be cluttered by overlapping
-                        # text); the marker circle is still drawn.
-                        if pixel_size <= MIN_PIXEL_SIZE_FOR_DEPTH_LABELS:
-                            label = f"{depth_value:.2f} {unit}"
-                            label_scale = font_scale * float(_get_viz().sulcus_label_scale_multiplier)
-                            label_thickness = max(1, thickness - 1)
-                            (label_w, label_h), _ = cv2.getTextSize(
-                                label, cv2.FONT_HERSHEY_SIMPLEX, label_scale, label_thickness
-                            )
-                            # Place the label on the same side of the image as the
-                            # sulcus: right half -> text to the right of the marker,
-                            # left half -> text to the left (grows outward).
-                            if far[0] >= W / 2:
-                                tx = int(far[0] + radius_px + 4)
-                            else:
-                                tx = int(far[0] - radius_px - 4 - label_w)
-                            ty = int(far[1] - radius_px - 4)
-                            # Clamp so the whole text box stays inside the image.
-                            tx = min(max(0, tx), max(0, W - label_w))
-                            ty = min(max(label_h, ty), max(label_h, H - 1))
-                            cv2.putText(
-                                annotated,
-                                label,
-                                (tx, ty),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                label_scale,
-                                marker_color,
-                                label_thickness,
-                                cv2.LINE_AA,
-                            )
+                            tx = int(far[0] - radius_px - 4 - label_w)
+                        ty = int(far[1] - radius_px - 4)
+                        # Clamp so the whole text box stays inside the image.
+                        tx = min(max(0, tx), max(0, W - label_w))
+                        ty = min(max(label_h, ty), max(label_h, H - 1))
+                        cv2.putText(
+                            annotated,
+                            label,
+                            (tx, ty),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            label_scale,
+                            marker_color,
+                            label_thickness,
+                            cv2.LINE_AA,
+                        )
 
     depth = flatten_depth_sets(depth_sets)
     if use_percent_filter:
@@ -602,9 +595,12 @@ def compute_image_sulci_depth(
 ) -> tuple[list, dict, np.ndarray, SliceKind]:
     """Compute sulci depths from convexity defects on a 2-D brain-slice image.
 
-    For each contour, computes the convex hull and then identifies
-    convexity defects (indentations).  Each defect's depth is converted
-    from OpenCV 8.8 fixed-point to mm using ``pixel_size``.
+    For each contour, computes the convex hull and, along every hull edge,
+    finds *every* sulcus (local maximum of the distance to the edge chord, see
+    :func:`helpers.helpers.iter_hull_edge_sulci`) rather than only the single
+    deepest point ``cv2.convexityDefects`` returns. A sulcus must be at least
+    the Sulcus Depth Threshold (Adjustments) deep and rise that far above its
+    neighbours. Depths are converted from pixels to mm using ``pixel_size``.
 
     Args:
         file_path: Path to the image.
@@ -653,68 +649,61 @@ def compute_image_sulci_depth(
     # four named sets (primary / secondary / tertiary / unclassified). The flat
     # `depth` list returned to the dispatcher is the union of all four.
     depth_sets = empty_depth_sets()
+    # Every local depth maximum between hull points s and e is a sulcus, not
+    # only the single deepest one cv2.convexityDefects reports per edge. The
+    # prominence is the Sulcus Depth Threshold (Adjustments) in pixels.
+    prominence_px = sulcus_depth_min(unit) / max(float(pixel_size), 1e-12)
     for cnt in filtered_contours:
-        hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
-        if hull is not None and len(hull) >= 3 and len(cnt) > 3 and np.all(np.diff(hull.ravel()) > 0):
-            defects = cv2.convexityDefects(cnt, hull)
-
-            if defects is not None:
-                for i in range(defects.shape[0]):
-                    # s = start index, e = end index, f = farthest point
-                    # d = depth in 8.8 fixed-point (d / 256 → pixels)
-                    s, e, f, d = defects[i, 0]
-                    start = tuple(cnt[s][0])
-                    end = tuple(cnt[e][0])
-                    far = tuple(cnt[f][0])
-                    annotated = cv2.line(annotated, start, end, list(_get_viz().measurement_line_color_bgr), thickness)
-                    # Convert fixed-point depth to physical units. Full MRI
-                    # slices use a percent-of-slice-length window; cropped
-                    # bands keep the original fixed-millimeter threshold.
-                    depth_value = d * pixel_size / DEFECT_FIXED_POINT
+        for start, end, sulci in iter_hull_edge_sulci(cnt, prominence_px):
+            annotated = cv2.line(annotated, start, end, list(_get_viz().measurement_line_color_bgr), thickness)
+            for far, depth_px in sulci:
+                # Physical depth. Full MRI slices use a percent-of-slice-length
+                # window; cropped bands keep the original fixed-millimeter threshold.
+                depth_value = depth_px * pixel_size
+                if use_percent_filter:
+                    keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length) and depth_value > sulcus_depth_min(unit)
+                else:
+                    keep = depth_value > sulcus_depth_min(unit)
+                if keep:
+                    # Classify by % of slice_length (full MRI slices only).
                     if use_percent_filter:
-                        keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length) and depth_value > sulcus_depth_min(unit)
+                        sulcus_class = classify_sulcus_depth(depth_value, slice_length)
                     else:
-                        keep = depth_value > sulcus_depth_min(unit)
-                    if keep:
-                        # Classify by % of slice_length (full MRI slices only).
-                        if use_percent_filter:
-                            sulcus_class = classify_sulcus_depth(depth_value, slice_length)
+                        sulcus_class = "unclassified"
+                    marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                    depth_sets[sulcus_class].append(depth_value)
+                    annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
+                    # Skip numeric labels when pixel_size is small (dense
+                    # images would otherwise be cluttered by overlapping
+                    # text); the marker circle is still drawn.
+                    if pixel_size <= MIN_PIXEL_SIZE_FOR_DEPTH_LABELS:
+                        label = f"{depth_value:.2f} {unit}"
+                        label_scale = font_scale * float(_get_viz().sulcus_label_scale_multiplier)
+                        label_thickness = max(1, thickness - 1)
+                        (label_w, label_h), _ = cv2.getTextSize(
+                            label, cv2.FONT_HERSHEY_SIMPLEX, label_scale, label_thickness
+                        )
+                        # Place the label on the same side of the image as the
+                        # sulcus: right half -> text to the right of the marker,
+                        # left half -> text to the left (grows outward).
+                        if far[0] >= W / 2:
+                            tx = int(far[0] + radius_px + 4)
                         else:
-                            sulcus_class = "unclassified"
-                        marker_color = SULCUS_CLASS_COLORS[sulcus_class]
-                        depth_sets[sulcus_class].append(depth_value)
-                        annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
-                        # Skip numeric labels when pixel_size is small (dense
-                        # images would otherwise be cluttered by overlapping
-                        # text); the marker circle is still drawn.
-                        if pixel_size <= MIN_PIXEL_SIZE_FOR_DEPTH_LABELS:
-                            label = f"{depth_value:.2f} {unit}"
-                            label_scale = font_scale * float(_get_viz().sulcus_label_scale_multiplier)
-                            label_thickness = max(1, thickness - 1)
-                            (label_w, label_h), _ = cv2.getTextSize(
-                                label, cv2.FONT_HERSHEY_SIMPLEX, label_scale, label_thickness
-                            )
-                            # Place the label on the same side of the image as the
-                            # sulcus: right half -> text to the right of the marker,
-                            # left half -> text to the left (grows outward).
-                            if far[0] >= W / 2:
-                                tx = int(far[0] + radius_px + 4)
-                            else:
-                                tx = int(far[0] - radius_px - 4 - label_w)
-                            ty = int(far[1] - radius_px - 4)
-                            # Clamp so the whole text box stays inside the image.
-                            tx = min(max(0, tx), max(0, W - label_w))
-                            ty = min(max(label_h, ty), max(label_h, H - 1))
-                            cv2.putText(
-                                annotated,
-                                label,
-                                (tx, ty),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                label_scale,
-                                marker_color,
-                                label_thickness,
-                                cv2.LINE_AA,
-                            )
+                            tx = int(far[0] - radius_px - 4 - label_w)
+                        ty = int(far[1] - radius_px - 4)
+                        # Clamp so the whole text box stays inside the image.
+                        tx = min(max(0, tx), max(0, W - label_w))
+                        ty = min(max(label_h, ty), max(label_h, H - 1))
+                        cv2.putText(
+                            annotated,
+                            label,
+                            (tx, ty),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            label_scale,
+                            marker_color,
+                            label_thickness,
+                            cv2.LINE_AA,
+                        )
 
     depth = flatten_depth_sets(depth_sets)
     if use_percent_filter:

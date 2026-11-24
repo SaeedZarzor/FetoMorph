@@ -80,6 +80,7 @@ DEFAULT_NIFTI_REGIONS = {2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 17}
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 900
 DEFAULT_PIXEL_SIZE = 0.01        # mm/px fallback when user has not calibrated
+DOWNSCALE_MAX_MEGAPIXELS = 8.0   # imported 2-D images above this are downscaled in the background (~2830x2830)
 DEFAULT_CNT_THRESHOLD = 1.0      # min contour area to keep, in mm² (physical, like the cavity threshold)
 DEFAULT_SULCUS_DEPTH_THRESHOLD = 1.0  # min sulcus depth to keep, in mm (physical); tunable via Adjustments
 DEFAULT_KERNEL_SIZE_MM = 5.0     # morphological kernel diameter in mm

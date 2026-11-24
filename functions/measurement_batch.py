@@ -8,6 +8,7 @@ summary.
 
 from deps import *
 from helpers.helpers import (
+    iter_hull_edge_sulci,
     image_annotation_style,
     compute_kernel_convex,
     compactness_2D,
@@ -35,7 +36,6 @@ from constants import (
     DEFAULT_PERIMETER_METHOD,
     DEFAULT_SIMPLIFY_CONTOURS_FOR_PERIMETER,
     DEFAULT_CONTOUR_SIMPLIFY_EPSILON,
-    DEFECT_FIXED_POINT,
     SULCUS_TERTIARY_MIN_FRACTION,
     SULCUS_PRIMARY_MAX_FRACTION,
 )
@@ -264,30 +264,21 @@ def process_on_images_batch(directory_path,
         # fraction of slice_length when the image is a full MRI slice.
         depth_sets = empty_depth_sets()
         for cnt in filtered_contours:
-            hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
-            if hull is not None and len(hull) >= 3 and len(cnt) > 3 and np.all(np.diff(hull.ravel()) > 0):
-                defects = cv2.convexityDefects(cnt, hull)
-
-                if defects is not None:
-                    for i in range(defects.shape[0]):
-                        s, e, f, d = defects[i, 0]
-                        start = tuple(cnt[s][0])
-                        end = tuple(cnt[e][0])
-                        far = tuple(cnt[f][0])
-                        annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
-                        depth_value = d * pixel_size / DEFECT_FIXED_POINT
+            for start, end, sulci in iter_hull_edge_sulci(cnt, sulcus_depth_min(unit), spacing=(pixel_size, pixel_size)):
+                annotated = cv2.line(annotated, start, end, [255, 0, 0], thickness)
+                for far, depth_value in sulci:
+                    if use_percent_filter:
+                        keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length) and depth_value > sulcus_depth_min(unit)
+                    else:
+                        keep = depth_value > sulcus_depth_min(unit)
+                    if keep:
                         if use_percent_filter:
-                            keep = (SULCUS_TERTIARY_MIN_FRACTION * slice_length) < depth_value < (SULCUS_PRIMARY_MAX_FRACTION * slice_length) and depth_value > sulcus_depth_min(unit)
+                            sulcus_class = classify_sulcus_depth(depth_value, slice_length)
                         else:
-                            keep = depth_value > sulcus_depth_min(unit)
-                        if keep:
-                            if use_percent_filter:
-                                sulcus_class = classify_sulcus_depth(depth_value, slice_length)
-                            else:
-                                sulcus_class = "unclassified"
-                            marker_color = SULCUS_CLASS_COLORS[sulcus_class]
-                            depth_sets[sulcus_class].append(depth_value)
-                            annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
+                            sulcus_class = "unclassified"
+                        marker_color = SULCUS_CLASS_COLORS[sulcus_class]
+                        depth_sets[sulcus_class].append(depth_value)
+                        annotated = cv2.circle(annotated, far, radius_px, marker_color, -1)
 
         depth = flatten_depth_sets(depth_sets)
         if use_percent_filter:
@@ -431,6 +422,7 @@ def process_on_images_batch(directory_path,
             "Kernel size (px)": int(kernel_size_px),
             "Pixel spacing": f"{pixel_size} {unit}/pixel",
             "Filtered threshold (mm²)": float(cnt_threshold),
+            f"Sulcus depth threshold ({unit})": float(sulcus_depth_min(unit)),
             "Length unit": unit,
             "Perimeter method": perimeter_method,
             "Isotropic spacing used": perimeter_method == "crofton",

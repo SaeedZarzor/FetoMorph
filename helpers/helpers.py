@@ -653,6 +653,69 @@ def segment_pial_mask(
     return sealed
 
 
+def iter_hull_edge_sulci(cnt: np.ndarray, prominence: float,
+                         spacing: tuple[float, float] = (1.0, 1.0)):
+    """Yield every sulcus (local depth maximum) along each convex-hull edge.
+
+    ``cv2.convexityDefects`` reports only ONE point per hull edge -- the deepest
+    point between the edge's start ``s`` and end ``e`` -- so extra sulci (or
+    side branches) on the same edge are lost. This keeps the same hull edges but
+    measures the depth of *every* contour point between ``s`` and ``e`` and
+    returns each local maximum whose prominence is at least ``prominence``. The
+    deepest point of an edge always survives (its prominence equals its depth)
+    and its depth equals the old ``d / 256`` value.
+
+    Depth of a point = length of its pixel-space perpendicular to the chord
+    ``s-e``, scaled by ``spacing`` (this is exactly what
+    :func:`defect_mm_per_px_and_fixed` computed for anisotropic pixels, and is
+    plain pixel distance times the pixel size when spacing is isotropic).
+
+    Args:
+        cnt: OpenCV contour, shape ``(N, 1, 2)``.
+        prominence: Minimum depth AND rise above neighbouring points for a point
+            to count as a sulcus, in the same units as the returned depth.
+            Callers pass the Sulcus Depth Threshold. Floored at one pixel
+            (``min(spacing)``) to ignore pixel noise.
+        spacing: ``(size_x, size_y)`` of one pixel in the output unit (e.g. mm).
+            Default ``(1, 1)`` gives depths in pixels.
+
+    Yields:
+        ``(start_xy, end_xy, [(far_xy, depth), ...])`` per hull edge, in hull
+        order. The sulci list may be empty, so callers can still draw the chord.
+        Yields nothing when the contour has no usable convex hull.
+    """
+    from scipy.signal import find_peaks
+
+    hull = cv2.convexHull(cnt, returnPoints=False, clockwise=True)
+    if hull is None or len(hull) < 3 or len(cnt) <= 3 or not np.all(np.diff(hull.ravel()) > 0):
+        return
+    defects = cv2.convexityDefects(cnt, hull)
+    if defects is None:
+        return
+
+    sx, sy = float(spacing[0]), float(spacing[1])
+    pts = cnt[:, 0, :]
+    n = len(pts)
+    prom = max(float(prominence), min(sx, sy))
+    for s, e, _f, _d in defects[:, 0]:
+        s, e = int(s), int(e)
+        idx = np.arange(s, e + 1) if e >= s else np.r_[np.arange(s, n), np.arange(0, e + 1)]
+        seg = pts[idx].astype(np.float64)
+        a, b = seg[0], seg[-1]
+        ab = b - a
+        chord2 = float(ab @ ab)
+        sulci: list[tuple[tuple[int, int], float]] = []
+        if chord2 > 1e-18 and len(idx) >= 3:
+            t = (seg - a) @ ab / chord2
+            v = seg - (a + t[:, None] * ab)          # pixel-space perpendicular to the chord
+            dist = np.hypot(v[:, 0] * sx, v[:, 1] * sy)
+            peaks, _ = find_peaks(dist, prominence=prom)
+            for p in peaks:
+                if dist[p] >= prom:
+                    sulci.append(((int(seg[p, 0]), int(seg[p, 1])), float(dist[p])))
+        yield (int(pts[s, 0]), int(pts[s, 1])), (int(pts[e, 0]), int(pts[e, 1])), sulci
+
+
 def defect_mm_per_px_and_fixed(
     start: tuple[float, float],
     end:   tuple[float, float],

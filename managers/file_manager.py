@@ -10,6 +10,9 @@ from deps import *
 from typing import TYPE_CHECKING
 from helpers.helpers import get_nifti_present_labels
 from widgets.recent_paths import RecentPaths, populate_recent_menu
+from PySide6.QtGui import QImageReader
+from constants import DOWNSCALE_MAX_MEGAPIXELS
+from managers.image_downscale import DownscaleResult, ImageDownscaler
 
 if TYPE_CHECKING:
     from FetoMorph import MainWindow
@@ -34,6 +37,9 @@ class FileManager:
         self.last_annotated_path: str | None = None
         self.last_mask_path: str | None = None
         self.recent = RecentPaths("YourOrg", "YourApp")
+        # Background downscaling of very large imports (see managers/image_downscale.py).
+        self._downscaler = ImageDownscaler(mw)
+        self.downscaled: dict[str, DownscaleResult] = {}  # downscaled copy path -> result
 
     # ------------------------------------------------------------------
     # Import dialogs
@@ -51,7 +57,7 @@ class FileManager:
             return
         self.last_dir = os.path.dirname(path) or self.last_dir
         print(f"Importing image: {path}")
-        self.load_image(path)
+        self.load_image(path, downscale=True)
 
     def import_vtk(self) -> None:
         """Open a file dialog for VTK legacy files and load the selected mesh/image."""
@@ -296,7 +302,7 @@ class FileManager:
         ext = Path(path).suffix.lower()
         try:
             if ext in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff"}:
-                self.load_image(path)
+                self.load_image(path, downscale=True)
                 print(f"Importing image: {path}")
             elif ext == ".vtk":
                 self.load_vtk(path)
@@ -321,8 +327,85 @@ class FileManager:
     # Loaders
     # ------------------------------------------------------------------
 
-    def load_image(self, path: str) -> None:
-        """Load and display a 2-D raster image."""
+    def load_image(self, path: str, *, downscale: bool = False) -> None:
+        """Load and display a 2-D raster image.
+
+        ``downscale=True`` (user imports only) first checks the image size and,
+        when it exceeds the pixel budget and the "Auto-downscale large images"
+        preference is on, loads a background-downscaled copy instead. Internal
+        reloads (upscale output, measurement results, ...) leave it off.
+        """
+        if downscale and self._start_downscale_if_needed(path):
+            return
+        self._load_image_now(path)
+
+    def _start_downscale_if_needed(self, path: str) -> bool:
+        """Check the image size; start a background downscale if it is too big.
+
+        Returns True when the load is deferred to the background job.
+        """
+        mw = self.mw
+        size = QImageReader(path).size()  # header only, no decode
+        if not size.isValid():
+            return False
+        w, h = size.width(), size.height()
+        max_px = DOWNSCALE_MAX_MEGAPIXELS * 1e6
+        if w * h <= max_px:
+            return False
+
+        mp = w * h / 1e6
+        try:
+            size_mb = os.path.getsize(path) / (1024 * 1024)
+        except OSError:
+            size_mb = 0.0
+        enabled = bool(getattr(getattr(mw, "viz", None), "auto_downscale_images", True))
+        if not enabled:
+            msg = (f"[Downscale] WARNING: {w}x{h} ({mp:.1f} MP, {size_mb:.1f} MB) exceeds "
+                   f"{DOWNSCALE_MAX_MEGAPIXELS:g} MP and auto-downscale is OFF - processing "
+                   "at full resolution may be very slow. Enable it in Preferences > View.")
+            print(msg)
+            mw.statusBar().showMessage(msg, 10000)
+            return False
+        if self._downscaler.is_pending(path):
+            return True  # same import already running
+
+        print(f"[Downscale] {w}x{h} ({mp:.1f} MP, {size_mb:.1f} MB) exceeds "
+              f"{DOWNSCALE_MAX_MEGAPIXELS:g} MP - downscaling in the background...")
+        mw.statusBar().showMessage("Optimizing large image in the background...")
+        self._downscaler.submit(
+            path, os.path.join(mw.temp_dir, "downscaled"), max_px, self._on_downscaled)
+        return True
+
+    def _on_downscaled(self, src: str, payload) -> None:
+        """GUI-thread callback: load the downscaled copy (or the original on failure)."""
+        mw = self.mw
+        if not isinstance(payload, DownscaleResult):
+            print(f"[Downscale] failed ({payload}); loading the original image.")
+            self._load_image_now(src)
+            return
+        res = payload
+        self.downscaled[res.out_path] = res
+        # A scale already set for this image refers to original pixels: convert it.
+        s = mw.settings
+        if src in s.image_scales:
+            s.image_scales[res.out_path] = float(s.image_scales[src]) * res.pixel_size_factor
+            s.image_scale_from_scalebar[res.out_path] = bool(
+                s.image_scale_from_scalebar.get(src, False))
+        (ow, oh), (nw, nh) = res.orig_size, res.new_size
+        print(f"[Downscale] {ow}x{oh} -> {nw}x{nh} (x{1 / res.pixel_size_factor:.3f}); "
+              f"original left untouched: {src}")
+        print(f"[Downscale] Pixel size applies to the downscaled image: Auto Scale works "
+              f"unchanged; a mm/px value measured on the original must be multiplied by "
+              f"{res.pixel_size_factor:.4f}.")
+        self._load_image_now(res.out_path)
+        mw.statusBar().showMessage(
+            f"Large image downscaled {ow}x{oh} -> {nw}x{nh} for faster processing", 8000)
+
+    def shutdown(self) -> None:
+        """Stop background image jobs (call on app quit)."""
+        self._downscaler.shutdown()
+
+    def _load_image_now(self, path: str) -> None:
         mw = self.mw
         pm = QPixmap(path)
         if pm.isNull():
